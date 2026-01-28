@@ -1,0 +1,21 @@
+# Binaries
+block-infrastructure
+*.exe
+*.exe~
+*.dll
+*.so
+*.so.*
+*.dylib
+*.test
+
+# Go build artifacts
+*.out
+dist/
+bin/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
