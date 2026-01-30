@@ -1,7 +1,6 @@
 # block-lint-workarounds
 
-**Repository:** [https://github.com/milehighideas/block-lint-workarounds](https://github.com/milehighideas/block-lint-workarounds)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/block-lint-workarounds`)
 
 ## Description
 
@@ -79,7 +78,7 @@ Detects three patterns that use underscore prefixes to suppress unused variable 
 - **Destructuring**: Using underscore prefix in object destructuring
 - **Type aliases**: Using underscore prefix in type alias declarations
 
-**Exception**: Convex system fields (_id, _creationTime) are allowed in files within `/convex/` directories, as these are valid Convex schema fields.
+**Exception**: Convex system fields (\_id, \_creationTime) are allowed in files within `/convex/` directories, as these are valid Convex schema fields.
 
 ### 2. ESLint Disable Comments (BLOCKED)
 
@@ -170,16 +169,16 @@ The tool has no configuration options. Detection patterns are hardcoded and cann
 
 The tool uses the following regex patterns for detection:
 
-| Pattern | Description |
-|---------|-------------|
-| `as\s+_\w+` | Import/type aliases with underscore |
-| `:\s*_\w+` | Destructuring with underscore |
-| `type\s+\w+\s+as\s+_` | Type alias with underscore |
-| `//\s*eslint-disable` | Inline ESLint suppression |
-| `/\*\s*eslint-disable` | Block ESLint suppression |
-| `//\s*@ts-ignore` | TypeScript ignore directive |
-| `//\s*@ts-expect-error` | TypeScript expect-error directive |
-| `//\s*@ts-nocheck` | TypeScript nocheck directive |
+| Pattern                 | Description                         |
+| ----------------------- | ----------------------------------- |
+| `as\s+_\w+`             | Import/type aliases with underscore |
+| `:\s*_\w+`              | Destructuring with underscore       |
+| `type\s+\w+\s+as\s+_`   | Type alias with underscore          |
+| `//\s*eslint-disable`   | Inline ESLint suppression           |
+| `/\*\s*eslint-disable`  | Block ESLint suppression            |
+| `//\s*@ts-ignore`       | TypeScript ignore directive         |
+| `//\s*@ts-expect-error` | TypeScript expect-error directive   |
+| `//\s*@ts-nocheck`      | TypeScript nocheck directive        |
 
 ## Behavior Notes
 

@@ -1,7 +1,6 @@
 # smart-test
 
-**Repository:** [https://github.com/milehighideas/smart-test](https://github.com/milehighideas/smart-test)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/smart-test`)
 
 A Claude Code PostToolUse hook that automatically runs tests after editing files.
 
@@ -301,6 +300,7 @@ The implementation uses only Go standard library with no external dependencies:
 **Problem**: Tests don't run when editing files
 
 **Solutions**:
+
 - Verify `CLAUDE_HOOKS_TEST_ON_EDIT` is not set to `false`
 - Check Claude Code configuration includes the hook
 - Ensure the hook binary is executable: `chmod +x smart-test`
@@ -311,6 +311,7 @@ The implementation uses only Go standard library with no external dependencies:
 **Problem**: Hook runs but no tests execute
 
 **Solutions**:
+
 - Verify your project has test files or a test runner
 - Check project type detection by looking at project root markers (e.g., `go.mod`, `package.json`)
 - Confirm test commands exist: `make test`, `scripts/test.sh`, or language-specific runners
@@ -321,6 +322,7 @@ The implementation uses only Go standard library with no external dependencies:
 **Problem**: Go race detector fails in CI or specific environments
 
 **Solution**: Disable race detection:
+
 ```bash
 CLAUDE_HOOKS_ENABLE_RACE=false smart-test
 ```
@@ -330,6 +332,7 @@ CLAUDE_HOOKS_ENABLE_RACE=false smart-test
 **Problem**: Hook execution slows Claude when working on large projects
 
 **Solutions**:
+
 - Create a custom test command in `.claude-hooks.json` that runs only relevant tests
 - Use `.claude-hooks-ignore` to skip certain files
 - Set `CLAUDE_HOOKS_TEST_ON_EDIT=false` to disable testing when not needed

@@ -1,7 +1,6 @@
 # changelog-add
 
-**Repository:** [https://github.com/milehighideas/changelog-add](https://github.com/milehighideas/changelog-add)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/changelog-add`)
 
 A command-line utility that creates changelog fragment files with conventional commit formatting.
 

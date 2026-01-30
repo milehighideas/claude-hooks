@@ -1,7 +1,6 @@
 # Markdown Formatter
 
-**Repository:** [https://github.com/milehighideas/markdown-formatter](https://github.com/milehighideas/markdown-formatter)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/markdown-formatter`)
 
 A Claude Code PostToolUse hook that automatically formats Markdown files by adding language tags to unlabeled code fences and fixing excessive blank lines.
 
@@ -22,6 +21,7 @@ This tool is designed to run automatically as a Claude Code PostToolUse hook aft
 The primary usage is as a PostToolUse hook in Claude Code configuration. The tool processes the JSON input from Claude Code and automatically formats any `.md` or `.mdx` files that are written.
 
 **Input Format:**
+
 ```json
 {
   "tool": "Write",
@@ -116,45 +116,56 @@ echo '{"tool":"Write","tool_input":{"file_path":"./docs/api.md"}}' | ./markdown-
 ### File with Unlabeled Python Fence
 
 Before:
+
 ```text
 # Python Guide
 
 ```
+
 def hello():
-    print('hello')
+print('hello')
+
 ```text
+
 ```
 
 After:
-```python
+
+````python
 # Python Guide
 
 ```python
 def hello():
     print('hello')
-```
+````
+
 ```text
 
 ### Fixing Excessive Blank Lines
 
 Before:
 ```
+
 # Title
 
 Paragraph
+
 ```text
 
 After:
 ```
+
 # Title
 
 Paragraph
+
 ```text
 
 ### Multiple Code Fences with Mixed Languages
 
 Before:
 ```
+
 # API Documentation
 
 ```python
@@ -170,10 +181,12 @@ Response format:
   "data": {}
 }
 ```
+
 ```text
 
 After:
 ```
+
 # API Documentation
 
 ```python
@@ -189,6 +202,7 @@ Response format:
   "data": {}
 }
 ```
+
 ```text
 
 ### Preserving Existing Language Tags
@@ -196,12 +210,14 @@ Response format:
 The tool never overwrites explicit language tags:
 
 ```
+
 ```go
 func main() {
     // This stays as golang
 }
 ```
-```bash
+
+````bash
 
 Remains unchanged as `go`.
 
@@ -237,7 +253,7 @@ Comprehensive test coverage includes:
 Run tests with:
 ```bash
 go test ./markdown-formatter
-```
+````
 
 ## Notes
 

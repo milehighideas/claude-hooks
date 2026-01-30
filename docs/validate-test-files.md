@@ -1,7 +1,6 @@
 # validate-test-files
 
-**Repository:** [https://github.com/milehighideas/validate-test-files](https://github.com/milehighideas/validate-test-files)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/validate-test-files`)
 
 ## Overview
 
@@ -10,6 +9,7 @@
 ## Purpose
 
 The tool ensures that:
+
 - Screen components have both unit tests and E2E tests
 - Form components (create/update CRUD) have both unit tests and E2E tests
 - Hooks and utilities have unit tests
@@ -24,6 +24,7 @@ The tool ensures that:
 This tool is designed to run as a pre-commit hook in the Claude hooks system. It intercepts Write and Edit operations on component files and validates test requirements before allowing the operation to proceed.
 
 The hook receives JSON input via stdin containing:
+
 - `tool_name`: The name of the tool being invoked ("Write" or "Edit")
 - `tool_input.file_path`: The absolute path to the file being modified
 
@@ -66,6 +67,7 @@ The tool classifies files to determine test requirements:
 ### File Classification Priority
 
 Files are skipped from validation if they are:
+
 - Already test files (containing `.test.`, `.spec.`, `.e2e.`, or `.maestro.`)
 - Type definition files (`/types/` directories)
 - Barrel exports (`index.ts` or `index.tsx`)
@@ -73,22 +75,27 @@ Files are skipped from validation if they are:
 ### Test File Path Generation
 
 #### Unit Tests
+
 - `.tsx` files → `.test.tsx`
 - `.ts` files → `.test.ts`
 - Example: `components/Button.tsx` → `components/Button.test.tsx`
 
 #### E2E Tests
+
 Mobile/Native apps:
+
 - Use Maestro YAML format: `.maestro.yaml`
 - Example: `screens/Home.tsx` → `screens/Home.maestro.yaml`
 
 Web/Portal apps:
+
 - Use TypeScript format: `.e2e.ts`
 - Example: `components/UserForm.tsx` → `components/UserForm.e2e.ts`
 
 ## Command Line Arguments
 
 The tool does not accept command line arguments. All behavior is controlled via:
+
 - JSON input via stdin
 - Environment variables
 - File path and content analysis
@@ -103,6 +110,7 @@ Controls whether test file validation is enabled.
 - Any other value or unset: Hook is enabled (default behavior)
 
 **Example:**
+
 ```bash
 export CLAUDE_HOOKS_AST_VALIDATION=false
 echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/component.tsx"}}' | ./validate-test-files
@@ -117,6 +125,7 @@ echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/component.tsx"}}'
 ### Exit Code Behavior
 
 The tool allows operations in these cases (exits 0):
+
 - Validation is disabled via environment variable
 - File is a test file (already tested)
 - File is a type definition or barrel export
@@ -126,6 +135,7 @@ The tool allows operations in these cases (exits 0):
 - No test violations found
 
 The tool blocks operations (exits 2) only when:
+
 - Required test files are missing AND
 - The validation is enabled
 
@@ -247,6 +257,7 @@ echo '{
 ### App Type Detection
 
 The tool determines app type from the file path:
+
 - Contains `/mobile/` → mobile app (E2E format: `.maestro.yaml`)
 - Contains `/native/` → native app (E2E format: `.maestro.yaml`)
 - Contains `/web/` → web app (E2E format: `.e2e.ts`)
@@ -257,15 +268,18 @@ The tool determines app type from the file path:
 Components are considered interactive if they contain:
 
 **State management hooks:**
+
 - `useState(...)`
 - `useReducer(...)`
 - `useContext(...)`
 
 **Data mutation/query hooks:**
+
 - `useMutation(...)`
 - `useQuery(...)`
 
 **Form management hooks:**
+
 - `useForm`
 - `useFormState`
 - `useFormContext`
@@ -276,11 +290,13 @@ These are detected via regex pattern matching against the component source code.
 ## Validation Scope
 
 The tool validates:
+
 - Only `.ts` and `.tsx` files in `/components/` directories
 - Only on Write and Edit tool operations
 - Files must be actual components (filtered by location)
 
 The tool does NOT validate:
+
 - Other file types (`.js`, `.jsx`, `.css`, etc.)
 - Files outside `/components/` directories
 - Read, Delete, or other non-Write/Edit operations
@@ -291,6 +307,7 @@ The tool does NOT validate:
 ## File Path Examples
 
 ### Mobile Screen (requires unit + E2E Maestro)
+
 ```text
 /project/packages/mobile/src/screens/Login.tsx
 → /project/packages/mobile/src/screens/Login.test.tsx
@@ -298,6 +315,7 @@ The tool does NOT validate:
 ```
 
 ### Web Form Component (requires unit + E2E TypeScript)
+
 ```text
 /project/packages/web/src/components/create/UserForm.tsx
 → /project/packages/web/src/components/create/UserForm.test.tsx
@@ -305,12 +323,14 @@ The tool does NOT validate:
 ```
 
 ### Hook (requires unit test only)
+
 ```text
 /project/packages/portal/src/hooks/useAuth.ts
 → /project/packages/portal/src/hooks/useAuth.test.ts
 ```
 
 ### Display Component (requires unit test only)
+
 ```text
 /project/packages/portal/src/components/Header.tsx
 → /project/packages/portal/src/components/Header.test.tsx
@@ -319,6 +339,7 @@ The tool does NOT validate:
 ## Error Handling
 
 The tool gracefully handles errors:
+
 - If JSON input cannot be parsed, the operation is allowed (exits 0)
 - If a file cannot be read during interactive detection, validation is skipped (exits 0)
 - File system errors do not block operations

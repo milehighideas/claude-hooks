@@ -1,13 +1,13 @@
 # track-edited-files
 
-**Repository:** [https://github.com/milehighideas/track-edited-files](https://github.com/milehighideas/track-edited-files)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/track-edited-files`)
 
 ## Description
 
 `track-edited-files` is a Claude hook that automatically tracks which files are edited during a Claude coding session. It categorizes edited files into two groups: source files and test files, and persists this data to a session-specific JSON file in the user's home directory.
 
 This tool is designed to support test enforcement and audit capabilities by maintaining a record of:
+
 - **Source files** - Production code files that were modified
 - **Test files** - Test files that were created or modified
 
@@ -31,6 +31,7 @@ The tool reads JSON input from stdin with the following structure:
 ```
 
 When invoked, the tool:
+
 1. Reads the file path from the input
 2. Determines if the file should be tracked based on filtering rules
 3. Categorizes the file as either a source file or test file
@@ -52,12 +53,14 @@ The tool uses the following environment variable:
 ### Valid Source Files
 
 The tool tracks TypeScript and JavaScript files with these extensions:
+
 - `.ts`
 - `.tsx`
 - `.js`
 - `.jsx`
 
 Files must be located in one of these directories to be tracked:
+
 - `packages/backend/convex/` - Convex backend functions
 - `apps/mobile/` - React Native mobile app code
 
@@ -66,6 +69,7 @@ Files must be located in one of these directories to be tracked:
 The following files are never tracked:
 
 **By pattern:**
+
 - Generated code (`_generated/` directory)
 - Test files (`.test.ts`, `.test.tsx`, `__tests__/` directory)
 - Type declarations (`.d.ts`)
@@ -73,17 +77,20 @@ The following files are never tracked:
 - Configuration files (`.config.`, `jest.setup`, `vitest.config`, `.eslintrc`, `.prettierrc`)
 
 **By extension:**
+
 - `.md` (markdown)
 - `.json` (JSON)
 - `.css` (CSS)
 - `.scss` (SCSS)
 
 **Mobile app config files:**
+
 - `metro.config.js`
 - `babel.config.js`
 - `app.config.ts`
 
 **Files in unsupported directories:**
+
 - `apps/web/` (web app)
 - `packages/backend/src/` (non-convex backend)
 - Any other location outside the tracked paths
@@ -93,6 +100,7 @@ The following files are never tracked:
 The tool always exits with status **0**, regardless of success or failure. This is intentional - the tool operates as a non-blocking hook that never interrupts the development workflow.
 
 Exit behavior:
+
 - **0** - Always (success, invalid input, errors, etc.)
 
 The tool silently handles all error conditions without propagating them to the caller.
@@ -107,13 +115,12 @@ Session data is stored as JSON in `~/.claude/sessions/{session_id}.json`:
     "/project/packages/backend/convex/users.ts",
     "/project/apps/mobile/src/components/Button.tsx"
   ],
-  "test_files": [
-    "/project/packages/backend/convex/users.test.ts"
-  ]
+  "test_files": ["/project/packages/backend/convex/users.test.ts"]
 }
 ```
 
 The tool:
+
 - Creates the `~/.claude/sessions/` directory if it doesn't exist
 - Appends new files to existing session data (no duplicates)
 - Preserves previously tracked files across multiple invocations

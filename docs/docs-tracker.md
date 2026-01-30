@@ -1,7 +1,6 @@
 # docs-tracker
 
-**Repository:** [https://github.com/milehighideas/docs-tracker](https://github.com/milehighideas/docs-tracker)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/docs-tracker`)
 
 A unified Go binary that replaces two Python hooks for tracking and enforcing documentation reads in Claude Code sessions.
 
@@ -40,6 +39,7 @@ Specifies the operation mode. Must be one of:
 - `track`: PostToolUse mode - tracks documentation reads
 
 Example:
+
 ```bash
 docs-tracker --mode=enforce < input.json
 docs-tracker --mode=track < input.json
@@ -48,17 +48,20 @@ docs-tracker --mode=track < input.json
 ## Environment Variables
 
 None. The tool uses:
+
 - `$HOME/.claude/sessions/{session_id}-docs.json` for session storage
 - Falls back to current directory if `$HOME` cannot be determined
 
 ## Exit Codes
 
 ### Enforce Mode
+
 - `0`: Operation allowed (documentation was read or file doesn't require documentation)
 - `1`: System error (invalid input, file I/O error)
 - `2`: Operation blocked (required documentation has not been read)
 
 ### Track Mode
+
 - `0`: Success
 - `1`: System error (invalid input, file I/O error)
 
@@ -121,6 +124,7 @@ Track mode monitors Read operations:
    - Returns exit code 0
 
 Tracked documentation files:
+
 - `packages/backend/CLAUDE.md`
 - `apps/mobile/components/CLAUDE.md`
 - `apps/mobile/app/CLAUDE.md`
@@ -133,11 +137,11 @@ Configuration is hardcoded in the binary and maps file patterns to required docu
 
 Files in these directories require reading the corresponding documentation:
 
-| Directory Pattern | Required Documentation |
-|---|---|
-| `packages/backend/` | `packages/backend/CLAUDE.md` |
+| Directory Pattern         | Required Documentation             |
+| ------------------------- | ---------------------------------- |
+| `packages/backend/`       | `packages/backend/CLAUDE.md`       |
 | `apps/mobile/components/` | `apps/mobile/components/CLAUDE.md` |
-| `apps/mobile/app/` | `apps/mobile/app/CLAUDE.md` |
+| `apps/mobile/app/`        | `apps/mobile/app/CLAUDE.md`        |
 
 ### Skip Patterns
 
@@ -176,6 +180,7 @@ The directory is created automatically if it doesn't exist (with mode 0755).
 ### Scenario 1: User reads backend documentation, then edits a backend file
 
 Step 1 - Read documentation (Track mode):
+
 ```bash
 echo '{
   "tool_name":"Read",
@@ -188,6 +193,7 @@ echo '{
 ```
 
 Step 2 - Edit backend file (Enforce mode):
+
 ```bash
 echo '{
   "tool_name":"Edit",
@@ -214,6 +220,7 @@ echo '{
 ### Scenario 3: Edit test files without documentation
 
 Test files are automatically allowed:
+
 ```bash
 echo '{
   "tool_name":"Edit",

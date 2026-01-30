@@ -1,7 +1,6 @@
 # validate-srp Documentation
 
-**Repository:** [https://github.com/milehighideas/validate-srp](https://github.com/milehighideas/validate-srp)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/validate-srp`)
 
 ## Overview
 
@@ -50,6 +49,7 @@ The tool automatically integrates with Claude's development environment when inv
 - Reports violations as blocking errors or warnings
 
 Example hook invocation (automatic):
+
 ```bash
 echo '{"tool_name":"Write","tool_input":{"file_path":"Component.tsx","content":"..."}}' | validate-srp
 ```
@@ -58,12 +58,12 @@ echo '{"tool_name":"Write","tool_input":{"file_path":"Component.tsx","content":"
 
 ### Flags
 
-| Flag | Short | Description |
-|------|-------|-------------|
-| `--path <dir>` | - | Recursively check all TypeScript files in directory |
-| `--file <file>` | - | Check a single TypeScript file |
-| `--verbose` | `-v` | Show verbose output, including files that pass validation |
-| `--help` | `-h` | Display help message and exit |
+| Flag            | Short | Description                                               |
+| --------------- | ----- | --------------------------------------------------------- |
+| `--path <dir>`  | -     | Recursively check all TypeScript files in directory       |
+| `--file <file>` | -     | Check a single TypeScript file                            |
+| `--verbose`     | `-v`  | Show verbose output, including files that pass validation |
+| `--help`        | `-h`  | Display help message and exit                             |
 
 ### Usage Examples
 
@@ -90,6 +90,7 @@ Controls whether validation runs in hook mode. This is **opt-in only**.
 - **Source**: Can be set in `.claude-hooks-config.sh` or via shell environment
 
 Example configuration:
+
 ```bash
 export CLAUDE_HOOKS_AST_VALIDATION=true
 ```
@@ -110,10 +111,12 @@ export CLAUDE_HOOKS_AST_VALIDATION=true
 **Rule**: Components cannot import directly from Convex libraries outside the data-layer.
 
 **Violations**:
+
 - `import { useQuery } from 'convex/react'`
 - `import { api } from '../_generated/api'`
 
 **Exceptions**:
+
 - Files in `/data-layer/`, `/backend/`, `/convex/`, `/scripts/`, `/providers/` folders
 - `_layout.tsx` files (infrastructure components)
 - Allowed imports: `Preloaded`, `usePreloadedQuery`
@@ -125,6 +128,7 @@ export CLAUDE_HOOKS_AST_VALIDATION=true
 **Rule**: Screen files cannot use state management hooks (useState, useReducer, useContext).
 
 **Violation**:
+
 ```typescript
 // File: screens/HomeScreen.tsx
 const [count, setCount] = useState(0); // ❌ Error
@@ -137,6 +141,7 @@ const [count, setCount] = useState(0); // ❌ Error
 **Rule**: Files in `/create/`, `/read/`, `/update/`, or `/delete/` folders must export only one component.
 
 **Violation**:
+
 ```typescript
 // File: features/users/create/CreateUserForm.tsx
 export const CreateUserForm = () => <div />;
@@ -150,12 +155,14 @@ export const helper = () => {}; // ❌ Error: multiple exports
 **Rule**: Large files indicate potential SRP violations.
 
 **Limits**:
+
 - Screens: 100 lines maximum
 - Hooks: 150 lines maximum
 - Components: 200 lines maximum
 - Scripts: Unlimited
 
 **Example Warning**:
+
 ```text
 Screen file is 150 lines (limit: 100)
 → Screens should only handle navigation - move logic to content component
@@ -166,18 +173,20 @@ Screen file is 150 lines (limit: 100)
 **Rule**: Type definitions must be in `/types/` folders, not component files.
 
 **Violation**:
+
 ```typescript
 // File: components/UserProfile.tsx
 export type UserProps = { id: string }; // ❌ Error
 ```
 
 **Fix**: Move to types folder:
+
 ```typescript
 // File: types/User.ts
 export type UserProps = { id: string };
 
 // Then in component:
-import type { UserProps } from '../types/User';
+import type { UserProps } from "../types/User";
 ```
 
 ### 6. Mixed Concerns (Warning)
@@ -185,27 +194,29 @@ import type { UserProps } from '../types/User';
 **Rule**: Files shouldn't mix data fetching + UI + state management.
 
 **Violation**:
+
 ```typescript
 // File: components/UserCard.tsx
-import { useUser } from '@dashtag/data-layer/generated-hooks'; // Data
-import { Button } from '@/components/ui/button'; // UI
-import { useState } from 'react'; // State
+import { useUser } from "@dashtag/data-layer/generated-hooks"; // Data
+import { Button } from "@/components/ui/button"; // UI
+import { useState } from "react"; // State
 
 const [isEditing, setIsEditing] = useState(false); // ❌ Warning: 3 concerns
 ```
 
 **Fix**: Separate into appropriate layers:
+
 - Data fetching → custom hooks
 - State management → custom hooks or components
 - UI rendering → functional components
 
 ## Exit Codes
 
-| Code | Meaning |
-|------|---------|
-| `0` | Success: No violations found |
-| `1` | Error: Tool execution failed (file not found, permission denied, etc.) |
-| `2` | Validation failed: SRP violations detected |
+| Code | Meaning                                                                |
+| ---- | ---------------------------------------------------------------------- |
+| `0`  | Success: No violations found                                           |
+| `1`  | Error: Tool execution failed (file not found, permission denied, etc.) |
+| `2`  | Validation failed: SRP violations detected                             |
 
 ## Output Format
 
@@ -343,10 +354,12 @@ The tool is designed to work seamlessly with Claude Code's hook system:
 ## File Detection
 
 The tool processes:
+
 - `.tsx` files (React TypeScript components)
 - `.ts` files (TypeScript utilities)
 
 **Excludes**:
+
 - `.d.ts` type definition files
 - Test files (`*.test.tsx`, `*.spec.tsx`)
 - Hidden directories (starting with `.`)
@@ -357,6 +370,7 @@ The tool processes:
 For detailed information about the architectural patterns enforced by this tool, see the frontend architecture skill documentation at `~/.claude/skills/frontend-architecture/SKILL.md`.
 
 Key principles:
+
 - **Data-layer abstraction**: Centralize Convex integration
 - **Screen-content separation**: Screens handle routing, content handles logic
 - **Single responsibility**: Each file has one clear purpose

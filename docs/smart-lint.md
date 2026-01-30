@@ -1,7 +1,6 @@
 # smart-lint Documentation
 
-**Repository:** [https://github.com/milehighideas/smart-lint](https://github.com/milehighideas/smart-lint)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/smart-lint`)
 
 ## Overview
 
@@ -34,17 +33,20 @@ The tool is a modernized replacement for the bash `smart-lint.sh` script, offeri
 ### Installation
 
 1. Build the binary:
+
 ```bash
 cd /Volumes/Developer/code/shared/claude-hooks/smart-lint
 go build -o smart-lint
 ```
 
 2. Copy to your Claude hooks directory:
+
 ```bash
 cp smart-lint ~/.claude/hooks/
 ```
 
 3. Configure in your `~/.claude/config.json`:
+
 ```json
 {
   "hooks": {
@@ -98,22 +100,27 @@ Exit code 2 is used for both success with messages and blocking failures, with o
 `smart-lint` automatically detects and lints the following languages:
 
 ### Go
+
 - **Detection**: `go.mod`, `go.sum`, or 3+ `.go` files
 - **Tools**: `gofmt` (auto-format), `golangci-lint` (linting)
 
 ### Python
+
 - **Detection**: `pyproject.toml`, `setup.py`, `requirements.txt`, or 3+ `.py` files
 - **Tools**: `black` (auto-format), `ruff` (with auto-fix) or `flake8` (linting)
 
 ### JavaScript/TypeScript
+
 - **Detection**: `package.json`, `tsconfig.json`, or 3+ `.js`/`.ts`/`.jsx`/`.tsx` files
 - **Tools**: `eslint` (if configured in package.json), `prettier` (if config exists)
 
 ### Rust
+
 - **Detection**: `Cargo.toml` or 3+ `.rs` files
 - **Tools**: `cargo fmt` (auto-format), `cargo clippy` (linting)
 
 ### Shell
+
 - **Detection**: 3+ `.sh` or `.bash` files
 - **Tools**: `shellcheck` (linting)
 
@@ -237,6 +244,7 @@ project/
 ```
 
 When `main.go` is edited:
+
 1. Detects Go project (via `go.mod`)
 2. Runs `gofmt` on all `.go` files
 3. Runs `golangci-lint run`
@@ -253,6 +261,7 @@ Configuration in `.claude-hooks.json`:
 ```
 
 When any file is edited:
+
 1. Runs custom command: `pnpm turbo lint`
 2. Blocks further operations if command fails
 3. Allows continuation if successful
@@ -268,6 +277,7 @@ dist/**
 ```
 
 When a file is edited:
+
 1. Detected languages: JavaScript and Python
 2. Tests files are skipped
 3. Runs `eslint` and `prettier` for JavaScript
@@ -320,6 +330,7 @@ go test -v
 ### Linter Not Running
 
 Check if:
+
 - The linter tool is installed (`which eslint`, `which gofmt`, etc.)
 - File extension is recognized by the linter
 - File path is not excluded by `.claude-hooks-ignore`
@@ -327,6 +338,7 @@ Check if:
 ### Unexpected Files Being Linted
 
 Check:
+
 - `.claude-hooks-ignore` patterns are correct
 - File extension matches the intended language
 - No glob pattern is too broad
@@ -334,6 +346,7 @@ Check:
 ### Project Type Not Detected
 
 Ensure your project has one of the following markers:
+
 - Go: `go.mod`, `go.sum`, or 3+ `.go` files
 - Python: `pyproject.toml`, `setup.py`, `requirements.txt`, or 3+ `.py` files
 - JavaScript: `package.json`, `tsconfig.json`, or 3+ `.js`/`.ts`/`.jsx`/`.tsx` files

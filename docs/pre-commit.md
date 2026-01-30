@@ -1,7 +1,6 @@
 # Pre-commit Hook Tool
 
-**Repository:** [https://github.com/milehighideas/pre-commit](https://github.com/milehighideas/pre-commit)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/pre-commit`)
 
 A comprehensive Go-based pre-commit hook that validates code quality, enforces architectural patterns, and prevents common issues before code is committed. Runs checks in parallel for speed and provides detailed reporting.
 
@@ -20,6 +19,7 @@ pre-commit
 ```
 
 The tool will:
+
 1. Load configuration from `.pre-commit.json`
 2. Identify affected apps and shared packages
 3. Run enabled checks in parallel
@@ -34,6 +34,7 @@ pre-commit --standalone --path <directory>
 ```
 
 Example:
+
 ```bash
 pre-commit --standalone --path ./apps/mobile
 ```
@@ -80,21 +81,21 @@ pre-commit --report-dir ./analysis-reports
 
 Run `pre-commit --list` to see all available checks. Currently supported:
 
-| Check | Purpose |
-|-------|---------|
-| `lintTypecheck` | ESLint and TypeScript type checking |
-| `tests` | Run test suites for affected apps |
-| `changelog` | Validate changelog entries exist |
-| `consoleCheck` | Check for console.log statements |
-| `frontendStructure` | Validate CRUD folder structure in components |
-| `srp` | Single Responsibility Principle validation |
-| `mockCheck` | Ensure tests use `__mocks__/` instead of inline mocks |
-| `testFiles` | Ensure test files exist for source files |
-| `vitestAssertions` | Ensure vitest configs have `requireAssertions: true` |
-| `testCoverage` | Check source files have corresponding test files |
-| `goLint` | Go linting (when enabled) |
-| `convexValidation` | Convex schema validation (when enabled) |
-| `buildCheck` | Build verification (when enabled) |
+| Check               | Purpose                                               |
+| ------------------- | ----------------------------------------------------- |
+| `lintTypecheck`     | ESLint and TypeScript type checking                   |
+| `tests`             | Run test suites for affected apps                     |
+| `changelog`         | Validate changelog entries exist                      |
+| `consoleCheck`      | Check for console.log statements                      |
+| `frontendStructure` | Validate CRUD folder structure in components          |
+| `srp`               | Single Responsibility Principle validation            |
+| `mockCheck`         | Ensure tests use `__mocks__/` instead of inline mocks |
+| `testFiles`         | Ensure test files exist for source files              |
+| `vitestAssertions`  | Ensure vitest configs have `requireAssertions: true`  |
+| `testCoverage`      | Check source files have corresponding test files      |
+| `goLint`            | Go linting (when enabled)                             |
+| `convexValidation`  | Convex schema validation (when enabled)               |
+| `buildCheck`        | Build verification (when enabled)                     |
 
 ## Configuration
 
@@ -120,11 +121,7 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
       "filter": "@myorg/mobile"
     }
   },
-  "sharedPaths": [
-    "packages/",
-    "tsconfig.json",
-    ".eslintrc"
-  ],
+  "sharedPaths": ["packages/", "tsconfig.json", ".eslintrc"],
   "reportDir": "./analysis-reports",
   "features": {
     "lintTypecheck": true,
@@ -152,10 +149,7 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
     "globalDir": ".changelog",
     "apps": []
   },
-  "consoleAllowed": [
-    "scripts/",
-    "cli/"
-  ],
+  "consoleAllowed": ["scripts/", "cli/"],
   "typecheckFilter": {
     "errorCodes": ["TS2589", "TS2742"],
     "excludePaths": ["__tests__/", ".test.", ".spec."],
@@ -202,7 +196,14 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
   },
   "testCoverageConfig": {
     "appPaths": ["apps/portal", "apps/mobile"],
-    "requireTestFolders": ["hooks", "read", "create", "update", "delete", "utils"],
+    "requireTestFolders": [
+      "hooks",
+      "read",
+      "create",
+      "update",
+      "delete",
+      "utils"
+    ],
     "excludeFiles": ["index.ts", "*.types.ts"],
     "excludePaths": ["__tests__/", "fixtures/"]
   },
@@ -225,6 +226,7 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
 #### Apps Configuration
 
 Each app requires:
+
 - **path**: Filesystem path to the app
 - **filter**: Package manager filter name (for `pnpm --filter`)
 - **testCommand** (optional): Custom test script name (default: `test`)
@@ -447,6 +449,7 @@ pre-commit --report-dir ./reports
 ```
 
 Reports are organized by check type:
+
 - `reports/branch-name_timestamp/lint/` - ESLint reports
 - `reports/branch-name_timestamp/typecheck/` - TypeScript reports
 - `reports/branch-name_timestamp/srp/` - SRP analysis
@@ -459,11 +462,13 @@ Reports are organized by check type:
 Runs ESLint and TypeScript checks in parallel for all affected apps.
 
 **Filtering**:
+
 - Filter specific TypeScript error codes (TS2589, TS2742 by default)
 - Filter specific ESLint rules
 - Exclude specific file patterns
 
 **Modes**:
+
 - **Incremental**: Only check staged files (default)
 - **Full**: Check entire app (enabled with `fullLintOnCommit`)
 
@@ -472,6 +477,7 @@ Runs ESLint and TypeScript checks in parallel for all affected apps.
 Runs test suites based on configuration.
 
 **Behavior**:
+
 - Defaults to all apps unless `affectedOnly` is true
 - Can specify custom test command per app
 - Skips shared test runs if no shared paths changed
@@ -479,6 +485,7 @@ Runs test suites based on configuration.
 ### SRP (Single Responsibility Principle)
 
 Validates code organization and architecture:
+
 - No direct Convex imports outside data-layer
 - Screens/pages have no state management
 - Single export per file in CRUD folders
@@ -491,6 +498,7 @@ Validates code organization and architecture:
 Detects `console.log`, `console.warn`, `console.error`, etc.
 
 **Configuration**:
+
 - `consoleAllowed`: File patterns where console statements are permitted (e.g., scripts, CLI)
 
 ### Frontend Structure
@@ -502,11 +510,13 @@ Validates CRUD folder structure in component directories (create, read, update, 
 Enforces changelog entries for commits.
 
 **Modes**:
+
 - **global**: Single `.changelog/` at root
 - **per-app**: Each app has `.changelog/`, global fallback for shared changes
 - **required**: Each affected app must have changelog (no global fallback)
 
 **Skip temporarily**:
+
 ```bash
 SKIP_CHANGELOG_CHECK=1 git commit -m "message"
 ```
@@ -621,6 +631,7 @@ Make sure pnpm (or your configured package manager) is in your PATH.
 ### Lint/typecheck timeouts
 
 Set memory limits in config:
+
 ```json
 {
   "env": {
@@ -630,6 +641,7 @@ Set memory limits in config:
 ```
 
 Or per-app:
+
 ```json
 {
   "apps": {
@@ -644,6 +656,7 @@ Or per-app:
 ### Tests skipped unexpectedly
 
 Check your test configuration:
+
 - Is `tests` feature enabled?
 - If `affectedOnly: true`, is the app actually affected by staged changes?
 - Check per-app overrides in `testConfig.appOverrides`
@@ -651,6 +664,7 @@ Check your test configuration:
 ### Changelog check failing
 
 Make sure:
+
 - Changelog mode is correctly configured
 - Changelog directory exists (`.changelog/` by default)
 - Fragment files have `.txt` extension

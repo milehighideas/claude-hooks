@@ -1,7 +1,6 @@
 # block-infrastructure Hook
 
-**Repository:** [https://github.com/milehighideas/block-infrastructure](https://github.com/milehighideas/block-infrastructure)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/block-infrastructure`)
 
 ## Overview
 
@@ -14,9 +13,9 @@ The hook intercepts file modification operations and blocks attempts to edit pro
 This hook protects the integrity of:
 
 - **Global user configuration** (~/.claude/CLAUDE.md, ~/.claude/settings.json)
-- **Global hook scripts** (hooks/*.py, *.sh, *.js files in ~/.claude/hooks/)
+- **Global hook scripts** (hooks/_.py, _.sh, \*.js files in ~/.claude/hooks/)
 - **Project-level hook infrastructure** (.claude-hooks-config.sh, .claude-hooks-ignore)
-- **Project hook scripts** (.claude/hooks/*.py, *.sh, *.js within the current project)
+- **Project hook scripts** (.claude/hooks/_.py, _.sh, \*.js within the current project)
 
 ## How It Works
 
@@ -59,6 +58,7 @@ The hook receives JSON-formatted input via stdin:
 ```
 
 Fields:
+
 - `tool_name`: The Claude Code tool being executed (Bash, Edit, Write, NotebookEdit)
 - `tool_input`: Parameters for the tool (command string or file paths)
 - `cwd`: Current working directory context

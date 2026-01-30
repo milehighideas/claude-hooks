@@ -1,7 +1,6 @@
 # convex-gen
 
-**Repository:** [https://github.com/milehighideas/convex-gen](https://github.com/milehighideas/convex-gen)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/convex-gen`)
 
 A code generation tool that automatically creates a TypeScript data layer for Convex backend applications. It scans your Convex schema and functions, then generates React hooks, API wrappers, and type definitions.
 
@@ -63,7 +62,14 @@ This tool is designed to be used as part of the claude-hooks system. You can inv
   },
   "skip": {
     "directories": ["_generated", "node_modules", ".turbo"],
-    "patterns": ["^_", "\\.test\\.", "\\.spec\\.", "^debug", "^migrate", "^seed"]
+    "patterns": [
+      "^_",
+      "\\.test\\.",
+      "\\.spec\\.",
+      "^debug",
+      "^migrate",
+      "^seed"
+    ]
   }
 }
 ```
@@ -71,15 +77,18 @@ This tool is designed to be used as part of the claude-hooks system. You can inv
 ### Configuration Options
 
 #### `org` (required)
+
 - Organization name (e.g., `"@dashtag"`)
 - Used for import path generation with package-style imports
 
 #### `convex` object
+
 - **`path`** - Path to Convex backend directory (default: `"packages/backend"`)
 - **`schemaPath`** - Path to schema file or directory (default: auto-detected)
 - **`structure`** - Directory structure: `"nested"` or `"flat"` (default: `"nested"`)
 
 #### `dataLayer` object
+
 - **`path`** - Root output directory for generated code (default: `"packages/data-layer/src"`)
 - **`hooksDir`** - Subdirectory for hooks (default: `"generated-hooks"`)
 - **`apiDir`** - Subdirectory for API wrappers (default: `"generated-api"`)
@@ -87,23 +96,28 @@ This tool is designed to be used as part of the claude-hooks system. You can inv
 - **`fileStructure`** - Output structure: `"grouped"`, `"split"`, or `"both"` (default: `"grouped"`)
 
 #### `imports` object
+
 - **`style`** - Import style: `"package"` (recommended) or `"relative"` (default: `"package"`)
 - **`api`** - Import path for Convex API (default: auto-calculated)
 - **`dataModel`** - Import path for Convex types (default: auto-calculated)
 
 #### `generators` object
+
 - **`hooks`** - Generate React hooks (default: `true`)
 - **`api`** - Generate API wrappers (default: `true`)
 - **`types`** - Generate schema types (default: `true`)
 
 #### `skip` object
+
 - **`directories`** - Directory names to skip during scanning
 - **`patterns`** - Regex patterns for files to skip
 
 ### File Structure Options
 
 #### `grouped` (default)
+
 One file per top-level namespace. Example:
+
 ```text
 generated-hooks/
 ├── queries/
@@ -116,7 +130,9 @@ generated-hooks/
 ```
 
 #### `split`
+
 One file per full namespace (sub-namespace). Example:
+
 ```text
 generated-hooks/
 ├── queries/
@@ -129,19 +145,24 @@ generated-hooks/
 ```
 
 #### `both`
+
 Generates both grouped and split file structures.
 
 ### Import Styles
 
 #### `package` (recommended)
+
 Uses npm/yarn package imports:
+
 ```typescript
 import { api } from "@organization/backend/api";
 import type { Id } from "@organization/backend/dataModel";
 ```
 
 #### `relative`
+
 Uses relative paths:
+
 ```typescript
 import { api } from "../../../backend/_generated/api";
 import type { Id } from "../../../backend/_generated/dataModel";
@@ -154,12 +175,14 @@ import type { Id } from "../../../backend/_generated/dataModel";
 Generated React hooks for querying, mutating, and calling Convex functions.
 
 **Features:**
+
 - Typed parameters with null safety
 - Conditional query skip support
 - Paginated query support
 - Automatic `shouldSkip` parameter for queries without required arguments
 
 **Example output:**
+
 ```typescript
 import { useQuery } from "convex/react";
 import { api } from "@organization/backend/api";
@@ -170,8 +193,11 @@ import type { Id } from "@organization/backend/dataModel";
  *
  * @param eventId - ID of events
  */
-export function useEventsGetEventById(eventId: Id<"events"> | null | undefined, shouldSkip?: boolean) {
-  return useQuery(eventId ? { eventId } as any : "skip");
+export function useEventsGetEventById(
+  eventId: Id<"events"> | null | undefined,
+  shouldSkip?: boolean,
+) {
+  return useQuery(eventId ? ({ eventId } as any) : "skip");
 }
 ```
 
@@ -180,22 +206,26 @@ export function useEventsGetEventById(eventId: Id<"events"> | null | undefined, 
 Type-safe objects mapping function names to API references.
 
 **Features:**
+
 - Organized by function type (queries, mutations, actions)
 - Grouped by namespace or split by sub-namespace
 - Collision detection for duplicate function names
 
 **Example output:**
+
 ```typescript
 import type { FunctionReference } from "convex/server";
 import { api } from "@organization/backend/api";
 
 export const EventsQueries: Record<string, FunctionReference<"query">> = {
-  getEventById: api.events.getEventById as unknown as FunctionReference<"query">,
+  getEventById: api.events
+    .getEventById as unknown as FunctionReference<"query">,
   listEvents: api.events.listEvents as unknown as FunctionReference<"query">,
 };
 
 export const EventsMutations: Record<string, FunctionReference<"mutation">> = {
-  createEvent: api.events.createEvent as unknown as FunctionReference<"mutation">,
+  createEvent: api.events
+    .createEvent as unknown as FunctionReference<"mutation">,
 };
 ```
 
@@ -204,11 +234,13 @@ export const EventsMutations: Record<string, FunctionReference<"mutation">> = {
 TypeScript type definitions derived from Convex schema tables.
 
 **Features:**
+
 - Document types (e.g., `User = Doc<"users">`)
 - ID types (e.g., `UserId = Id<"users">`)
 - Utility types (table name unions, entity type unions)
 
 **Example output:**
+
 ```typescript
 import type { Doc, Id } from "@organization/backend/dataModel";
 
@@ -258,15 +290,19 @@ No environment variables are required or recognized by convex-gen.
 ## How It Works
 
 ### 1. Configuration Loading
+
 The tool searches for `.convex-gen.json` or `convex-gen.json` in the current directory and applies defaults for missing values.
 
 ### 2. Directory Scanning
+
 - **Convex Functions**: Recursively scans the Convex directory for TypeScript files containing `query()`, `mutation()`, or `action()` exports
 - **Schema Files**: Scans for `defineSchema()` and `defineTable()` declarations
 - Skips directories and files matching configuration patterns
 
 ### 3. Function Parsing
+
 For each Convex file:
+
 - Extracts exported function declarations
 - Skips internal functions (`internalQuery`, `internalMutation`, `internalAction`)
 - Parses function arguments and validators
@@ -274,13 +310,17 @@ For each Convex file:
 - Caches validator definitions for reference resolution
 
 ### 4. Schema Parsing
+
 For each schema file:
+
 - Extracts table names from `defineSchema()` and `defineTable()` declarations
 - Handles both main schema files and individual domain schema files
 - Deduplicates table entries
 
 ### 5. Code Generation
+
 Generates output files based on configuration:
+
 - Creates hooks matching Convex function signatures
 - Creates API reference objects
 - Creates TypeScript types for schema tables
@@ -349,21 +389,25 @@ convex-gen
 ## Troubleshooting
 
 ### Config file not found
+
 **Error:** `config file not found (tried: [.convex-gen.json, convex-gen.json])`
 
 **Solution:** Ensure `.convex-gen.json` exists in the current directory.
 
 ### Org is required
+
 **Error:** `org is required (e.g., "@dashtag")`
 
 **Solution:** Add an `org` field to your config file.
 
 ### Path doesn't exist
+
 **Error:** `convex path does not exist: packages/backend`
 
 **Solution:** Verify the `convex.path` in your config matches your actual directory structure.
 
 ### Failed to build validator cache
+
 **Warning:** `failed to build validator cache: [error]`
 
 **Solution:** This is usually non-fatal. Check that validator files exist in the expected locations. The tool will continue with best-effort parsing.

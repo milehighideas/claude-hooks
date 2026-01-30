@@ -1,7 +1,6 @@
 # block-destructive-commands
 
-**Repository:** [https://github.com/milehighideas/block-destructive-commands](https://github.com/milehighideas/block-destructive-commands)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/block-destructive-commands`)
 
 A Claude Code PreToolUse hook that blocks dangerous commands before they execute, preventing catastrophic data loss and system damage.
 
@@ -173,6 +172,7 @@ All forms of removing or corrupting `.git`:
 ### Cloud Operations
 
 **AWS:**
+
 - `aws s3 rm --recursive`
 - `aws s3 rb --force` (bucket deletion)
 - `aws ec2 terminate-instances`
@@ -180,39 +180,46 @@ All forms of removing or corrupting `.git`:
 - `aws cloudformation delete-stack`
 
 **GCP:**
+
 - `gcloud ... delete`
 - `gsutil rm -r` (recursive delete)
 
 **Azure:**
+
 - `az group delete`
 - `az ... delete`
 
 ### System Commands
 
 **Power/Shutdown:**
+
 - `shutdown`, `reboot`, `halt`, `poweroff`
 - `init 0-6` (runlevel changes)
 - `systemctl halt`, `systemctl poweroff`, `systemctl reboot`, `systemctl suspend`, `systemctl hibernate`
 
 **Process Destruction:**
+
 - `kill -9 -1` (kill all processes)
 - `kill -9 1` (kill init)
 - `killall -9`
 - `pkill -9`
 
 **Fork Bombs:**
+
 - `:(){:|:&};:` (classic fork bomb pattern)
 - `forkbomb` (literal keyword)
 
 ### Permission Changes
 
 **Recursive permission changes on system paths:**
+
 - `chmod -R /` (system root)
 - `chmod -R /etc`, `/var`, `/usr`, `/bin`, `/sbin`, `/lib`, `/boot`, `/root`, `/home`
 - `chmod 000 <path>` (remove all permissions)
 - `chmod 777 /` (world-writable system)
 
 **Recursive ownership changes:**
+
 - `chown -R /`
 - `chown -R /etc`, `/var`, `/usr`, `/bin`, `/sbin`, `/lib`, `/boot`, `/root`, `/home`
 
@@ -234,6 +241,7 @@ All forms of removing or corrupting `.git`:
 ### Pre-Commit Hook Bypass Attempts
 
 **Environment variables:**
+
 - `SKIP_PRECOMMIT_CHECKS=`
 - `SKIP_PRE_COMMIT=`
 - `SKIP_HOOK(S)=`
@@ -243,6 +251,7 @@ All forms of removing or corrupting `.git`:
 - `PRE_COMMIT_ALLOW_NO_CONFIG=`
 
 **Git flags:**
+
 - `git commit --no-verify` / `git commit -n`
 - `git push --no-verify`
 - `git merge --no-verify`
@@ -257,6 +266,7 @@ All forms of removing or corrupting `.git`:
 ### Case Sensitivity
 
 Most patterns are case-insensitive (using `(?i)` flag) to catch variations:
+
 - `GIT reset`, `Git Reset`, `git reset` all match
 - `sudo SUDO Sudo` all match
 
@@ -265,6 +275,7 @@ Exception: `git branch -D` is case-sensitive because `-d` (lowercase) is the saf
 ### Word Boundaries
 
 Patterns use word boundaries (`\b`) to avoid false positives:
+
 - `git reset` matches `git reset --hard` but not `git resettle`
 - `sudo` matches `sudo git` but not `pseudocode`
 
@@ -278,6 +289,7 @@ Some patterns have exclusions for safe variations:
 ### Command Chaining
 
 Patterns correctly handle command chaining:
+
 - `git stash && git add .` is blocked (bare stash before chain operator)
 - `git stash list` is allowed (subcommand, not bare stash)
 

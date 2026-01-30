@@ -1,7 +1,6 @@
 # Enforce Tests on Commit Hook
 
-**Repository:** [https://github.com/milehighideas/enforce-tests-on-commit](https://github.com/milehighideas/enforce-tests-on-commit)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/enforce-tests-on-commit`)
 
 ## Overview
 
@@ -30,6 +29,7 @@ The tool is used as a Claude pre-commit hook. It reads JSON input from stdin con
 - The Claude session ID (for tracking edited files)
 
 When a `git commit` command is detected, the hook:
+
 1. Checks for test files in `__tests__/` folders (blocks these)
 2. Loads tracked files from the session
 3. Intersects staged files with session-tracked files
@@ -84,6 +84,7 @@ The tool recognizes and handles four project types in a monorepo structure:
 ### Test File Co-Location
 
 Tests must be co-located with their source files:
+
 - Source: `src/components/Button.tsx` → Test: `src/components/Button.test.tsx`
 - Source: `src/utils.ts` → Test: `src/utils.test.ts`
 
@@ -132,6 +133,7 @@ Tests have a 120-second timeout. If tests take longer, the commit is blocked wit
 ### Vitest Setup Validation
 
 For web and portal projects, the hook validates that Vitest is properly configured:
+
 - Checks that `package.json` contains a `test:run` script
 - Verifies `vitest.config.ts` exists
 - Blocks commits with helpful instructions if setup is incomplete
@@ -156,7 +158,7 @@ git commit -m "feat: add utility function"
 # ❌ Commit blocked: Missing test file at src/Utils.test.ts
 ```
 
-### Scenario 3: Commit with Test File in __tests__/
+### Scenario 3: Commit with Test File in **tests**/
 
 ```bash
 # User created Button.test.tsx in __tests__/ instead of co-locating
@@ -230,12 +232,14 @@ The hook allows `git commit --amend` to proceed without re-running tests. This i
 ## Output
 
 When blocking a commit, the hook writes error messages to stderr with:
+
 - Clear explanation of why the commit was blocked
 - List of affected files
 - Suggestions for fixes (e.g., where to move test files)
 - Test failure output (last 3000 characters)
 
 When allowing a commit with tests, it writes to stderr:
+
 - `✅ N test file(s) passed`
 
 ## Implementation Details
@@ -254,6 +258,7 @@ This prevents false positives while ensuring files edited by Claude are properly
 ### Project Root Discovery
 
 The hook walks up the directory tree to find the project root by looking for:
+
 1. `package.json` + `convex/` → Backend project
 2. `package.json` + `app.json` → Mobile app
 3. `package.json` + path containing `apps/web` → Web project
@@ -263,6 +268,7 @@ The hook walks up the directory tree to find the project root by looking for:
 ### Re-export Module Detection
 
 Files are detected as re-export modules if:
+
 - They have ≤10 lines of code
 - All non-comment lines start with `export` or `'use client'`/`"use server"` directives
 - This prevents unnecessary test files for barrel exports

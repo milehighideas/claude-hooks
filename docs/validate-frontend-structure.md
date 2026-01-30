@@ -1,7 +1,6 @@
 # validate-frontend-structure
 
-**Repository:** [https://github.com/milehighideas/validate-frontend-structure](https://github.com/milehighideas/validate-frontend-structure)
-
+**Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/validate-frontend-structure`)
 
 A Claude Code PreToolUse hook that enforces consistent frontend folder structure in React/Next.js projects.
 
@@ -114,6 +113,7 @@ The hook only validates operations that modify component structure. It checks:
 The tool automatically detects and validates these project layouts:
 
 1. **Monorepo with web app**
+
    ```text
    project/
    └── apps/web/components/
@@ -180,30 +180,39 @@ feature-name/
 ### Common Issues and Solutions
 
 **Missing required folder**
+
 ```text
 Missing required folder: feature-name/create/
 ```
+
 Fix: Create the folder with `mkdir -p components/routes/feature-name/create`
 
 **Missing barrel export**
+
 ```bash
 Missing barrel export file: feature-name/create/index.ts
 ```
+
 Fix: Create the file with content like `export * from './Component';`
 
 **Missing .gitkeep**
+
 ```text
 Missing Git tracking file: feature-name/create/.gitkeep
 ```
+
 Fix: Create with `touch components/routes/feature-name/create/.gitkeep`
 
 **Loose component file**
+
 ```bash
 Loose component file (must be in feature folder): components/LooseComponent.tsx
 ```
+
 Fix: Move file into appropriate feature folder under the CRUD structure
 
 **Full validation failure** returns:
+
 ```bash
 BLOCKED: Frontend structure validation failed
 
@@ -326,6 +335,7 @@ go test -v
 ```
 
 Tests cover:
+
 - Project root discovery
 - Feature structure validation
 - Loose component detection
@@ -348,6 +358,7 @@ Tests cover:
 ### Graceful Degradation
 
 The hook fails safely and allows operations if:
+
 - JSON input cannot be parsed
 - Project root cannot be found
 - Components directory doesn't exist
@@ -368,6 +379,7 @@ For detailed architecture guidance, see: `~/.claude/skills/frontend-architecture
 ### Hook not running?
 
 Check that `CLAUDE_HOOKS_AST_VALIDATION=true` is set:
+
 ```bash
 echo $CLAUDE_HOOKS_AST_VALIDATION  # Should print 'true'
 ```
