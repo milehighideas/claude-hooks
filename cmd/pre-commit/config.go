@@ -57,6 +57,7 @@ type AppConfig struct {
 	TestCommand     string           `json:"testCommand,omitempty"`
 	NodeMemoryMB    int              `json:"nodeMemoryMB,omitempty"`    // Memory limit for Node.js (e.g., 8192 for 8GB)
 	TypecheckFilter *TypecheckFilter `json:"typecheckFilter,omitempty"` // Per-app override for typecheck settings
+	SkipLint        bool             `json:"skipLint,omitempty"`        // Skip lint for this app (typecheck still runs)
 }
 
 // TypecheckFilter configures which TypeScript errors to filter out
@@ -89,8 +90,9 @@ type GoLintConfig struct {
 
 // ConvexConfig configures Convex validation
 type ConvexConfig struct {
-	Path          string `json:"path"`
-	SuccessMarker string `json:"successMarker"`
+	Path           string `json:"path"`
+	SuccessMarker  string `json:"successMarker"`
+	PackageManager string `json:"-"` // Inherited from global config
 }
 
 // BuildConfig configures build checks
@@ -230,6 +232,9 @@ func applyDefaults(config *Config) {
 	}
 	if config.Convex.SuccessMarker == "" {
 		config.Convex.SuccessMarker = "Convex functions ready!"
+	}
+	if config.Convex.PackageManager == "" {
+		config.Convex.PackageManager = config.PackageManager
 	}
 	// LintStagedConfig inherits from global if not set
 	if config.LintStagedConfig.PackageManager == "" {

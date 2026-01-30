@@ -21,7 +21,7 @@ func checkConvex(config ConvexConfig) error {
 		marker = DefaultConvexSuccessMarker
 	}
 
-	output, err := runConvexDev(config.Path)
+	output, err := runConvexDev(config.Path, config.PackageManager)
 	if err != nil {
 		// Include output in error for debugging
 		return fmt.Errorf("convex dev failed: %w\nOutput: %s", err, output)
@@ -34,9 +34,23 @@ func checkConvex(config ConvexConfig) error {
 	return nil
 }
 
-// runConvexDev runs npx convex dev --once and returns combined output
-func runConvexDev(path string) (string, error) {
-	cmd := exec.Command("npx", "convex", "dev", "--once")
+// runConvexDev runs convex dev --once using the configured package manager
+func runConvexDev(path string, packageManager string) (string, error) {
+	var runner string
+	var args []string
+	switch packageManager {
+	case "bun":
+		runner = "bunx"
+		args = []string{"convex", "dev", "--once"}
+	case "yarn":
+		runner = "yarn"
+		args = []string{"dlx", "convex", "dev", "--once"}
+	default:
+		runner = "npx"
+		args = []string{"convex", "dev", "--once"}
+	}
+
+	cmd := exec.Command(runner, args...)
 	cmd.Dir = path
 
 	var stdout, stderr bytes.Buffer
