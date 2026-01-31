@@ -153,6 +153,35 @@ type SRPConfig struct {
 	ExcludePaths []string `json:"excludePaths"`
 	// HideWarnings suppresses warning output, only showing errors
 	HideWarnings bool `json:"hideWarnings"`
+	// ScreenHooks specifies which React hooks are forbidden in screen/page files.
+	// Accepts individual hook names: "useState", "useReducer", "useContext",
+	// "useCallback", "useEffect", "useMemo", or "all" to flag all of them.
+	// If empty/unset, defaults to ["useState", "useReducer", "useContext"] for
+	// backwards compatibility.
+	ScreenHooks []string `json:"screenHooks"`
+}
+
+// resolvedScreenHooks returns the set of hooks to check in screens,
+// expanding "all" and falling back to the default set when unset.
+func (c SRPConfig) resolvedScreenHooks() map[string]bool {
+	defaults := []string{"useState", "useReducer", "useContext"}
+
+	hooks := c.ScreenHooks
+	if len(hooks) == 0 {
+		hooks = defaults
+	}
+
+	result := make(map[string]bool)
+	for _, h := range hooks {
+		if h == "all" {
+			for _, d := range []string{"useState", "useReducer", "useContext", "useCallback", "useEffect", "useMemo"} {
+				result[d] = true
+			}
+		} else {
+			result[h] = true
+		}
+	}
+	return result
 }
 
 // loadConfig loads configuration from .pre-commit.json

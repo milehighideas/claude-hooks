@@ -234,6 +234,9 @@ func TestCheckDirectConvexImports(t *testing.T) {
 }
 
 func TestCheckStateInScreens(t *testing.T) {
+	// Initialize default config for tests
+	screenHooksConfig = map[string]bool{"useState": true, "useReducer": true, "useContext": true}
+
 	tests := []struct {
 		name         string
 		filePath     string

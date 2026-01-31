@@ -50,13 +50,14 @@ type SRPStateInfo struct {
 
 // SRPChecker validates Single Responsibility Principle compliance
 type SRPChecker struct {
-	gitShowFunc  func(file string) ([]byte, error)
-	readFileFunc func(file string) ([]byte, error)
+	gitShowFunc   func(file string) ([]byte, error)
+	readFileFunc  func(file string) ([]byte, error)
 	useFilesystem bool
+	config        SRPConfig
 }
 
 // NewSRPChecker creates a new SRP checker that reads from git staged content
-func NewSRPChecker() *SRPChecker {
+func NewSRPChecker(config SRPConfig) *SRPChecker {
 	return &SRPChecker{
 		gitShowFunc: func(file string) ([]byte, error) {
 			cmd := exec.Command("git", "show", ":"+file)
@@ -66,11 +67,12 @@ func NewSRPChecker() *SRPChecker {
 			return os.ReadFile(file)
 		},
 		useFilesystem: false,
+		config:        config,
 	}
 }
 
 // NewSRPCheckerFullMode creates a new SRP checker that reads from filesystem
-func NewSRPCheckerFullMode() *SRPChecker {
+func NewSRPCheckerFullMode(config SRPConfig) *SRPChecker {
 	return &SRPChecker{
 		gitShowFunc: func(file string) ([]byte, error) {
 			cmd := exec.Command("git", "show", ":"+file)
@@ -80,6 +82,7 @@ func NewSRPCheckerFullMode() *SRPChecker {
 			return os.ReadFile(file)
 		},
 		useFilesystem: true,
+		config:        config,
 	}
 }
 
@@ -134,7 +137,7 @@ func (c *SRPChecker) analyzeCode(code, filePath string) *SRPAnalysis {
 	exportRe := regexp.MustCompile(`^export\s+(?:(type|interface)\s+)?(?:(const|let|var|function|class|default)\s+)?(\w+)`)
 	exportTypeRe := regexp.MustCompile(`^export\s+type\s+`)
 	exportFromRe := regexp.MustCompile(`from\s+['"]([^'"]+)['"]`)
-	stateHookRe := regexp.MustCompile(`\b(useState|useReducer|useContext)\s*\(`)
+	stateHookRe := regexp.MustCompile(`\b(useState|useReducer|useContext|useCallback|useEffect|useMemo)\s*\(`)
 
 	for i, line := range lines {
 		trimmed := strings.TrimSpace(line)
@@ -310,12 +313,16 @@ func (c *SRPChecker) checkStateInScreens(analysis *SRPAnalysis, filePath string)
 		return violations
 	}
 
-	if len(analysis.StateManagement) > 0 {
-		var hooks []string
-		for _, s := range analysis.StateManagement {
-			hooks = append(hooks, s.Hook)
-		}
+	allowedHooks := c.config.resolvedScreenHooks()
 
+	var flaggedHooks []string
+	for _, s := range analysis.StateManagement {
+		if allowedHooks[s.Hook] {
+			flaggedHooks = append(flaggedHooks, s.Hook)
+		}
+	}
+
+	if len(flaggedHooks) > 0 {
 		fileType := "Screen"
 		if strings.HasSuffix(filePath, "page.tsx") {
 			fileType = "Page"
@@ -324,8 +331,8 @@ func (c *SRPChecker) checkStateInScreens(analysis *SRPAnalysis, filePath string)
 		violations = append(violations, SRPViolation{
 			File:       filePath,
 			Severity:   "error",
-			Message:    fmt.Sprintf("%s has state management (%s)", fileType, strings.Join(hooks, ", ")),
-			Suggestion: "Move state to content component or hook",
+			Message:    fmt.Sprintf("%s has state management (%s)", fileType, strings.Join(flaggedHooks, ", ")),
+			Suggestion: "Move state to content component or hook - screens are navigation-only",
 		})
 	}
 
@@ -450,7 +457,16 @@ func (c *SRPChecker) checkMixedConcerns(analysis *SRPAnalysis, filePath string) 
 
 	hasDataLayer := false
 	hasUI := false
-	hasState := len(analysis.StateManagement) > 0
+	// Mixed concerns uses the original 3 state hooks (useState/useReducer/useContext)
+	// regardless of screenHooks config — useCallback/useEffect/useMemo aren't "state"
+	stateHooks := map[string]bool{"useState": true, "useReducer": true, "useContext": true}
+	hasState := false
+	for _, s := range analysis.StateManagement {
+		if stateHooks[s.Hook] {
+			hasState = true
+			break
+		}
+	}
 
 	for _, imp := range analysis.Imports {
 		if strings.Contains(imp.Source, "data-layer") {
@@ -619,7 +635,7 @@ func writeSRPReport(errors, warnings []SRPViolation, baseDir string) error {
 	return nil
 }
 
-// runSRPCheck is the entry point for SRP checking
+// runSRPCheck is the entry point for SRP checking (uses default config)
 func runSRPCheck(stagedFiles []string) error {
 	return runSRPCheckWithFilter(SRPFilterResult{Files: stagedFiles}, SRPConfig{}, false)
 }
@@ -662,9 +678,9 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 	var checker *SRPChecker
 	if fullMode {
 		fmt.Println("🔍 Running FULL SRP check (all files in configured paths)")
-		checker = NewSRPCheckerFullMode()
+		checker = NewSRPCheckerFullMode(config)
 	} else {
-		checker = NewSRPChecker()
+		checker = NewSRPChecker(config)
 	}
 	violations, err := checker.CheckFiles(filterResult.Files)
 	if err != nil {

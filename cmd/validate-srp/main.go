@@ -20,6 +20,48 @@ var (
 	verboseFlag bool
 )
 
+// screenHooksConfig holds the resolved set of hooks to flag in screen files.
+// Loaded from .pre-commit.json srpConfig.screenHooks; defaults to useState/useReducer/useContext.
+var screenHooksConfig map[string]bool
+
+func loadScreenHooksConfig() {
+	defaults := map[string]bool{"useState": true, "useReducer": true, "useContext": true}
+	allHooks := []string{"useState", "useReducer", "useContext", "useCallback", "useEffect", "useMemo"}
+
+	screenHooksConfig = defaults
+
+	data, err := os.ReadFile(".pre-commit.json")
+	if err != nil {
+		return
+	}
+
+	var raw struct {
+		SRPConfig struct {
+			ScreenHooks []string `json:"screenHooks"`
+		} `json:"srpConfig"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return
+	}
+
+	hooks := raw.SRPConfig.ScreenHooks
+	if len(hooks) == 0 {
+		return
+	}
+
+	result := make(map[string]bool)
+	for _, h := range hooks {
+		if h == "all" {
+			for _, a := range allHooks {
+				result[a] = true
+			}
+		} else {
+			result[h] = true
+		}
+	}
+	screenHooksConfig = result
+}
+
 // SRPViolation represents a Single Responsibility Principle violation
 type SRPViolation struct {
 	Severity   string // "error" or "warning"
@@ -114,6 +156,7 @@ func printUsage() {
 
 func main() {
 	flag.Parse()
+	loadScreenHooksConfig()
 
 	if helpFlag {
 		printUsage()
@@ -471,7 +514,7 @@ func analyzeCode(code, filePath string) *ASTAnalysis {
 	importRe := regexp.MustCompile(`^import\s+(?:{([^}]+)}|(\w+))?\s*(?:,\s*{([^}]+)})?\s*from\s+['"]([^'"]+)['"]`)
 	exportRe := regexp.MustCompile(`^export\s+(?:(type|interface)\s+)?(?:(const|let|var|function|class|default)\s+)?(\w+)`)
 	exportTypeRe := regexp.MustCompile(`^export\s+type\s+`)
-	stateHookRe := regexp.MustCompile(`\b(useState|useReducer|useContext)\s*\(`)
+	stateHookRe := regexp.MustCompile(`\b(useState|useReducer|useContext|useCallback|useEffect|useMemo)\s*\(`)
 	responsibilityRe := regexp.MustCompile(`/\*\*\s*Single Responsibility:`)
 
 	for i, line := range lines {
@@ -682,15 +725,17 @@ func checkStateInScreens(analysis *ASTAnalysis, filePath string) []SRPViolation 
 		return violations
 	}
 
-	if len(analysis.StateManagement) > 0 {
-		var hooks []string
-		for _, s := range analysis.StateManagement {
-			hooks = append(hooks, s.Hook)
+	var flaggedHooks []string
+	for _, s := range analysis.StateManagement {
+		if screenHooksConfig[s.Hook] {
+			flaggedHooks = append(flaggedHooks, s.Hook)
 		}
+	}
 
+	if len(flaggedHooks) > 0 {
 		violations = append(violations, SRPViolation{
 			Severity:   "error",
-			Message:    fmt.Sprintf("Screen has state management (%s)", strings.Join(hooks, ", ")),
+			Message:    fmt.Sprintf("Screen has state management (%s)", strings.Join(flaggedHooks, ", ")),
 			Suggestion: "Move state to content component or hook - screens are navigation-only",
 		})
 	}
