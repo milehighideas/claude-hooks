@@ -58,6 +58,7 @@ type AppConfig struct {
 	NodeMemoryMB    int              `json:"nodeMemoryMB,omitempty"`    // Memory limit for Node.js (e.g., 8192 for 8GB)
 	TypecheckFilter *TypecheckFilter `json:"typecheckFilter,omitempty"` // Per-app override for typecheck settings
 	SkipLint        bool             `json:"skipLint,omitempty"`        // Skip lint for this app (typecheck still runs)
+	SkipTypecheck   bool             `json:"skipTypecheck,omitempty"`   // Skip typecheck for this app (lint still runs)
 }
 
 // TypecheckFilter configures which TypeScript errors to filter out
