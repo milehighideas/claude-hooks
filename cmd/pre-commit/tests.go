@@ -1,6 +1,12 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 // TestRunContext provides context for determining which apps to test
 type TestRunContext struct {
@@ -15,25 +21,34 @@ type TestRunContext struct {
 
 // runTests runs tests based on configuration and affected files
 func runTests(ctx TestRunContext) error {
-	fmt.Println()
-	fmt.Println("================================")
-	fmt.Println("  TESTS")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println()
+		fmt.Println("================================")
+		fmt.Println("  TESTS")
+		fmt.Println("================================")
+	}
 
 	appsToTest := determineAppsToTest(ctx)
 
 	if len(appsToTest) == 0 {
-		fmt.Println("No apps to test (all skipped or none affected)")
+		if !compactMode() {
+			fmt.Println("No apps to test (all skipped or none affected)")
+		}
 		return nil
 	}
 
-	// Print what we're testing and why
-	printTestPlan(ctx, appsToTest)
+	// Print what we're testing and why (verbose only)
+	if !compactMode() {
+		printTestPlan(ctx, appsToTest)
+	}
 
 	pm := ctx.PackageManager
 	if pm == "" {
 		pm = "pnpm"
 	}
+
+	var failedApps []string
+	var passedApps []string
 
 	for appName, appConfig := range appsToTest {
 		// Use custom test command if specified, otherwise default to "test"
@@ -42,26 +57,71 @@ func runTests(ctx TestRunContext) error {
 			testCmd = "test"
 		}
 
-		fmt.Printf("\nRunning %s tests (command: %s)...\n", appName, testCmd)
-
 		// Build args based on package manager
 		var args []string
 		if pm == "bun" {
-			// bun uses: bun run --filter <name> <script>
 			args = []string{"run", "--filter", appConfig.Filter, testCmd}
 		} else {
-			// pnpm/npm/yarn use: <pm> --filter <name> <script>
 			args = []string{"--filter", appConfig.Filter, testCmd}
 		}
 
-		if err := runCommandWithEnv(ctx.Env, pm, args...); err != nil {
-			fmt.Printf("%s tests failed\n", appName)
-			return fmt.Errorf("%s tests failed", appName)
+		if compactMode() {
+			// Capture output and write to report file
+			output, err := runCommandCapturedWithEnv(ctx.Env, pm, args...)
+			writeTestReport(appName, output, err, reportDir)
+			if err != nil {
+				failedApps = append(failedApps, appName)
+			} else {
+				passedApps = append(passedApps, appName)
+			}
+		} else {
+			fmt.Printf("\nRunning %s tests (command: %s)...\n", appName, testCmd)
+			if err := runCommandWithEnv(ctx.Env, pm, args...); err != nil {
+				fmt.Printf("%s tests failed\n", appName)
+				return fmt.Errorf("%s tests failed", appName)
+			}
+			fmt.Printf("%s tests passed\n", appName)
 		}
-		fmt.Printf("%s tests passed\n", appName)
+	}
+
+	if compactMode() {
+		if len(failedApps) > 0 {
+			printStatus("Tests", false, strings.Join(failedApps, ", ")+" failed")
+			printReportHint("tests/")
+			return fmt.Errorf("%s tests failed", strings.Join(failedApps, ", "))
+		}
+		printStatus("Tests", true, strings.Join(passedApps, ", "))
 	}
 
 	return nil
+}
+
+// writeTestReport writes test output to a report file
+func writeTestReport(appName, output string, testErr error, baseDir string) {
+	if baseDir == "" {
+		return
+	}
+
+	testsDir := filepath.Join(baseDir, "tests")
+	if err := os.MkdirAll(testsDir, 0755); err != nil {
+		return
+	}
+
+	reportPath := filepath.Join(testsDir, appName+".txt")
+
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("=", 80) + "\n")
+	sb.WriteString(fmt.Sprintf("TEST REPORT: %s\n", appName))
+	sb.WriteString(fmt.Sprintf("Generated: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	if testErr != nil {
+		sb.WriteString("Result: FAILED\n")
+	} else {
+		sb.WriteString("Result: PASSED\n")
+	}
+	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+	sb.WriteString(output)
+
+	os.WriteFile(reportPath, []byte(sb.String()), 0644)
 }
 
 // determineAppsToTest returns the apps that should have tests run based on config and context

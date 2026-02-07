@@ -16,11 +16,17 @@ func checkBuild(config BuildConfig, apps map[string]AppConfig) error {
 			return fmt.Errorf("app %q not found in configuration", appName)
 		}
 
-		fmt.Printf("Building %s...\n", appName)
-		if err := runBuildInDir(appConfig.Path); err != nil {
-			return fmt.Errorf("build failed for %s: %w", appName, err)
+		if compactMode() {
+			if _, err := runCommandCapturedInDir(appConfig.Path, "pnpm", "build"); err != nil {
+				return fmt.Errorf("build failed for %s: %w", appName, err)
+			}
+		} else {
+			fmt.Printf("Building %s...\n", appName)
+			if err := runBuildInDir(appConfig.Path); err != nil {
+				return fmt.Errorf("build failed for %s: %w", appName, err)
+			}
+			fmt.Printf("Build successful for %s\n", appName)
 		}
-		fmt.Printf("Build successful for %s\n", appName)
 	}
 
 	return nil

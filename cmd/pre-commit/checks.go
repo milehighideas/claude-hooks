@@ -16,9 +16,11 @@ type AppCheckResult struct {
 
 // runLintTypecheck orchestrates lint and typecheck for all affected apps IN PARALLEL
 func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool) error {
-	fmt.Println("================================")
-	fmt.Println("  LINT & TYPE CHECKING (PARALLEL)")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  LINT & TYPE CHECKING (PARALLEL)")
+		fmt.Println("================================")
+	}
 
 	// Collect apps that need checking
 	type appJob struct {
@@ -42,11 +44,15 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 	}
 
 	if len(jobs) == 0 {
-		fmt.Println("No apps to check")
+		if !compactMode() {
+			fmt.Println("No apps to check")
+		}
 		return nil
 	}
 
-	fmt.Printf("Running checks on %d app(s) in parallel...\n\n", len(jobs))
+	if !compactMode() {
+		fmt.Printf("Running checks on %d app(s) in parallel...\n\n", len(jobs))
+	}
 
 	// Run all jobs in parallel
 	var wg sync.WaitGroup
@@ -81,14 +87,34 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 
 	// Print results sequentially
 	checksFailed := false
+	var failedApps []string
 	for _, result := range results {
-		if result.Output != "" {
-			fmt.Print(result.Output)
-			fmt.Println()
+		if compactMode() {
+			// Compact: show per-app one-liner
+			if result.Err != nil {
+				checksFailed = true
+				failedApps = append(failedApps, result.AppName)
+			}
+		} else {
+			if result.Output != "" {
+				fmt.Print(result.Output)
+				fmt.Println()
+			}
+			if result.Err != nil {
+				checksFailed = true
+			}
 		}
-		if result.Err != nil {
-			checksFailed = true
+	}
+
+	if compactMode() {
+		if checksFailed {
+			detail := fmt.Sprintf("%s failed", strings.Join(failedApps, ", "))
+			printStatus("Lint & typecheck", false, detail)
+			printReportHint("lint/ and typecheck/")
+			return fmt.Errorf("lint/typecheck failed")
 		}
+		printStatus("Lint & typecheck", true, fmt.Sprintf("%d apps", len(jobs)))
+		return nil
 	}
 
 	if checksFailed {

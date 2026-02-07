@@ -104,9 +104,11 @@ func hasRequireAssertions(content string) bool {
 
 // runVitestAssertionsCheck is the entry point for vitest assertions validation
 func runVitestAssertionsCheck(apps map[string]AppConfig) error {
-	fmt.Println("================================")
-	fmt.Println("  VITEST ASSERTIONS CHECK")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  VITEST ASSERTIONS CHECK")
+		fmt.Println("================================")
+	}
 
 	checker := NewVitestAssertionsChecker(apps)
 	violations, err := checker.Check()
@@ -121,13 +123,23 @@ func runVitestAssertionsCheck(apps map[string]AppConfig) error {
 		}
 	}
 
+	if compactMode() {
+		if len(violations) > 0 {
+			printStatus("Vitest assertions", false, fmt.Sprintf("%d configs", len(violations)))
+			printReportHint("vitest-assertions/")
+			return fmt.Errorf("vitest assertions check failed")
+		}
+		printStatus("Vitest assertions", true, "")
+		return nil
+	}
+
+	// Verbose output
 	if len(violations) == 0 {
 		fmt.Println("✅ All vitest configs have requireAssertions enabled")
 		fmt.Println()
 		return nil
 	}
 
-	// Print violations
 	for _, v := range violations {
 		fmt.Printf("❌ %s: %s\n", v.AppName, v.Message)
 		fmt.Printf("   Config: %s\n", v.ConfigPath)

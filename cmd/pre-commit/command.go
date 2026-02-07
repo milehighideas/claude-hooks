@@ -57,6 +57,43 @@ func runCommandInDir(dir, name string, args ...string) error {
 	return cmd.Run()
 }
 
+// runCommandCapturedWithEnv executes a command with custom environment variables,
+// capturing stdout and stderr into a combined string instead of piping to terminal.
+func runCommandCapturedWithEnv(env map[string]string, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	if errors.Is(cmd.Err, exec.ErrDot) {
+		cmd.Err = nil
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if len(env) > 0 {
+		cmd.Env = os.Environ()
+		for k, v := range env {
+			cmd.Env = append(cmd.Env, k+"="+v)
+		}
+	}
+
+	err := cmd.Run()
+	return stdout.String() + stderr.String(), err
+}
+
+// runCommandCapturedInDir executes a command in a specific directory,
+// capturing stdout and stderr into a combined string instead of piping to terminal.
+func runCommandCapturedInDir(dir, name string, args ...string) (string, error) {
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	if errors.Is(cmd.Err, exec.ErrDot) {
+		cmd.Err = nil
+	}
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String() + stderr.String(), err
+}
+
 // runCommandWithOutput executes a command and returns stdout as a string.
 // On error, it returns stderr content along with the error.
 func runCommandWithOutput(name string, args ...string) (string, error) {

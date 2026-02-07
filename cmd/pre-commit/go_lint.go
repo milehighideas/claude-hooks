@@ -36,13 +36,23 @@ func checkGoLint(stagedFiles []string, config GoLintConfig) error {
 	// Run linter in each directory
 	var lintErrors []string
 	for _, dir := range dirs {
-		fmt.Printf("   Linting Go code in %s...\n", dir)
+		if !compactMode() {
+			fmt.Printf("   Linting Go code in %s...\n", dir)
+		}
 
 		var err error
-		if tool == "golangci-lint" {
-			err = runCommandInDir(dir, "golangci-lint", "run", "./...")
+		if compactMode() {
+			if tool == "golangci-lint" {
+				_, err = runCommandCapturedInDir(dir, "golangci-lint", "run", "./...")
+			} else {
+				_, err = runCommandCapturedInDir(dir, "go", "vet", "./...")
+			}
 		} else {
-			err = runCommandInDir(dir, "go", "vet", "./...")
+			if tool == "golangci-lint" {
+				err = runCommandInDir(dir, "golangci-lint", "run", "./...")
+			} else {
+				err = runCommandInDir(dir, "go", "vet", "./...")
+			}
 		}
 
 		if err != nil {

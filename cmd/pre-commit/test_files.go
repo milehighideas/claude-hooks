@@ -306,9 +306,11 @@ func (c *TestFilesChecker) checkTestRequirements(filePath string) []TestFileViol
 
 // runTestFilesCheck is the entry point for test file validation
 func runTestFilesCheck(stagedFiles []string) error {
-	fmt.Println("================================")
-	fmt.Println("  TEST FILES CHECK")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  TEST FILES CHECK")
+		fmt.Println("================================")
+	}
 
 	checker := NewTestFilesChecker()
 	violations, err := checker.CheckFiles(stagedFiles)
@@ -325,14 +327,22 @@ func runTestFilesCheck(stagedFiles []string) error {
 		}
 	}
 
-	// Print warnings
+	if compactMode() {
+		if len(errors) > 0 {
+			printStatus("Test files", false, fmt.Sprintf("%d missing", len(errors)))
+			return fmt.Errorf("missing test files")
+		}
+		printStatus("Test files", true, "")
+		return nil
+	}
+
+	// Verbose output
 	for _, v := range warnings {
 		fmt.Printf("⚠️  %s: %s\n", filepath.Base(v.File), v.Message)
 		fmt.Printf("   Reason: %s\n", v.Reason)
 		fmt.Printf("   Expected: %s\n", v.ExpectedPath)
 	}
 
-	// Print errors
 	for _, v := range errors {
 		fmt.Printf("❌ %s: %s\n", filepath.Base(v.File), v.Message)
 		fmt.Printf("   Reason: %s require tests\n", v.Reason)

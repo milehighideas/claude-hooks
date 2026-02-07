@@ -4,10 +4,12 @@ import "fmt"
 
 // runLintStaged runs lint-staged for file formatting
 func runLintStaged(cfg LintStagedConfig) error {
-	fmt.Println("================================")
-	fmt.Println("  FORMATTING")
-	fmt.Println("================================")
-	fmt.Println("Running lint-staged...")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  FORMATTING")
+		fmt.Println("================================")
+		fmt.Println("Running lint-staged...")
+	}
 
 	pm := cfg.PackageManager
 	if pm == "" {
@@ -18,13 +20,21 @@ func runLintStaged(cfg LintStagedConfig) error {
 	var cmd string
 	var args []string
 	if pm == "bun" {
-		// bun uses bunx to run local binaries
 		cmd = "bunx"
 		args = []string{"lint-staged", "--no-stash"}
 	} else {
-		// pnpm/npm/yarn use: <pm> exec lint-staged
 		cmd = pm
 		args = []string{"exec", "lint-staged", "--no-stash"}
+	}
+
+	if compactMode() {
+		// Capture output instead of piping to terminal
+		if _, err := runCommandCapturedWithEnv(cfg.Env, cmd, args...); err != nil {
+			printStatus("Formatting", false, "lint-staged failed")
+			return fmt.Errorf("lint-staged failed: %w", err)
+		}
+		printStatus("Formatting", true, "")
+		return nil
 	}
 
 	if err := runCommandWithEnv(cfg.Env, cmd, args...); err != nil {

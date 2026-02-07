@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,18 +12,22 @@ import (
 // runFrontendStructureCheck runs the frontend structure validation by shelling
 // out to the validate-frontend-structure binary (co-located in this monorepo).
 func runFrontendStructureCheck(apps map[string]AppConfig, stagedFiles []string) error {
-	fmt.Println("================================")
-	fmt.Println("  FRONTEND STRUCTURE CHECK")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  FRONTEND STRUCTURE CHECK")
+		fmt.Println("================================")
+	}
 
 	return runFrontendStructureBinary()
 }
 
 // runFrontendStructureCheckStandalone runs the check for standalone mode
 func runFrontendStructureCheckStandalone(apps map[string]AppConfig, files []string) error {
-	fmt.Println("================================")
-	fmt.Println("  FRONTEND STRUCTURE CHECK")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  FRONTEND STRUCTURE CHECK")
+		fmt.Println("================================")
+	}
 
 	return runFrontendStructureBinary()
 }
@@ -41,6 +46,26 @@ func runFrontendStructureBinary() error {
 		}
 	}
 
+	if compactMode() {
+		// Capture output instead of piping to terminal
+		cmd := exec.Command(binName)
+		cmd.Env = os.Environ()
+		var stdout, stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+
+		if err := cmd.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
+				printStatus("Frontend structure", false, "")
+				return fmt.Errorf("frontend structure validation failed")
+			}
+			printStatus("Frontend structure", true, "skipped")
+			return nil
+		}
+		printStatus("Frontend structure", true, "")
+		return nil
+	}
+
 	cmd := exec.Command(binName)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -51,7 +76,6 @@ func runFrontendStructureBinary() error {
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
 			return fmt.Errorf("frontend structure validation failed")
 		}
-		// Binary not found or other error - don't block
 		fmt.Println("✅ Frontend structure check skipped (validator not found)")
 		fmt.Println()
 		return nil

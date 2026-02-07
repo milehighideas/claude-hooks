@@ -114,12 +114,16 @@ func runConsoleCheck(appFiles map[string][]string, allowedFiles []string) error 
 
 	for appName, files := range appFiles {
 		if len(files) > 0 {
-			fmt.Println("================================")
-			fmt.Println("  CONSOLE STATEMENT CHECK")
-			fmt.Println("================================")
+			if !compactMode() {
+				fmt.Println("================================")
+				fmt.Println("  CONSOLE STATEMENT CHECK")
+				fmt.Println("================================")
+			}
 			violations := checkConsoleStatementsWithViolations(appName, files, allowedFiles)
 			allViolations = append(allViolations, violations...)
-			fmt.Println()
+			if !compactMode() {
+				fmt.Println()
+			}
 		}
 	}
 
@@ -128,6 +132,16 @@ func runConsoleCheck(appFiles map[string][]string, allowedFiles []string) error 
 		if err := writeConsoleCheckReport(allViolations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write console check report: %v\n", err)
 		}
+	}
+
+	if compactMode() {
+		if len(allViolations) > 0 {
+			printStatus("Console check", false, fmt.Sprintf("%d files", len(allViolations)))
+			printReportHint("console-check/")
+			return fmt.Errorf("console statement violations found")
+		}
+		printStatus("Console check", true, "")
+		return nil
 	}
 
 	if len(allViolations) > 0 {
@@ -139,7 +153,10 @@ func runConsoleCheck(appFiles map[string][]string, allowedFiles []string) error 
 // checkConsoleStatementsWithViolations returns violations instead of just error
 func checkConsoleStatementsWithViolations(appName string, files []string, allowedFiles []string) []ConsoleViolation {
 	checker := NewConsoleChecker()
-	fmt.Printf("🔍 Checking for console.* statements in %s app...\n", appName)
+
+	if !compactMode() {
+		fmt.Printf("🔍 Checking for console.* statements in %s app...\n", appName)
+	}
 
 	var violations []ConsoleViolation
 
@@ -158,15 +175,19 @@ func checkConsoleStatementsWithViolations(appName string, files []string, allowe
 
 		if checker.hasConsoleStatements(output) {
 			violations = append(violations, ConsoleViolation{AppName: appName, File: file})
-			fmt.Printf("  ❌ %s\n", file)
+			if !compactMode() {
+				fmt.Printf("  ❌ %s\n", file)
+			}
 		}
 	}
 
-	if len(violations) > 0 {
-		fmt.Printf("\n❌ Found console.* statements in %d file(s)\n", len(violations))
-		fmt.Println("💡 Use a proper logger instead")
-	} else {
-		fmt.Println("✅ No console.* statements found")
+	if !compactMode() {
+		if len(violations) > 0 {
+			fmt.Printf("\n❌ Found console.* statements in %d file(s)\n", len(violations))
+			fmt.Println("💡 Use a proper logger instead")
+		} else {
+			fmt.Println("✅ No console.* statements found")
+		}
 	}
 
 	return violations

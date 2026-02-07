@@ -29,6 +29,36 @@ func init() {
 	flag.StringVar(&reportDir, "report-dir", "", "Directory to write detailed lint/typecheck reports (creates lint/ and typecheck/ subdirs)")
 }
 
+// compactMode returns true when reports are being written to a directory,
+// meaning detailed output should be suppressed in favor of pass/fail status lines.
+func compactMode() bool {
+	return reportDir != ""
+}
+
+// printStatus prints a compact pass/fail status line for a check.
+// name is the check name, passed indicates success, detail is optional context (e.g., error count).
+func printStatus(name string, passed bool, detail string) {
+	if !compactMode() {
+		return
+	}
+	icon := "✅"
+	status := ""
+	if !passed {
+		icon = "❌"
+	}
+	if detail != "" {
+		status = " (" + detail + ")"
+	}
+	fmt.Printf("  %s %s%s\n", icon, name, status)
+}
+
+// printReportHint prints a pointer to the report directory for a failed check.
+func printReportHint(subdir string) {
+	if compactMode() {
+		fmt.Printf("     → %s/%s\n", reportDir, subdir)
+	}
+}
+
 func main() {
 	flag.Parse()
 
@@ -146,8 +176,12 @@ func run() error {
 	// Check changelog if enabled
 	if config.Features.Changelog {
 		if err := checkChangelog(stagedFiles, config.ChangelogExclude, config.ChangelogConfig, config.Apps); err != nil {
+			if compactMode() {
+				printStatus("Changelog", false, "missing fragments")
+			}
 			return err
 		}
+		printStatus("Changelog", true, "")
 	}
 
 	// Lint-staged formatting (auto-fix first, before validation)
@@ -159,26 +193,40 @@ func run() error {
 
 	// Go linting
 	if config.Features.GoLint {
-		fmt.Println("================================")
-		fmt.Println("  GO LINTING")
-		fmt.Println("================================")
+		if !compactMode() {
+			fmt.Println("================================")
+			fmt.Println("  GO LINTING")
+			fmt.Println("================================")
+		}
 		if err := checkGoLint(stagedFiles, config.GoLint); err != nil {
+			printStatus("Go linting", false, "")
 			return err
 		}
-		fmt.Println("Go linting passed")
-		fmt.Println()
+		if !compactMode() {
+			fmt.Println("Go linting passed")
+			fmt.Println()
+		} else {
+			printStatus("Go linting", true, "")
+		}
 	}
 
 	// Convex validation
 	if config.Features.ConvexValidation {
-		fmt.Println("================================")
-		fmt.Println("  CONVEX VALIDATION")
-		fmt.Println("================================")
+		if !compactMode() {
+			fmt.Println("================================")
+			fmt.Println("  CONVEX VALIDATION")
+			fmt.Println("================================")
+		}
 		if err := checkConvex(config.Convex); err != nil {
+			printStatus("Convex validation", false, "")
 			return err
 		}
-		fmt.Println("Convex validation passed")
-		fmt.Println()
+		if !compactMode() {
+			fmt.Println("Convex validation passed")
+			fmt.Println()
+		} else {
+			printStatus("Convex validation", true, "")
+		}
 	}
 
 	// Collect all errors instead of failing fast
@@ -260,13 +308,20 @@ func run() error {
 
 	// Build check
 	if config.Features.BuildCheck {
-		fmt.Println("================================")
-		fmt.Println("  BUILD CHECK")
-		fmt.Println("================================")
+		if !compactMode() {
+			fmt.Println("================================")
+			fmt.Println("  BUILD CHECK")
+			fmt.Println("================================")
+		}
 		if err := checkBuild(config.Build, config.Apps); err != nil {
 			allErrors = append(allErrors, fmt.Sprintf("Build: %v", err))
+			printStatus("Build check", false, "")
+		} else {
+			printStatus("Build check", true, "")
 		}
-		fmt.Println()
+		if !compactMode() {
+			fmt.Println()
+		}
 	}
 
 	// Tests - run if global enabled OR any per-app override enables tests
@@ -302,7 +357,11 @@ func run() error {
 		fmt.Println("  PRE-COMMIT CHECKS FAILED")
 		fmt.Println("================================")
 		fmt.Println()
-		fmt.Println("Fix the errors above and try again")
+		if compactMode() {
+			fmt.Printf("%d check(s) failed — see reports: %s\n", len(allErrors), reportDir)
+		} else {
+			fmt.Println("Fix the errors above and try again")
+		}
 		return fmt.Errorf("%d check(s) failed", len(allErrors))
 	}
 

@@ -149,14 +149,18 @@ func fileExists(path string) bool {
 
 // runTestCoverageCheck is the entry point for test coverage validation
 func runTestCoverageCheck(config TestCoverageConfig) error {
-	fmt.Println("================================")
-	fmt.Println("  TEST COVERAGE CHECK")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  TEST COVERAGE CHECK")
+		fmt.Println("================================")
+	}
 
 	// Skip if no app paths configured
 	if len(config.AppPaths) == 0 {
-		fmt.Println("⚠️  No app paths configured for test coverage check")
-		fmt.Println()
+		if !compactMode() {
+			fmt.Println("⚠️  No app paths configured for test coverage check")
+			fmt.Println()
+		}
 		return nil
 	}
 
@@ -173,19 +177,28 @@ func runTestCoverageCheck(config TestCoverageConfig) error {
 		}
 	}
 
+	if compactMode() {
+		if len(violations) > 0 {
+			printStatus("Test coverage", false, fmt.Sprintf("%d missing", len(violations)))
+			printReportHint("test-coverage/")
+			return fmt.Errorf("test coverage check failed")
+		}
+		printStatus("Test coverage", true, "")
+		return nil
+	}
+
+	// Verbose output
 	if len(violations) == 0 {
 		fmt.Println("✅ All source files have corresponding test files")
 		fmt.Println()
 		return nil
 	}
 
-	// Group violations by app
 	byApp := make(map[string][]TestCoverageViolation)
 	for _, v := range violations {
 		byApp[v.AppPath] = append(byApp[v.AppPath], v)
 	}
 
-	// Print violations grouped by app
 	for appPath, appViolations := range byApp {
 		fmt.Printf("\n❌ %s - %d file(s) missing tests:\n", appPath, len(appViolations))
 		for _, v := range appViolations {

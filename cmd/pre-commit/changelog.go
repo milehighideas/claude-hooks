@@ -39,6 +39,9 @@ func checkChangelog(stagedFiles []string, excludePatterns []string, config Chang
 	}
 
 	if len(relevantFiles) == 0 {
+		if compactMode() {
+			printStatus("Changelog", true, "no relevant files")
+		}
 		return nil
 	}
 

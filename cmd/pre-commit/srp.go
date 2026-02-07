@@ -642,42 +642,50 @@ func runSRPCheck(stagedFiles []string) error {
 
 // runSRPCheckWithFilter runs SRP check with filter information displayed
 func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullMode bool) error {
-	fmt.Println("================================")
-	fmt.Println("  SRP COMPLIANCE CHECK")
-	fmt.Println("================================")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  SRP COMPLIANCE CHECK")
+		fmt.Println("================================")
 
-	// Print filter information if files were skipped
-	totalSkipped := filterResult.SkippedByAppPath + filterResult.SkippedByExclude
-	if totalSkipped > 0 || len(config.AppPaths) > 0 {
-		fmt.Printf("ℹ️  Checking SRP in: %v\n", config.AppPaths)
+		// Print filter information if files were skipped
+		totalSkipped := filterResult.SkippedByAppPath + filterResult.SkippedByExclude
+		if totalSkipped > 0 || len(config.AppPaths) > 0 {
+			fmt.Printf("ℹ️  Checking SRP in: %v\n", config.AppPaths)
 
-		if filterResult.SkippedByAppPath > 0 {
-			fmt.Printf("   • %d file(s) outside these paths were skipped:\n", filterResult.SkippedByAppPath)
-			for skippedPath, count := range filterResult.SkippedPaths {
-				fmt.Printf("     - %s (%d files)\n", skippedPath, count)
+			if filterResult.SkippedByAppPath > 0 {
+				fmt.Printf("   • %d file(s) outside these paths were skipped:\n", filterResult.SkippedByAppPath)
+				for skippedPath, count := range filterResult.SkippedPaths {
+					fmt.Printf("     - %s (%d files)\n", skippedPath, count)
+				}
 			}
-		}
 
-		if filterResult.SkippedByExclude > 0 {
-			fmt.Printf("   • %d file(s) excluded by excludePaths:\n", filterResult.SkippedByExclude)
-			for excludePath, count := range filterResult.ExcludeMatches {
-				fmt.Printf("     - %q matched %d file(s)\n", excludePath, count)
+			if filterResult.SkippedByExclude > 0 {
+				fmt.Printf("   • %d file(s) excluded by excludePaths:\n", filterResult.SkippedByExclude)
+				for excludePath, count := range filterResult.ExcludeMatches {
+					fmt.Printf("     - %q matched %d file(s)\n", excludePath, count)
+				}
 			}
-		}
 
-		fmt.Printf("   • %d file(s) will be checked\n", len(filterResult.Files))
-		fmt.Println()
+			fmt.Printf("   • %d file(s) will be checked\n", len(filterResult.Files))
+			fmt.Println()
+		}
 	}
 
 	if len(filterResult.Files) == 0 {
-		fmt.Println("✅ SRP check passed (no files to check after filtering)")
-		fmt.Println()
+		if compactMode() {
+			printStatus("SRP compliance", true, "no files")
+		} else {
+			fmt.Println("✅ SRP check passed (no files to check after filtering)")
+			fmt.Println()
+		}
 		return nil
 	}
 
 	var checker *SRPChecker
 	if fullMode {
-		fmt.Println("🔍 Running FULL SRP check (all files in configured paths)")
+		if !compactMode() {
+			fmt.Println("🔍 Running FULL SRP check (all files in configured paths)")
+		}
 		checker = NewSRPCheckerFullMode(config)
 	} else {
 		checker = NewSRPChecker(config)
@@ -703,7 +711,17 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 		}
 	}
 
-	// Print warnings (unless hideWarnings is enabled)
+	if compactMode() {
+		if len(errors) > 0 {
+			printStatus("SRP compliance", false, fmt.Sprintf("%d errors", len(errors)))
+			printReportHint("srp/")
+			return fmt.Errorf("SRP violations found")
+		}
+		printStatus("SRP compliance", true, fmt.Sprintf("%d files", len(filterResult.Files)))
+		return nil
+	}
+
+	// Verbose output: print individual violations
 	if !config.HideWarnings {
 		for _, v := range warnings {
 			fmt.Printf("⚠️  %s: %s\n", filepath.Base(v.File), v.Message)
@@ -713,7 +731,6 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 		}
 	}
 
-	// Print errors with full path
 	for _, v := range errors {
 		fmt.Printf("❌ %s: %s\n", v.File, v.Message)
 		if v.Suggestion != "" {

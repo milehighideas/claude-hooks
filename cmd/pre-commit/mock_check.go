@@ -32,36 +32,35 @@ func NewMockChecker() *MockChecker {
 
 // Check checks for forbidden inline jest.mock() statements in the given files
 func (c *MockChecker) Check(files []string, config MockCheckConfig) error {
-	fmt.Println("================================")
-	fmt.Println("  JEST MOCK CHECK")
-	fmt.Println("================================")
-	fmt.Println("🔍 Checking for inline jest.mock() that should use __mocks__/...")
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  JEST MOCK CHECK")
+		fmt.Println("================================")
+		fmt.Println("🔍 Checking for inline jest.mock() that should use __mocks__/...")
+	}
 
 	if len(config.ForbiddenMocks) == 0 {
-		fmt.Println("⚠️  No forbiddenMocks configured, skipping")
+		if !compactMode() {
+			fmt.Println("⚠️  No forbiddenMocks configured, skipping")
+		}
 		return nil
 	}
 
 	var violations []Violation
 
 	for _, file := range files {
-		// Only check test files
 		if !c.isTestFile(file) {
 			continue
 		}
-
-		// Skip allowed files (like __mocks__/ files themselves)
 		if c.isAllowedFile(file, config.AllowedFiles) {
 			continue
 		}
 
-		// Get file content from git staging area
 		output, err := c.gitShowFunc(file)
 		if err != nil {
 			continue
 		}
 
-		// Check for forbidden mocks
 		fileViolations := c.findViolations(file, output, config.ForbiddenMocks)
 		violations = append(violations, fileViolations...)
 	}
@@ -73,6 +72,17 @@ func (c *MockChecker) Check(files []string, config MockCheckConfig) error {
 		}
 	}
 
+	if compactMode() {
+		if len(violations) > 0 {
+			printStatus("Mock check", false, fmt.Sprintf("%d violations", len(violations)))
+			printReportHint("mock-check/")
+			return fmt.Errorf("forbidden inline mocks found")
+		}
+		printStatus("Mock check", true, "")
+		return nil
+	}
+
+	// Verbose output
 	if len(violations) > 0 {
 		fmt.Printf("\n❌ Found %d forbidden inline jest.mock() call(s):\n\n", len(violations))
 		for _, v := range violations {
