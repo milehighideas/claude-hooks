@@ -1,12 +1,14 @@
 package main
 
 import (
+	"crypto/sha256"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -67,6 +69,15 @@ func main() {
 		return
 	}
 
+	// Acquire exclusive lock to prevent concurrent pre-commit runs
+	lockFile, err := acquireLock()
+	if err != nil {
+		// Another instance is already running — exit successfully to avoid blocking the commit
+		fmt.Println("Pre-commit already running, skipping")
+		return
+	}
+	defer releaseLock(lockFile)
+
 	// Set up report directory with branch name and timestamp
 	if reportDir != "" {
 		reportDir = setupReportDir(reportDir)
@@ -76,6 +87,51 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// acquireLock tries to get an exclusive file lock keyed to the current repo.
+// Returns the lock file on success, or an error if another instance holds the lock.
+func acquireLock() (*os.File, error) {
+	lockPath := getLockPath()
+
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, fmt.Errorf("open lock file: %w", err)
+	}
+
+	// Non-blocking exclusive lock
+	err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+	if err != nil {
+		f.Close()
+		return nil, fmt.Errorf("lock already held: %w", err)
+	}
+
+	return f, nil
+}
+
+// releaseLock releases and removes the lock file.
+func releaseLock(f *os.File) {
+	if f == nil {
+		return
+	}
+	syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+}
+
+// getLockPath returns a temp file path unique to the current git repo.
+func getLockPath() string {
+	// Use the git toplevel as the repo identifier
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	repoID := "unknown"
+	if err == nil {
+		repoID = strings.TrimSpace(string(out))
+	}
+
+	hash := sha256.Sum256([]byte(repoID))
+	return filepath.Join(os.TempDir(), fmt.Sprintf("pre-commit-%x.lock", hash[:8]))
 }
 
 // setupReportDir creates a subdirectory with branch name and timestamp
