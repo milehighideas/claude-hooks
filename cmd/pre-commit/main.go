@@ -72,9 +72,8 @@ func main() {
 	// Acquire exclusive lock to prevent concurrent pre-commit runs
 	lockFile, err := acquireLock()
 	if err != nil {
-		// Another instance is already running — exit successfully to avoid blocking the commit
-		fmt.Println("Pre-commit already running, skipping")
-		return
+		fmt.Fprintln(os.Stderr, "Error: pre-commit already running — commit rejected. Retry after it finishes.")
+		os.Exit(1)
 	}
 	defer releaseLock(lockFile)
 
