@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -169,7 +170,9 @@ func printAvailableChecks() {
 	fmt.Println("  srp                - Single Responsibility Principle check")
 	fmt.Println("  mockCheck          - Ensure tests use __mocks__/ instead of inline mocks")
 	fmt.Println("  consoleCheck       - Check for console.log statements")
-	fmt.Println("  lintTypecheck      - Run ESLint and TypeScript type checking")
+	fmt.Println("  lint               - Run linting only (skip typecheck)")
+	fmt.Println("  typecheck          - Run TypeScript type checking only (skip lint)")
+	fmt.Println("  lintTypecheck      - Run both linting and TypeScript type checking")
 	fmt.Println("  tests              - Run test suites")
 	fmt.Println("  changelog          - Validate changelog entries")
 	fmt.Println("  goLint             - Go linting (if enabled)")
@@ -504,6 +507,32 @@ func runStandalone() error {
 	fmt.Printf("Found %d files to check\n", len(allFiles))
 	fmt.Println()
 
+	// Scope config.Apps to only apps that overlap with the target path.
+	// This prevents --path packages/types from triggering checks on all apps
+	// just because packages/ is a shared path.
+	relTarget, err := filepath.Rel(projectRoot, absPath)
+	if err == nil && relTarget != "." {
+		scopedApps := make(map[string]AppConfig)
+		for name, app := range config.Apps {
+			// Include app if target is inside the app, or app is inside the target
+			if strings.HasPrefix(relTarget, app.Path) || strings.HasPrefix(app.Path, relTarget) {
+				scopedApps[name] = app
+			}
+		}
+		if len(scopedApps) > 0 {
+			config.Apps = scopedApps
+		} else {
+			// Target doesn't match any configured app (e.g., packages/types).
+			// Synthesize an app entry from the target's package.json so the
+			// per-app lint/typecheck machinery can handle it directly.
+			syntheticApp, ok := synthAppFromPackageJSON(absPath, relTarget)
+			if ok {
+				config.Apps = map[string]AppConfig{syntheticApp.name: syntheticApp.config}
+			}
+			// If no package.json either, keep all apps as fallback
+		}
+	}
+
 	// Run specific check or all applicable checks
 	if checkName != "" {
 		return runSpecificCheck(checkName, config, allFiles)
@@ -531,6 +560,43 @@ func findProjectRoot(startPath string) string {
 }
 
 // getAllFiles recursively gets all files in a directory
+// synthResult holds a synthesized app name and config
+type synthResult struct {
+	name   string
+	config AppConfig
+}
+
+// synthAppFromPackageJSON reads the package.json in dir and creates a synthetic
+// AppConfig so that standalone --path works for non-app packages.
+func synthAppFromPackageJSON(dir, relPath string) (synthResult, bool) {
+	pkgPath := filepath.Join(dir, "package.json")
+	data, err := os.ReadFile(pkgPath)
+	if err != nil {
+		return synthResult{}, false
+	}
+
+	var pkg struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(data, &pkg); err != nil || pkg.Name == "" {
+		return synthResult{}, false
+	}
+
+	// Derive a short name from the package name (e.g., "@dashtag/types" → "types")
+	shortName := pkg.Name
+	if idx := strings.LastIndex(shortName, "/"); idx >= 0 {
+		shortName = shortName[idx+1:]
+	}
+
+	return synthResult{
+		name: shortName,
+		config: AppConfig{
+			Path:   relPath,
+			Filter: pkg.Name,
+		},
+	}, true
+}
+
 func getAllFiles(dir, projectRoot string) ([]string, error) {
 	var files []string
 
@@ -600,8 +666,22 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runMockCheck(files, config.MockCheck)
 	case "consoleCheck":
 		return runConsoleCheck(appFiles, config.ConsoleAllowed)
+	case "lint":
+		lintApps := make(map[string]AppConfig)
+		for k, v := range config.Apps {
+			v.SkipTypecheck = true
+			lintApps[k] = v
+		}
+		return runLintTypecheck(lintApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
+	case "typecheck":
+		tcApps := make(map[string]AppConfig)
+		for k, v := range config.Apps {
+			v.SkipLint = true
+			tcApps[k] = v
+		}
+		return runLintTypecheck(tcApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
 	case "lintTypecheck":
-		return runLintTypecheck(config.Apps, appFiles, true, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
+		return runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
 	case "tests":
 		testCtx := TestRunContext{
 			AllApps:        config.Apps,
@@ -683,7 +763,7 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 
 	// Lint and typecheck
 	if config.Features.LintTypecheck {
-		if err := runLintTypecheck(config.Apps, appFiles, true, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit); err != nil {
+		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit); err != nil {
 			allErrors = append(allErrors, fmt.Sprintf("Lint/Typecheck: %v", err))
 		}
 	}
