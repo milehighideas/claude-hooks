@@ -21,6 +21,7 @@ var (
 	listChecks    bool
 	configPath    string
 	reportDir     string
+	noLock        bool
 )
 
 func init() {
@@ -30,6 +31,7 @@ func init() {
 	flag.BoolVar(&listChecks, "list", false, "List available checks")
 	flag.StringVar(&configPath, "config", "", "Path to .pre-commit.json config file (defaults to .pre-commit.json in target path)")
 	flag.StringVar(&reportDir, "report-dir", "", "Directory to write detailed lint/typecheck reports (creates lint/ and typecheck/ subdirs)")
+	flag.BoolVar(&noLock, "no-lock", false, "Skip exclusive lock (allow concurrent runs)")
 }
 
 // compactMode returns true when reports are being written to a directory,
@@ -71,10 +73,14 @@ func main() {
 	}
 
 	// Acquire exclusive lock to prevent concurrent pre-commit runs
-	lockFile, err := acquireLock()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error: pre-commit already running — commit rejected.")
-		os.Exit(1)
+	var lockFile *os.File
+	if !noLock {
+		var err error
+		lockFile, err = acquireLock()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Error: pre-commit already running — commit rejected.")
+			os.Exit(1)
+		}
 	}
 	defer releaseLock(lockFile)
 
