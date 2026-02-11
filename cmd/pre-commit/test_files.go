@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -38,10 +37,7 @@ type TestFilesChecker struct {
 // NewTestFilesChecker creates a new test files checker
 func NewTestFilesChecker() *TestFilesChecker {
 	return &TestFilesChecker{
-		gitShowFunc: func(file string) ([]byte, error) {
-			cmd := exec.Command("git", "show", ":"+file)
-			return cmd.Output()
-		},
+		gitShowFunc: defaultGitShow,
 	}
 }
 

@@ -23,8 +23,12 @@ func NewConsoleChecker() *ConsoleChecker {
 	}
 }
 
-// defaultGitShow retrieves file content from git staging area
+// defaultGitShow retrieves file content from git staging area,
+// or from disk when running in standalone mode.
 func defaultGitShow(file string) ([]byte, error) {
+	if standalone {
+		return os.ReadFile(file)
+	}
 	cmd := exec.Command("git", "show", ":"+file)
 	return cmd.Output()
 }
