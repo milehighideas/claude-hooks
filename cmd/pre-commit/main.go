@@ -127,6 +127,8 @@ func releaseLock(f *os.File) {
 }
 
 // getLockPath returns a temp file path unique to the current git repo.
+// In standalone mode with a target path, the lock is per-workspace so
+// parallel turbo invocations across different workspaces don't block each other.
 func getLockPath() string {
 	// Use the git toplevel as the repo identifier
 	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
@@ -136,7 +138,15 @@ func getLockPath() string {
 		repoID = strings.TrimSpace(string(out))
 	}
 
-	hash := sha256.Sum256([]byte(repoID))
+	lockID := repoID
+	if standalone && targetPath != "" {
+		absPath, err := filepath.Abs(targetPath)
+		if err == nil {
+			lockID = absPath
+		}
+	}
+
+	hash := sha256.Sum256([]byte(lockID))
 	return filepath.Join(os.TempDir(), fmt.Sprintf("pre-commit-%x.lock", hash[:8]))
 }
 
