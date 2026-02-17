@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 )
 
 // pattern represents a blocked command pattern with its compiled regex and description.
@@ -20,12 +21,10 @@ type pattern struct {
 	exclude *regexp.Regexp // If set, pattern doesn't match when exclude also matches
 }
 
-// toolInput represents the JSON structure from Claude Code's PreToolUse hook.
-type toolInput struct {
-	Tool      string `json:"tool"`
-	ToolInput struct {
-		Command string `json:"command"`
-	} `json:"tool_input"`
+// hookInput represents the JSON structure from Claude Code's PreToolUse hook.
+// Claude Code sends tool call arguments as top-level fields (e.g. {"command": "git status"}).
+type hookInput struct {
+	Command string `json:"command"`
 }
 
 // destructivePatterns contains patterns that can cause catastrophic data loss or system damage.
@@ -268,6 +267,31 @@ var destructivePatterns = []pattern{
 	// sudo - all sudo commands require user approval
 	{regex: regexp.MustCompile(`(?i)\bsudo\b`), name: "sudo (requires user approval)"},
 
+	// === Git Plumbing Bypasses ===
+	// Low-level plumbing commands that bypass the high-level protections above.
+
+	// git read-tree - resets/overwrites the index (staging area) to any tree-ish
+	// Bypasses: git reset, git restore --staged
+	{regex: regexp.MustCompile(`(?i)\bgit\s+read-tree\b`), name: "git read-tree (index manipulation bypass)"},
+
+	// git update-index - directly manipulates the index entries
+	// Can unstage files, hide changes (--assume-unchanged, --skip-worktree), or remove entries
+	// Bypasses: git reset, git restore --staged, git add
+	{regex: regexp.MustCompile(`(?i)\bgit\s+update-index\b`), name: "git update-index (direct index manipulation)"},
+
+	// git symbolic-ref - changes what HEAD points to, effectively switching branches
+	// Bypasses: git checkout, git switch
+	// Allow read-only usage: git symbolic-ref [--short|-q] HEAD
+	// Block write usage: git symbolic-ref HEAD refs/heads/main (2 non-flag args)
+	{regex: regexp.MustCompile(`(?i)\bgit\s+symbolic-ref\s+(-\S+\s+)*[^-\s]\S*\s+[^-\s]`), name: "git symbolic-ref (HEAD manipulation bypass)"},
+
+	// git checkout-index - overwrites working tree files from the index
+	// Bypasses: git checkout -- <file>, git restore <file>
+	{regex: regexp.MustCompile(`(?i)\bgit\s+checkout-index\b`), name: "git checkout-index (working tree overwrite)"},
+
+	// git replace - replaces any git object with another, can silently rewrite history
+	{regex: regexp.MustCompile(`(?i)\bgit\s+replace\b`), name: "git replace (object replacement)"},
+
 	// === Convex Typecheck Bypass ===
 
 	// Convex commands with typecheck disabled - prevents deploying unchecked code
@@ -293,19 +317,83 @@ var hookBypassPatterns = []pattern{
 	{regex: regexp.MustCompile(`(?i)\bgit\s+.*\bmerge\s+.*--no-verify\b`), name: "git merge --no-verify"},
 }
 
+// gitCommandRegex detects any git command invocation and extracts the subcommand.
+// Handles global flags: simple flags (--no-pager), flags with = args (--git-dir=/path),
+// and flags with separate args (-C /path, -c key=val).
+var gitCommandRegex = regexp.MustCompile(`(?i)\bgit\s+(?:(?:-[Cc]\s+\S+|--?\S+)\s+)*(\S+)`)
+
+// allowedGitSubcommands is the whitelist of git subcommands Claude is permitted to run.
+// Everything NOT on this list is blocked. This is the primary security mechanism for git.
+var allowedGitSubcommands = map[string]bool{
+	// Core workflow (the 4 the user wants)
+	"add":    true,
+	"commit": true,
+	"push":   true,
+	"pull":   true,
+
+	// Read-only / informational
+	"status":       true,
+	"diff":         true,
+	"log":          true,
+	"show":         true,
+	"branch":       true, // listing; -D is caught by blacklist above
+	"describe":     true,
+	"blame":        true,
+	"shortlog":     true,
+	"reflog":       true, // expire/delete caught by blacklist above
+	"remote":       true, // -v listing; modifying subcommands caught below
+	"tag":          true, // listing; create/delete caught below
+	"fetch":        true,
+	"grep":         true,
+	"name-rev":     true,
+	"verify-commit": true,
+	"verify-tag":   true,
+
+	// Plumbing read-only
+	"ls-files":     true,
+	"ls-tree":      true,
+	"ls-remote":    true,
+	"rev-parse":    true,
+	"rev-list":     true,
+	"cat-file":     true,
+	"for-each-ref": true,
+	"merge-base":   true,
+	"diff-tree":    true,
+	"diff-files":   true,
+	"diff-index":   true,
+	"hash-object":  true, // read-only unless -w, but low risk
+	"var":          true,
+}
+
+// gitModifyingSubcommands are subcommands that are allowed in the whitelist above but
+// have specific subcommands/flags that modify state and should be blocked.
+var gitModifyingPatterns = []pattern{
+	// git remote - allow listing (git remote, git remote -v) but block modifications
+	{regex: regexp.MustCompile(`(?i)\bgit\s+remote\s+(add|remove|rm|rename|set-url|set-head|prune)\b`), name: "git remote modification (only listing allowed)"},
+
+	// git tag - allow listing (git tag, git tag -l) but block create/delete
+	{regex: regexp.MustCompile(`(?i)\bgit\s+tag\s+(-d|--delete)\b`), name: "git tag delete"},
+	{regex: regexp.MustCompile(`(?i)\bgit\s+tag\s+(-a|--annotate|-s|--sign|-f|--force)\b`), name: "git tag create"},
+	// git tag <name> (creating a tag - has a non-flag argument)
+	{regex: regexp.MustCompile(`(?i)\bgit\s+tag\s+[^-]\S*\s`), name: "git tag create"},
+
+	// git config - all modifications blocked
+	{regex: regexp.MustCompile(`(?i)\bgit\s+config\b`), name: "git config (user must modify config manually)"},
+}
+
 func main() {
-	var input toolInput
+	var input hookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
-		// Allow if we can't parse - don't block on malformed input
-		os.Exit(0)
+		fmt.Fprintf(os.Stderr, "BLOCKED: failed to parse hook input: %v\n\nBlocking by default when input cannot be parsed.\n", err)
+		os.Exit(2)
 	}
 
-	cmd := input.ToolInput.Command
+	cmd := input.Command
 	if cmd == "" {
 		os.Exit(0)
 	}
 
-	// Check for destructive commands
+	// Check for destructive commands (specific blacklist with clear error messages)
 	for _, p := range destructivePatterns {
 		if p.regex.MatchString(cmd) {
 			// Skip if exclude pattern matches (e.g., git rm --cached is allowed)
@@ -344,6 +432,46 @@ Pre-commit hooks exist to maintain code quality. If checks are failing:
 Do not bypass hooks - ask the user to do it if absolutely necessary.
 `, p.name, cmd)
 			os.Exit(2)
+		}
+	}
+
+	// Git whitelist check: if the command contains a git invocation,
+	// verify the subcommand is in the allowed list. This catches any
+	// plumbing commands or obscure subcommands not in the blacklist above.
+	if matches := gitCommandRegex.FindStringSubmatch(cmd); matches != nil {
+		subcommand := strings.ToLower(matches[1])
+
+		// Check if the subcommand is whitelisted
+		if !allowedGitSubcommands[subcommand] {
+			fmt.Fprintf(os.Stderr, `BLOCKED: git %s (not in allowed git commands)
+
+Only the following git commands are permitted: add, commit, push, pull,
+status, diff, log, show, branch, fetch, blame, describe, shortlog,
+reflog, remote (list), tag (list), grep, and read-only plumbing commands.
+
+Blocked command: %s
+
+If you need to run this command, ask the user to do it manually.
+`, subcommand, cmd)
+			os.Exit(2)
+		}
+
+		// Even for whitelisted subcommands, check for modifying patterns
+		for _, p := range gitModifyingPatterns {
+			if p.regex.MatchString(cmd) {
+				if p.exclude != nil && p.exclude.MatchString(cmd) {
+					continue
+				}
+				fmt.Fprintf(os.Stderr, `BLOCKED: %s
+
+This git subcommand modification is not allowed.
+
+Blocked command: %s
+
+If you need to run this command, ask the user to do it manually.
+`, p.name, cmd)
+				os.Exit(2)
+			}
 		}
 	}
 
