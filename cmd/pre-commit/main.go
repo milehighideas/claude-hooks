@@ -308,7 +308,7 @@ func run() error {
 
 	// Lint and typecheck
 	if config.Features.LintTypecheck {
-		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit); err != nil {
+		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager); err != nil {
 			allErrors = append(allErrors, fmt.Sprintf("lint/typecheck failed"))
 		}
 	}
@@ -688,16 +688,16 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			v.SkipTypecheck = true
 			lintApps[k] = v
 		}
-		return runLintTypecheck(lintApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
+		return runLintTypecheck(lintApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
 	case "typecheck":
 		tcApps := make(map[string]AppConfig)
 		for k, v := range config.Apps {
 			v.SkipLint = true
 			tcApps[k] = v
 		}
-		return runLintTypecheck(tcApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
+		return runLintTypecheck(tcApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
 	case "lintTypecheck":
-		return runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit)
+		return runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
 	case "tests":
 		testCtx := TestRunContext{
 			AllApps:        config.Apps,
@@ -779,7 +779,7 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 
 	// Lint and typecheck
 	if config.Features.LintTypecheck {
-		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit); err != nil {
+		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager); err != nil {
 			allErrors = append(allErrors, fmt.Sprintf("Lint/Typecheck: %v", err))
 		}
 	}

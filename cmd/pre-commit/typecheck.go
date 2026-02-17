@@ -24,8 +24,36 @@ var DefaultErrorCodes = []string{"TS2589", "TS2742"}
 // DefaultExcludePaths are the path patterns excluded by default (test files)
 var DefaultExcludePaths = []string{"__tests__/", ".test.", ".spec."}
 
+// buildTypecheckCmd builds the tsc command using the configured package manager
+func buildTypecheckCmd(packageManager, filter string, tf TypecheckFilter) *exec.Cmd {
+	if tf.UseBuildMode != nil && *tf.UseBuildMode {
+		switch packageManager {
+		case "bun":
+			return exec.Command("bun", "--filter", filter, "tsc", "-b")
+		case "yarn":
+			return exec.Command("yarn", "workspace", filter, "exec", "tsc", "-b")
+		default:
+			return exec.Command("pnpm", "--filter", filter, "exec", "tsc", "-b")
+		}
+	}
+
+	args := []string{"--noEmit"}
+	if tf.SkipLibCheck != nil && *tf.SkipLibCheck {
+		args = append(args, "--skipLibCheck")
+	}
+
+	switch packageManager {
+	case "bun":
+		return exec.Command("bun", append([]string{"--filter", filter, "tsc"}, args...)...)
+	case "yarn":
+		return exec.Command("yarn", append([]string{"workspace", filter, "exec", "tsc"}, args...)...)
+	default:
+		return exec.Command("pnpm", append([]string{"--filter", filter, "exec", "tsc"}, args...)...)
+	}
+}
+
 // runFilteredTypecheck runs tsc and filters out configured errors
-func runFilteredTypecheck(appName, filter string, tf TypecheckFilter, nodeMemoryMB int) error {
+func runFilteredTypecheck(appName, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) error {
 	// Default filter patterns if none configured (nil = not set, use defaults; empty = explicitly no filtering)
 	errorCodes := tf.ErrorCodes
 	if errorCodes == nil {
@@ -36,19 +64,8 @@ func runFilteredTypecheck(appName, filter string, tf TypecheckFilter, nodeMemory
 		excludePaths = DefaultExcludePaths
 	}
 
-	// Build tsc command based on config
-	var cmd *exec.Cmd
-	if tf.UseBuildMode != nil && *tf.UseBuildMode {
-		// Use tsc -b (build mode) to match actual build behavior
-		cmd = exec.Command("pnpm", "--filter", filter, "exec", "tsc", "-b")
-	} else {
-		// Use tsc --noEmit with optional --skipLibCheck
-		args := []string{"--filter", filter, "exec", "tsc", "--noEmit"}
-		if tf.SkipLibCheck != nil && *tf.SkipLibCheck {
-			args = append(args, "--skipLibCheck")
-		}
-		cmd = exec.Command("pnpm", args...)
-	}
+	// Build tsc command using configured package manager
+	cmd := buildTypecheckCmd(packageManager, filter, tf)
 
 	// Set NODE_OPTIONS for memory limit if configured
 	if nodeMemoryMB > 0 {
@@ -222,7 +239,7 @@ func shouldFilterError(err tsError, errorCodes, excludePaths []string) bool {
 }
 
 // runFilteredTypecheckBuffered runs tsc and returns buffered output (for parallel execution)
-func runFilteredTypecheckBuffered(appName, filter string, tf TypecheckFilter, nodeMemoryMB int) (string, error) {
+func runFilteredTypecheckBuffered(appName, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) (string, error) {
 	var output strings.Builder
 
 	// Default filter patterns if none configured (nil = not set, use defaults; empty = explicitly no filtering)
@@ -235,19 +252,8 @@ func runFilteredTypecheckBuffered(appName, filter string, tf TypecheckFilter, no
 		excludePaths = DefaultExcludePaths
 	}
 
-	// Build tsc command based on config
-	var cmd *exec.Cmd
-	if tf.UseBuildMode != nil && *tf.UseBuildMode {
-		// Use tsc -b (build mode) to match actual build behavior
-		cmd = exec.Command("pnpm", "--filter", filter, "exec", "tsc", "-b")
-	} else {
-		// Use tsc --noEmit with optional --skipLibCheck
-		args := []string{"--filter", filter, "exec", "tsc", "--noEmit"}
-		if tf.SkipLibCheck != nil && *tf.SkipLibCheck {
-			args = append(args, "--skipLibCheck")
-		}
-		cmd = exec.Command("pnpm", args...)
-	}
+	// Build tsc command using configured package manager
+	cmd := buildTypecheckCmd(packageManager, filter, tf)
 
 	// Set NODE_OPTIONS for memory limit if configured
 	if nodeMemoryMB > 0 {
