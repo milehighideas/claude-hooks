@@ -61,7 +61,7 @@ func runFilteredLint(appName, appPath string, lf LintFilter) error {
 
 	var realErrors []lintError
 	for _, e := range errors {
-		if shouldFilterLintError(e, lf.Rules, excludePaths) {
+		if shouldFilterLintError(e, lf.Rules, excludePaths, lf.IgnoreWarnings) {
 			continue
 		}
 		realErrors = append(realErrors, e)
@@ -115,8 +115,19 @@ func writeLintReport(appName, rawOutput string, allErrors, realErrors []lintErro
 	sb.WriteString(fmt.Sprintf("Generated: %s\n", time.Now().Format("2006-01-02 15:04:05")))
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 
-	sb.WriteString(fmt.Sprintf("Total errors parsed: %d\n", len(allErrors)))
-	sb.WriteString(fmt.Sprintf("Errors after filtering: %d\n", len(realErrors)))
+	// Count by severity
+	warningCount := 0
+	errorCount := 0
+	for _, e := range realErrors {
+		if e.severity == "warning" {
+			warningCount++
+		} else {
+			errorCount++
+		}
+	}
+
+	sb.WriteString(fmt.Sprintf("Total findings: %d (%d errors, %d warnings)\n", len(realErrors), errorCount, warningCount))
+	sb.WriteString(fmt.Sprintf("Total parsed: %d\n", len(allErrors)))
 	sb.WriteString(fmt.Sprintf("Filtered out: %d\n\n", len(allErrors)-len(realErrors)))
 
 	// Group errors by file
@@ -126,11 +137,27 @@ func writeLintReport(appName, rawOutput string, allErrors, realErrors []lintErro
 	}
 
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
-	sb.WriteString("ERRORS BY FILE\n")
+	sb.WriteString("FINDINGS BY FILE\n")
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 
 	for file, errs := range errorsByFile {
-		sb.WriteString(fmt.Sprintf("\n%s (%d errors)\n", file, len(errs)))
+		fileWarnings := 0
+		fileErrors := 0
+		for _, e := range errs {
+			if e.severity == "warning" {
+				fileWarnings++
+			} else {
+				fileErrors++
+			}
+		}
+		var severityParts []string
+		if fileErrors > 0 {
+			severityParts = append(severityParts, fmt.Sprintf("%d errors", fileErrors))
+		}
+		if fileWarnings > 0 {
+			severityParts = append(severityParts, fmt.Sprintf("%d warnings", fileWarnings))
+		}
+		sb.WriteString(fmt.Sprintf("\n%s (%s)\n", file, strings.Join(severityParts, ", ")))
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		for _, e := range errs {
 			sb.WriteString(fmt.Sprintf("  Line %s:%s [%s] %s\n", e.line, e.column, e.rule, e.message))
@@ -288,7 +315,12 @@ func parseOxlintErrors(output string) []lintError {
 }
 
 // shouldFilterLintError checks if a lint error should be filtered out
-func shouldFilterLintError(err lintError, rules, excludePaths []string) bool {
+func shouldFilterLintError(err lintError, rules, excludePaths []string, ignoreWarnings bool) bool {
+	// Filter warnings when configured to only fail on errors
+	if ignoreWarnings && err.severity == "warning" {
+		return true
+	}
+
 	// Filter specific rules
 	for _, rule := range rules {
 		if err.rule == rule {
@@ -344,7 +376,7 @@ func runFilteredLintBuffered(appName, appPath string, lf LintFilter) (string, er
 
 	var realErrors []lintError
 	for _, e := range errors {
-		if shouldFilterLintError(e, lf.Rules, excludePaths) {
+		if shouldFilterLintError(e, lf.Rules, excludePaths, lf.IgnoreWarnings) {
 			continue
 		}
 		realErrors = append(realErrors, e)
