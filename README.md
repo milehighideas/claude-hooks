@@ -6,8 +6,7 @@ A collection of hooks and tools for [Claude Code](https://claude.ai/claude-code)
 
 | Tool | Description |
 |------|-------------|
-| [block-destructive-commands](docs/block-destructive-commands.md) | Prevents dangerous CLI commands (rm -rf, git reset --hard, etc.) |
-| [block-destructive-git](docs/block-destructive-git.md) | Blocks destructive git operations |
+| [block-destructive-commands](docs/block-destructive-commands.md) | Prevents dangerous CLI commands (rm -rf, git reset --hard, etc.) and blocks destructive git operations |
 | [block-infrastructure](docs/block-infrastructure.md) | Protects critical config files from modification |
 | [block-lint-workarounds](docs/block-lint-workarounds.md) | Catches underscore prefixes and suppression comments |
 | [changelog-add](docs/changelog-add.md) | Creates changelog fragments with conventional commit format |
