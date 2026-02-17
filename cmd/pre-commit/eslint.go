@@ -75,7 +75,7 @@ func runFilteredLint(appName, appPath string, lf LintFilter) error {
 
 	// Write report if reportDir is set
 	if reportDir != "" {
-		if err := writeLintReport(appName, output, errors, realErrors, reportDir); err != nil {
+		if err := writeLintReport(appName, linter, output, errors, realErrors, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write lint report: %v\n", err)
 		}
 	}
@@ -100,8 +100,9 @@ func runFilteredLint(appName, appPath string, lf LintFilter) error {
 	return nil
 }
 
-// writeLintReport writes lint findings to a report file
-func writeLintReport(appName, rawOutput string, allErrors, realErrors []lintError, baseDir string) error {
+// writeLintReport writes lint findings to a report file.
+// linterName is used in the report header (e.g., "oxlint", "eslint").
+func writeLintReport(appName, linterName, rawOutput string, allErrors, realErrors []lintError, baseDir string) error {
 	lintDir := filepath.Join(baseDir, "lint")
 	if err := os.MkdirAll(lintDir, 0755); err != nil {
 		return err
@@ -166,7 +167,7 @@ func writeLintReport(appName, rawOutput string, allErrors, realErrors []lintErro
 
 	// Also write raw output
 	sb.WriteString("\n\n" + strings.Repeat("=", 80) + "\n")
-	sb.WriteString("RAW OXLINT OUTPUT\n")
+	sb.WriteString(fmt.Sprintf("RAW %s OUTPUT\n", strings.ToUpper(linterName)))
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 	sb.WriteString(rawOutput)
 
@@ -338,6 +339,119 @@ func shouldFilterLintError(err lintError, rules, excludePaths []string, ignoreWa
 	return false
 }
 
+// convexEslintPaths are the package directories to check for an ESLint config
+var convexEslintPaths = []string{"packages/convex", "packages/backend"}
+
+// findConvexEslintPath checks if an ESLint config exists in a convex/backend
+// package directory. Returns the path if found, empty string otherwise.
+func findConvexEslintPath() string {
+	configNames := []string{"eslint.config.mjs", "eslint.config.js", "eslint.config.cjs"}
+	for _, dir := range convexEslintPaths {
+		for _, cfg := range configNames {
+			if _, err := os.Stat(filepath.Join(dir, cfg)); err == nil {
+				return dir
+			}
+		}
+	}
+	return ""
+}
+
+// runConvexEslint runs ESLint in a convex/backend package directory (no --fix, analysis only)
+func runConvexEslint(pkgPath string) (string, error) {
+	eslintPath, err := exec.LookPath("eslint")
+	if err != nil {
+		// Fall back to npx
+		npxPath, npxErr := exec.LookPath("npx")
+		if npxErr != nil {
+			return "", fmt.Errorf("eslint not found in PATH: %w", err)
+		}
+		eslintPath = npxPath
+	}
+
+	var cmd *exec.Cmd
+	if filepath.Base(eslintPath) == "npx" {
+		cmd = exec.Command(eslintPath, "eslint", ".")
+	} else {
+		cmd = exec.Command(eslintPath, ".")
+	}
+	cmd.Dir = pkgPath
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Run() // Ignore exit code, we parse output for findings
+
+	return stdout.String(), nil
+}
+
+// runConvexEslintBuffered detects and runs ESLint in a convex/backend package,
+// returning buffered output suitable for parallel execution.
+// Returns empty string and nil error if no ESLint config is found.
+func runConvexEslintBuffered(lf LintFilter) (string, error) {
+	pkgPath := findConvexEslintPath()
+	if pkgPath == "" {
+		return "", nil
+	}
+
+	appName := filepath.Base(pkgPath) + "-eslint"
+
+	var output strings.Builder
+	fmt.Fprintf(&output, "   → Running ESLint for %s...\n", pkgPath)
+
+	lintOutput, err := runConvexEslint(pkgPath)
+	if err != nil {
+		fmt.Fprintf(&output, "   ⚠ ESLint failed to run in %s: %v\n", pkgPath, err)
+		return output.String(), nil // Non-fatal: don't block on ESLint infra issues
+	}
+
+	errors := parseEslintErrors(lintOutput)
+
+	excludePaths := lf.ExcludePaths
+	if excludePaths == nil {
+		excludePaths = DefaultLintExcludePaths
+	}
+
+	var realErrors []lintError
+	for _, e := range errors {
+		if shouldFilterLintError(e, lf.Rules, excludePaths, lf.IgnoreWarnings) {
+			continue
+		}
+		realErrors = append(realErrors, e)
+	}
+
+	filteredCount := len(errors) - len(realErrors)
+	if filteredCount > 0 {
+		fmt.Fprintf(&output, "   (filtered %d convex eslint errors)\n", filteredCount)
+	}
+
+	// Write report if reportDir is set
+	if reportDir != "" {
+		if err := writeLintReport(appName, "eslint", lintOutput, errors, realErrors, reportDir); err != nil {
+			fmt.Fprintf(&output, "   Warning: failed to write convex eslint report: %v\n", err)
+		}
+	}
+
+	if len(realErrors) > 0 {
+		output.WriteString("\n")
+		currentFile := ""
+		for _, e := range realErrors {
+			if e.filePath != currentFile {
+				if currentFile != "" {
+					output.WriteString("\n")
+				}
+				output.WriteString(e.filePath)
+				output.WriteString("\n")
+				currentFile = e.filePath
+			}
+			fmt.Fprintf(&output, "  %s:%s  %s  %s  %s\n", e.line, e.column, e.severity, e.message, e.rule)
+		}
+		fmt.Fprintf(&output, "   ❌ %s eslint: found %d finding(s)\n", pkgPath, len(realErrors))
+		return output.String(), fmt.Errorf("found %d convex eslint finding(s)", len(realErrors))
+	}
+
+	fmt.Fprintf(&output, "   ✓ %s eslint passed\n", pkgPath)
+	return output.String(), nil
+}
+
 // runFilteredLintBuffered runs the configured linter and returns buffered output (for parallel execution)
 func runFilteredLintBuffered(appName, appPath string, lf LintFilter) (string, error) {
 	var output strings.Builder
@@ -390,7 +504,7 @@ func runFilteredLintBuffered(appName, appPath string, lf LintFilter) (string, er
 
 	// Write report if reportDir is set
 	if reportDir != "" {
-		if err := writeLintReport(appName, lintOutput, errors, realErrors, reportDir); err != nil {
+		if err := writeLintReport(appName, linter, lintOutput, errors, realErrors, reportDir); err != nil {
 			fmt.Fprintf(&output, "   Warning: failed to write lint report: %v\n", err)
 		}
 	}

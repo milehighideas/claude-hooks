@@ -54,7 +54,7 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 		fmt.Printf("Running checks on %d app(s) in parallel...\n\n", len(jobs))
 	}
 
-	// Run all jobs in parallel
+	// Run all jobs in parallel (including convex ESLint if detected)
 	var wg sync.WaitGroup
 	results := make([]AppCheckResult, len(jobs))
 
@@ -83,11 +83,32 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 		}(i, job)
 	}
 
+	// Run convex/backend ESLint in parallel if an eslint config exists there
+	var convexResult AppCheckResult
+	if findConvexEslintPath() != "" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := runConvexEslintBuffered(lintFilter)
+			convexResult = AppCheckResult{
+				AppName: findConvexEslintPath() + " (eslint)",
+				Output:  out,
+				Err:     err,
+			}
+		}()
+	}
+
 	wg.Wait()
 
 	// Print results sequentially
 	checksFailed := false
 	var failedApps []string
+
+	// Append convex ESLint result if it ran
+	if convexResult.Output != "" {
+		results = append(results, convexResult)
+	}
+
 	for _, result := range results {
 		if compactMode() {
 			// Compact: show per-app one-liner
@@ -152,7 +173,7 @@ func runFullChecks(appName, appPath, filter string, typecheckFilter TypecheckFil
 		fmt.Printf("   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
 	} else {
 		fmt.Printf("   → Starting typecheck for %s...\n", appName)
-		if err := runFilteredTypecheck(appName, filter, packageManager, typecheckFilter, nodeMemoryMB); err != nil {
+		if err := runFilteredTypecheck(appName, filter, packageManager, appPath, typecheckFilter, nodeMemoryMB); err != nil {
 			fmt.Printf("   ❌ %s typecheck failed\n", appName)
 			hasError = true
 		} else {
@@ -193,7 +214,7 @@ func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter Type
 		fmt.Fprintf(output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
 	} else {
 		fmt.Fprintf(output, "   → Starting typecheck for %s...\n", appName)
-		typecheckOutput, typecheckErr := runFilteredTypecheckBuffered(appName, filter, packageManager, typecheckFilter, nodeMemoryMB)
+		typecheckOutput, typecheckErr := runFilteredTypecheckBuffered(appName, filter, packageManager, appPath, typecheckFilter, nodeMemoryMB)
 		output.WriteString(typecheckOutput)
 		if typecheckErr != nil {
 			fmt.Fprintf(output, "   ❌ %s typecheck failed\n", appName)
