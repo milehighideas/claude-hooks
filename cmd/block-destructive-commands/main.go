@@ -384,11 +384,30 @@ var gitModifyingPatterns = []pattern{
 	{regex: regexp.MustCompile(`(?i)\bgit\s+config\b`), name: "git config (user must modify config manually)"},
 }
 
+// blockResponse represents the JSON output Claude Code requires to deny a PreToolUse hook.
+type blockResponse struct {
+	HookSpecificOutput struct {
+		HookEventName            string `json:"hookEventName"`
+		PermissionDecision       string `json:"permissionDecision"`
+		PermissionDecisionReason string `json:"permissionDecisionReason"`
+	} `json:"hookSpecificOutput"`
+}
+
+// block outputs the JSON deny response to stdout and a human-readable reason to stderr, then exits.
+func block(reason string) {
+	resp := blockResponse{}
+	resp.HookSpecificOutput.HookEventName = "PreToolUse"
+	resp.HookSpecificOutput.PermissionDecision = "deny"
+	resp.HookSpecificOutput.PermissionDecisionReason = reason
+	json.NewEncoder(os.Stdout).Encode(resp)
+	fmt.Fprintln(os.Stderr, reason)
+	os.Exit(2)
+}
+
 func main() {
 	var input hookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
-		fmt.Fprintf(os.Stderr, "BLOCKED: failed to parse hook input: %v\n\nBlocking by default when input cannot be parsed.\n", err)
-		os.Exit(2)
+		block(fmt.Sprintf("BLOCKED: failed to parse hook input: %v\n\nBlocking by default when input cannot be parsed.", err))
 	}
 
 	cmd := input.ToolInput.Command
@@ -406,15 +425,7 @@ func main() {
 			if p.exclude != nil && p.exclude.MatchString(cmd) {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, `BLOCKED: %s
-
-This command is blocked because it can cause catastrophic data loss or system damage.
-
-Blocked command: %s
-
-If you need to run this command, ask the user to do it manually.
-`, p.name, cmd)
-			os.Exit(2)
+			block(fmt.Sprintf("BLOCKED: %s — %s is blocked because it can cause data loss. Ask the user to run it manually.", p.name, cmd))
 		}
 	}
 
@@ -425,19 +436,7 @@ If you need to run this command, ask the user to do it manually.
 			if p.exclude != nil && p.exclude.MatchString(cmd) {
 				continue
 			}
-			fmt.Fprintf(os.Stderr, `BLOCKED: %s
-
-Skipping pre-commit hooks or checks is not allowed.
-
-Blocked command: %s
-
-Pre-commit hooks exist to maintain code quality. If checks are failing:
-1. Fix the underlying issues (lint errors, type errors, test failures)
-2. If the issues are unrelated to your changes, ask the user to run the commit manually
-
-Do not bypass hooks - ask the user to do it if absolutely necessary.
-`, p.name, cmd)
-			os.Exit(2)
+			block(fmt.Sprintf("BLOCKED: %s — Skipping pre-commit hooks is not allowed. Fix the underlying issues or ask the user to run the commit manually.", p.name))
 		}
 	}
 
@@ -449,17 +448,7 @@ Do not bypass hooks - ask the user to do it if absolutely necessary.
 
 		// Check if the subcommand is whitelisted
 		if !allowedGitSubcommands[subcommand] {
-			fmt.Fprintf(os.Stderr, `BLOCKED: git %s (not in allowed git commands)
-
-Only the following git commands are permitted: add, commit, push, pull,
-status, diff, log, show, branch, fetch, blame, describe, shortlog,
-reflog, remote (list), tag (list), grep, and read-only plumbing commands.
-
-Blocked command: %s
-
-If you need to run this command, ask the user to do it manually.
-`, subcommand, cmd)
-			os.Exit(2)
+			block(fmt.Sprintf("BLOCKED: git %s is not in the allowed git commands. Ask the user to run it manually.", subcommand))
 		}
 
 		// Even for whitelisted subcommands, check for modifying patterns
@@ -468,15 +457,7 @@ If you need to run this command, ask the user to do it manually.
 				if p.exclude != nil && p.exclude.MatchString(cmd) {
 					continue
 				}
-				fmt.Fprintf(os.Stderr, `BLOCKED: %s
-
-This git subcommand modification is not allowed.
-
-Blocked command: %s
-
-If you need to run this command, ask the user to do it manually.
-`, p.name, cmd)
-				os.Exit(2)
+				block(fmt.Sprintf("BLOCKED: %s — This git modification is not allowed. Ask the user to run it manually.", p.name))
 			}
 		}
 	}
