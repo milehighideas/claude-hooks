@@ -308,16 +308,23 @@ func (p *Parser) parseFluentConvexFile(file ConvexFile) ([]ConvexFunction, error
 		funcName := text[match[2]:match[3]]
 		chainRoot := text[match[4]:match[5]]
 
-		// Determine function type from the chain root identifier
-		funcType := p.resolveFluentType(chainRoot, text[match[4]:])
-		if funcType == "" {
-			continue
-		}
-
-		// Extract the full chain text from the identifier to end of statement
+		// Extract the full chain text FIRST (before type resolution)
+		// so we limit type detection to the current chain, not the rest of the file
 		chainStart := match[4]
 		chainText := p.extractFluentChain(text[chainStart:])
 		if chainText == "" {
+			// Not a fluent chain — try type resolution anyway for non-convex roots
+			funcType := p.resolveFluentType(chainRoot, "")
+			if funcType == "" {
+				continue
+			}
+			// Non-chain export with known root but no .public()/.internal() — skip
+			continue
+		}
+
+		// Determine function type from the chain root, using chain text for peek-ahead
+		funcType := p.resolveFluentType(chainRoot, chainText)
+		if funcType == "" {
 			continue
 		}
 
