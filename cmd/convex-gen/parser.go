@@ -196,10 +196,37 @@ var (
 
 	// Match table name in schema spread: ...tableTables
 	spreadTableRe = regexp.MustCompile(`\.\.\.(\w+)Tables`)
+
+	// Fluent-convex patterns
+
+	// Match: export const NAME = IDENTIFIER (for fluent chain detection)
+	fluentExportRe = regexp.MustCompile(`export\s+const\s+(\w+)\s*=\s*(\w+)`)
+
+	// Match .input({ ... }) — for inline arg extraction
+	inputBlockRe = regexp.MustCompile(`\.input\(\s*\{([^}]+)\}`)
+
+	// Match .input(validatorRef) — for referenced validators
+	inputRefRe = regexp.MustCompile(`\.input\(\s*(\w+(?:\.\w+)?)\s*\)`)
 )
+
+// Fluent-convex chain root → function type maps
+var fluentQueryRoots = map[string]bool{
+	"authedQuery": true, "userQuery": true, "adminQuery": true,
+}
+var fluentMutationRoots = map[string]bool{
+	"authedMutation": true, "userMutation": true,
+	"adminMutation": true, "superAdminMutation": true,
+}
+var fluentActionRoots = map[string]bool{
+	"authedAction": true,
+}
 
 // ParseConvexFile extracts functions from a Convex TypeScript file
 func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
+	if p.config.Convex.FluentConvex {
+		return p.parseFluentConvexFile(file)
+	}
+
 	content, err := os.ReadFile(file.Path)
 	if err != nil {
 		return nil, err
@@ -261,6 +288,208 @@ func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
 	}
 
 	return functions, nil
+}
+
+// parseFluentConvexFile extracts functions from a fluent-convex style file.
+// Fluent-convex uses builder chains like: export const name = adminQuery.input({...}).handler(...).public()
+func (p *Parser) parseFluentConvexFile(file ConvexFile) ([]ConvexFunction, error) {
+	content, err := os.ReadFile(file.Path)
+	if err != nil {
+		return nil, err
+	}
+
+	text := stripComments(string(content))
+	var functions []ConvexFunction
+
+	// Find all "export const NAME = IDENTIFIER" patterns
+	matches := fluentExportRe.FindAllStringSubmatchIndex(text, -1)
+
+	for _, match := range matches {
+		funcName := text[match[2]:match[3]]
+		chainRoot := text[match[4]:match[5]]
+
+		// Determine function type from the chain root identifier
+		funcType := p.resolveFluentType(chainRoot, text[match[4]:])
+		if funcType == "" {
+			continue
+		}
+
+		// Extract the full chain text from the identifier to end of statement
+		chainStart := match[4]
+		chainText := p.extractFluentChain(text[chainStart:])
+		if chainText == "" {
+			continue
+		}
+
+		// Determine if public or internal
+		isInternal := strings.Contains(chainText, ".internal()")
+		isPublic := strings.Contains(chainText, ".public()")
+		if !isInternal && !isPublic {
+			// Not a registered function (could be a callable or middleware)
+			continue
+		}
+
+		// Skip internal functions — only generate hooks for public ones
+		if isInternal {
+			continue
+		}
+
+		// Parse arguments from .input({...}) or .input(validatorRef)
+		args, isPaginated, useFunctionArgs := p.parseFluentArgs(chainText)
+
+		functions = append(functions, ConvexFunction{
+			Name:            funcName,
+			Type:            FunctionType(funcType),
+			Namespace:       file.Namespace,
+			FileName:        file.FileName,
+			Args:            args,
+			IsPaginated:     isPaginated,
+			UseFunctionArgs: useFunctionArgs,
+		})
+	}
+
+	return functions, nil
+}
+
+// resolveFluentType maps a fluent chain root identifier to a function type string.
+// Returns "" if the identifier is not a recognized fluent chain root.
+func (p *Parser) resolveFluentType(chainRoot, textFromExport string) string {
+	// Direct chain root lookups
+	if fluentQueryRoots[chainRoot] {
+		return "query"
+	}
+	if fluentMutationRoots[chainRoot] {
+		return "mutation"
+	}
+	if fluentActionRoots[chainRoot] {
+		return "action"
+	}
+
+	// Base builder: "convex" — peek ahead for .query() / .mutation() / .action()
+	if chainRoot == "convex" {
+		if strings.Contains(textFromExport, ".query()") {
+			return "query"
+		}
+		if strings.Contains(textFromExport, ".mutation()") {
+			return "mutation"
+		}
+		if strings.Contains(textFromExport, ".action()") {
+			return "action"
+		}
+	}
+
+	return ""
+}
+
+// extractFluentChain extracts the full builder chain text from the chain root
+// up to and including .public() or .internal(). Returns "" if neither is found.
+func (p *Parser) extractFluentChain(text string) string {
+	// Find .public() or .internal() to determine chain end
+	publicIdx := strings.Index(text, ".public()")
+	internalIdx := strings.Index(text, ".internal()")
+
+	endIdx := -1
+	if publicIdx >= 0 && internalIdx >= 0 {
+		if publicIdx < internalIdx {
+			endIdx = publicIdx + len(".public()")
+		} else {
+			endIdx = internalIdx + len(".internal()")
+		}
+	} else if publicIdx >= 0 {
+		endIdx = publicIdx + len(".public()")
+	} else if internalIdx >= 0 {
+		endIdx = internalIdx + len(".internal()")
+	}
+
+	if endIdx == -1 {
+		return ""
+	}
+
+	return text[:endIdx]
+}
+
+// parseFluentArgs extracts argument information from a fluent builder chain.
+// Looks for .input({...}) inline blocks or .input(validatorRef) references.
+func (p *Parser) parseFluentArgs(chainText string) ([]ArgInfo, bool, bool) {
+	var args []ArgInfo
+	isPaginated := false
+	useFunctionArgs := false
+
+	// Check for pagination
+	if paginationRe.MatchString(chainText) {
+		isPaginated = true
+	}
+
+	var argsBlock string
+
+	// Try inline .input({ ... })
+	if inputMatch := inputBlockRe.FindStringSubmatch(chainText); inputMatch != nil {
+		argsBlock = inputMatch[1]
+	} else if refMatch := inputRefRe.FindStringSubmatch(chainText); refMatch != nil {
+		// Try .input(validatorRef)
+		validatorRef := strings.TrimSpace(refMatch[1])
+		var validatorDef string
+		var found bool
+
+		// First try exact match
+		if validatorDef, found = p.validatorCache[validatorRef]; !found {
+			// Try short name after last dot
+			if dotIdx := strings.LastIndex(validatorRef, "."); dotIdx != -1 {
+				shortName := validatorRef[dotIdx+1:]
+				validatorDef, found = p.validatorCache[shortName]
+			}
+		}
+
+		if found {
+			innerMatch := regexp.MustCompile(`v\.object\s*\(\s*\{([^}]+)\}`).FindStringSubmatch(validatorDef)
+			if innerMatch != nil {
+				argsBlock = innerMatch[1]
+			}
+		}
+	}
+
+	if argsBlock == "" {
+		return args, isPaginated, useFunctionArgs
+	}
+
+	// Reuse existing arg parsing logic
+	return p.parseArgsBlock(argsBlock)
+}
+
+// parseArgsBlock parses a raw args block string (inner content of {...}) into ArgInfo.
+// Shared between standard and fluent parsing paths.
+func (p *Parser) parseArgsBlock(argsBlock string) ([]ArgInfo, bool, bool) {
+	var args []ArgInfo
+	isPaginated := false
+	useFunctionArgs := false
+
+	if paginationRe.MatchString(argsBlock) {
+		isPaginated = true
+	}
+
+	argMatches := argRe.FindAllStringSubmatch(argsBlock, -1)
+	for _, match := range argMatches {
+		argName := match[1]
+		argValidator := strings.TrimSpace(match[2])
+
+		if argName == "paginationOpts" {
+			continue
+		}
+
+		arg := p.parseArgValidator(argName, argValidator)
+
+		if arg.Type == "unknown" {
+			useFunctionArgs = true
+		}
+
+		args = append(args, arg)
+	}
+
+	if strings.Contains(argsBlock, "v.object(") || strings.Contains(argsBlock, "v.union(") {
+		useFunctionArgs = true
+	}
+
+	return args, isPaginated, useFunctionArgs
 }
 
 // parseReExports handles re-export patterns like: export { func1, func2 } from './path'

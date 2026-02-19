@@ -26,6 +26,9 @@ func run() error {
 	fmt.Printf("Organization: %s\n", config.Org)
 	fmt.Printf("Convex path: %s\n", config.Convex.Path)
 	fmt.Printf("Data layer path: %s\n", config.DataLayer.Path)
+	if config.Convex.FluentConvex {
+		fmt.Println("Mode: fluent-convex")
+	}
 	fmt.Println()
 
 	// Create scanner

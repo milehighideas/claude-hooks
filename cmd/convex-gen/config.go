@@ -19,9 +19,10 @@ type Config struct {
 
 // ConvexConfig configures where to find Convex functions
 type ConvexConfig struct {
-	Path       string `json:"path"`       // e.g., "packages/backend"
-	SchemaPath string `json:"schemaPath"` // e.g., "packages/backend/schema" or "packages/backend/schema.ts"
-	Structure  string `json:"structure"`  // "nested" or "flat"
+	Path         string `json:"path"`         // e.g., "packages/backend"
+	SchemaPath   string `json:"schemaPath"`   // e.g., "packages/backend/schema" or "packages/backend/schema.ts"
+	Structure    string `json:"structure"`    // "nested" or "flat"
+	FluentConvex bool   `json:"fluentConvex"` // Toggle fluent-convex builder chain parsing
 }
 
 // DataLayerConfig configures output locations
