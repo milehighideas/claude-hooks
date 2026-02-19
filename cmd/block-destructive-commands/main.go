@@ -22,9 +22,12 @@ type pattern struct {
 }
 
 // hookInput represents the JSON structure from Claude Code's PreToolUse hook.
-// Claude Code sends tool call arguments as top-level fields (e.g. {"command": "git status"}).
+// Claude Code sends nested JSON: {"tool_input": {"command": "git status"}, ...}
 type hookInput struct {
-	Command string `json:"command"`
+	ToolInput struct {
+		Command string `json:"command"`
+	} `json:"tool_input"`
+	Command string `json:"command"` // fallback for flat format (testing)
 }
 
 // destructivePatterns contains patterns that can cause catastrophic data loss or system damage.
@@ -388,7 +391,10 @@ func main() {
 		os.Exit(2)
 	}
 
-	cmd := input.Command
+	cmd := input.ToolInput.Command
+	if cmd == "" {
+		cmd = input.Command // fallback for flat format
+	}
 	if cmd == "" {
 		os.Exit(0)
 	}

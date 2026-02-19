@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -146,6 +148,35 @@ func TestDestructivePatterns(t *testing.T) {
 		{"rm normal file allowed", "rm file.go", false},
 		{"rm rf normal allowed", "rm -rf node_modules", false},
 
+		// === Git plumbing bypasses ===
+
+		// git read-tree - index manipulation
+		{"git read-tree HEAD", "git read-tree HEAD", true},
+		{"git read-tree with merge", "git read-tree -m HEAD", true},
+		{"git read-tree reset", "git read-tree --reset HEAD", true},
+		{"git read-tree empty", "git read-tree --empty", true},
+
+		// git update-index - direct index manipulation
+		{"git update-index remove", "git update-index --force-remove file.go", true},
+		{"git update-index assume-unchanged", "git update-index --assume-unchanged file.go", true},
+		{"git update-index skip-worktree", "git update-index --skip-worktree file.go", true},
+		{"git update-index add", "git update-index --add file.go", true},
+
+		// git symbolic-ref - HEAD manipulation (write: 2+ args blocked, read: allowed)
+		{"git symbolic-ref set HEAD", "git symbolic-ref HEAD refs/heads/main", true},
+		{"git symbolic-ref read allowed", "git symbolic-ref HEAD", false},
+		{"git symbolic-ref short allowed", "git symbolic-ref --short HEAD", false},
+
+		// git checkout-index - working tree overwrite
+		{"git checkout-index all", "git checkout-index -a", true},
+		{"git checkout-index force", "git checkout-index -f file.go", true},
+		{"git checkout-index prefix", "git checkout-index --prefix=/tmp/ file.go", true},
+
+		// git replace - object replacement
+		{"git replace object", "git replace abc123 def456", true},
+		{"git replace delete", "git replace -d abc123", true},
+		{"git replace list allowed", "git replace -l", true}, // still blocked - all replace is dangerous
+
 		// === Case insensitivity ===
 		{"GIT RESET uppercase", "GIT RESET --hard", true},
 		{"Git Reset mixed", "Git Reset HEAD", true},
@@ -209,6 +240,111 @@ func TestHookBypassPatterns(t *testing.T) {
 	}
 }
 
+func TestGitWhitelist(t *testing.T) {
+	tests := []struct {
+		name    string
+		command string
+		blocked bool
+	}{
+		// === Allowed: core workflow ===
+		{"git add file", "git add file.go", false},
+		{"git add all", "git add .", false},
+		{"git commit message", "git commit -m 'message'", false},
+		{"git push origin", "git push origin main", false},
+		{"git pull", "git pull origin main", false},
+
+		// === Allowed: read-only informational ===
+		{"git status", "git status", false},
+		{"git diff", "git diff", false},
+		{"git diff cached", "git diff --cached", false},
+		{"git log", "git log --oneline", false},
+		{"git show HEAD", "git show HEAD", false},
+		{"git branch list", "git branch", false},
+		{"git branch -a", "git branch -a", false},
+		{"git fetch", "git fetch origin", false},
+		{"git blame", "git blame file.go", false},
+		{"git describe", "git describe --tags", false},
+		{"git shortlog", "git shortlog -sn", false},
+		{"git reflog", "git reflog", false},
+		{"git reflog show", "git reflog show", false},
+		{"git remote list", "git remote", false},
+		{"git remote verbose", "git remote -v", false},
+		{"git tag list", "git tag", false},
+		{"git tag list filter", "git tag -l 'v1.*'", false},
+		{"git grep", "git grep 'pattern'", false},
+
+		// === Allowed: read-only plumbing ===
+		{"git ls-files", "git ls-files", false},
+		{"git ls-tree", "git ls-tree HEAD", false},
+		{"git ls-remote", "git ls-remote origin", false},
+		{"git rev-parse HEAD", "git rev-parse HEAD", false},
+		{"git rev-list", "git rev-list HEAD", false},
+		{"git cat-file", "git cat-file -p HEAD", false},
+		{"git for-each-ref", "git for-each-ref refs/heads", false},
+		{"git merge-base", "git merge-base main feature", false},
+		{"git diff-tree", "git diff-tree HEAD", false},
+		{"git diff-files", "git diff-files", false},
+		{"git diff-index", "git diff-index HEAD", false},
+
+		// === Allowed: with global flags ===
+		{"git -C path status", "git -C /some/path status", false},
+		{"git -c key=val log", "git -c core.pager=cat log", false},
+
+		// === Blocked: not in whitelist ===
+		{"git merge", "git merge feature", true},
+		{"git cherry-pick", "git cherry-pick abc123", true},
+		{"git apply patch", "git apply patch.diff", true},
+		{"git am mailbox", "git am < patch.mbox", true},
+		{"git mv file", "git mv old.go new.go", true},
+		{"git bisect start", "git bisect start", true},
+		{"git notes add", "git notes add -m 'note'", true},
+		{"git worktree add", "git worktree add /path branch", true},
+		{"git submodule update", "git submodule update --init", true},
+		{"git config set", "git config user.name 'foo'", true},
+		{"git init", "git init", true},
+		{"git clone", "git clone https://example.com/repo.git", true},
+		{"git archive", "git archive HEAD", true},
+		{"git bundle create", "git bundle create repo.bundle HEAD", true},
+		{"git format-patch", "git format-patch HEAD~3", true},
+
+		// === Blocked: plumbing write commands ===
+		{"git read-tree", "git read-tree HEAD", true},
+		{"git update-index", "git update-index --force-remove file", true},
+		{"git checkout-index", "git checkout-index -a", true},
+		{"git replace", "git replace abc def", true},
+		{"git write-tree", "git write-tree", true},
+		{"git commit-tree", "git commit-tree abc123", true},
+		{"git mktag", "git mktag", true},
+		{"git pack-objects", "git pack-objects pack", true},
+		{"git prune", "git prune", true},
+		{"git fsck", "git fsck", true},
+
+		// === Blocked: remote/tag modifications (whitelisted subcommand but modifying flags) ===
+		{"git remote add", "git remote add origin https://example.com", true},
+		{"git remote remove", "git remote remove origin", true},
+		{"git remote rename", "git remote rename origin upstream", true},
+		{"git remote set-url", "git remote set-url origin https://new.com", true},
+		{"git tag delete", "git tag -d v1.0", true},
+		{"git tag annotated", "git tag -a v1.0 -m 'release'", true},
+		{"git tag create", "git tag v1.0 abc123", true},
+
+		// === Non-git commands not affected ===
+		{"non-git command", "ls -la", false},
+		{"npm install", "npm install", false},
+		// Known false positive: git inside quotes is still caught. Acceptable tradeoff.
+		{"echo with git", "echo 'git status'", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			blocked, name := checkAll(tt.command)
+			if blocked != tt.blocked {
+				t.Errorf("command %q: got blocked=%v (reason: %s), want blocked=%v", tt.command, blocked, name, tt.blocked)
+			}
+		})
+	}
+}
+
 // checkDestructive checks if a command matches any destructive pattern.
 // Returns true if blocked, along with the pattern name.
 func checkDestructive(cmd string) (bool, string) {
@@ -237,6 +373,110 @@ func checkBypass(cmd string) (bool, string) {
 	return false, ""
 }
 
+// checkGitWhitelist checks if a git command's subcommand is in the allowed list.
+// Returns true if blocked (not whitelisted), along with a description.
+func checkGitWhitelist(cmd string) (bool, string) {
+	matches := gitCommandRegex.FindStringSubmatch(cmd)
+	if matches == nil {
+		return false, "" // Not a git command
+	}
+
+	subcommand := strings.ToLower(matches[1])
+	if !allowedGitSubcommands[subcommand] {
+		return true, "git " + subcommand + " (not in allowed git commands)"
+	}
+
+	// Check modifying patterns on whitelisted subcommands
+	for _, p := range gitModifyingPatterns {
+		if p.regex.MatchString(cmd) {
+			if p.exclude != nil && p.exclude.MatchString(cmd) {
+				continue
+			}
+			return true, p.name
+		}
+	}
+
+	return false, ""
+}
+
+// checkAll runs all checks in order: destructive, bypass, then whitelist.
+// Returns true if blocked by any check.
+func checkAll(cmd string) (bool, string) {
+	if blocked, name := checkDestructive(cmd); blocked {
+		return blocked, name
+	}
+	if blocked, name := checkBypass(cmd); blocked {
+		return blocked, name
+	}
+	if blocked, name := checkGitWhitelist(cmd); blocked {
+		return blocked, name
+	}
+	return false, ""
+}
+
+func TestJSONParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		blocked bool
+	}{
+		{
+			name:    "nested format (actual Claude Code) blocks git stash",
+			json:    `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git stash"}}`,
+			blocked: true,
+		},
+		{
+			name:    "nested format allows git status",
+			json:    `{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}`,
+			blocked: false,
+		},
+		{
+			name:    "nested format blocks git reset --hard",
+			json:    `{"tool_input":{"command":"git reset --hard HEAD"}}`,
+			blocked: true,
+		},
+		{
+			name:    "flat format (fallback) blocks git stash",
+			json:    `{"command":"git stash"}`,
+			blocked: true,
+		},
+		{
+			name:    "flat format allows git status",
+			json:    `{"command":"git status"}`,
+			blocked: false,
+		},
+		{
+			name:    "empty tool_input allows",
+			json:    `{"tool_input":{}}`,
+			blocked: false,
+		},
+		{
+			name:    "empty JSON allows",
+			json:    `{}`,
+			blocked: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var input hookInput
+			if err := json.Unmarshal([]byte(tt.json), &input); err != nil {
+				t.Fatalf("failed to parse JSON: %v", err)
+			}
+
+			cmd := input.ToolInput.Command
+			if cmd == "" {
+				cmd = input.Command
+			}
+
+			blocked, _ := checkAll(cmd)
+			if blocked != tt.blocked {
+				t.Errorf("json %q: got blocked=%v, want blocked=%v (cmd=%q)", tt.json, blocked, tt.blocked, cmd)
+			}
+		})
+	}
+}
+
 func BenchmarkPatternMatching(b *testing.B) {
 	commands := []string{
 		"git status",
@@ -245,12 +485,13 @@ func BenchmarkPatternMatching(b *testing.B) {
 		"git push origin main",
 		"git reset --hard HEAD",
 		"SKIP_HOOKS=1 git commit -m 'msg'",
+		"git merge feature",
+		"git read-tree HEAD",
 	}
 
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		cmd := commands[i%len(commands)]
-		checkDestructive(cmd)
-		checkBypass(cmd)
+		checkAll(cmd)
 	}
 }
