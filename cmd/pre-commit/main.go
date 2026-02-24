@@ -196,6 +196,7 @@ func printAvailableChecks() {
 	fmt.Println("  buildCheck         - Build verification (if enabled)")
 	fmt.Println("  vitestAssertions   - Ensure vitest configs have requireAssertions: true")
 	fmt.Println("  testCoverage       - Ensure source files have corresponding test files")
+	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
 }
 
 func run() error {
@@ -317,6 +318,13 @@ func run() error {
 	if config.Features.ConsoleCheck {
 		if err := runConsoleCheck(appFiles, config.ConsoleAllowed); err != nil {
 			allErrors = append(allErrors, fmt.Sprintf("Console check: %v", err))
+		}
+	}
+
+	// Data layer check
+	if config.Features.DataLayerCheck {
+		if err := runDataLayerCheck(appFiles, config.DataLayerAllowed); err != nil {
+			allErrors = append(allErrors, fmt.Sprintf("Data layer check: %v", err))
 		}
 	}
 
@@ -721,6 +729,8 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runVitestAssertionsCheck(config.Apps)
 	case "testCoverage":
 		return runTestCoverageCheck(config.TestCoverageConfig)
+	case "dataLayerCheck":
+		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
 	default:
 		return fmt.Errorf("unknown check: %s (use --list to see available checks)", name)
 	}
@@ -760,6 +770,13 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	if config.Features.ConsoleCheck {
 		if err := runConsoleCheck(appFiles, config.ConsoleAllowed); err != nil {
 			allErrors = append(allErrors, fmt.Sprintf("Console check: %v", err))
+		}
+	}
+
+	// Data layer check
+	if config.Features.DataLayerCheck {
+		if err := runDataLayerCheck(appFiles, config.DataLayerAllowed); err != nil {
+			allErrors = append(allErrors, fmt.Sprintf("Data layer check: %v", err))
 		}
 	}
 

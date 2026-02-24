@@ -27,6 +27,7 @@ type Config struct {
 	TestConfig         TestConfig            `json:"testConfig"`
 	TestCoverageConfig TestCoverageConfig    `json:"testCoverageConfig"`
 	SRPConfig          SRPConfig             `json:"srpConfig"`
+	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
 }
 
 // Features represents which pre-commit features are enabled
@@ -48,6 +49,7 @@ type Features struct {
 	MockCheck          bool `json:"mockCheck"`
 	VitestAssertions   bool `json:"vitestAssertions"`
 	TestCoverage       bool `json:"testCoverage"`
+	DataLayerCheck     bool `json:"dataLayerCheck"`
 }
 
 // AppConfig represents configuration for a single app
@@ -72,9 +74,10 @@ type TypecheckFilter struct {
 
 // LintFilter configures which lint errors to filter out
 type LintFilter struct {
-	Rules        []string `json:"rules"`
-	ExcludePaths []string `json:"excludePaths"`
-	Linter       string   `json:"linter"` // "eslint" (default) or "oxlint"
+	Rules          []string `json:"rules"`
+	ExcludePaths   []string `json:"excludePaths"`
+	Linter         string   `json:"linter"`         // "eslint" (default) or "oxlint"
+	IgnoreWarnings bool     `json:"ignoreWarnings"` // If true, filter out warning-level lint errors
 }
 
 // LintStagedConfig configures lint-staged execution
