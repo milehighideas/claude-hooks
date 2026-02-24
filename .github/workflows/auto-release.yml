@@ -1,0 +1,32 @@
+name: Auto Release
+
+on:
+  push:
+    branches: [main]
+    paths: ['cmd/**', 'Makefile', 'go.mod', 'go.sum']
+
+permissions:
+  contents: write
+
+jobs:
+  tag-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Generate and push tag
+        run: |
+          TAG="v0.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          git tag "$TAG"
+          git push origin "$TAG"
+
+      - name: Wait for release workflow
+        run: echo "Tag $TAG pushed — release.yml will handle the build and publish."
