@@ -295,7 +295,7 @@ func TestShouldFilterLintError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := shouldFilterLintError(tt.err, tt.rules, tt.excludePaths)
+			result := shouldFilterLintError(tt.err, tt.rules, tt.excludePaths, false)
 			if result != tt.expected {
 				t.Errorf("shouldFilterLintError() = %v, want %v", result, tt.expected)
 			}
@@ -355,7 +355,7 @@ func TestShouldFilterLintErrorWithDefaults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// With default exclude paths (empty) and no rule filters
-			result := shouldFilterLintError(tt.err, []string{}, DefaultLintExcludePaths)
+			result := shouldFilterLintError(tt.err, []string{}, DefaultLintExcludePaths, false)
 			if result != tt.expected {
 				t.Errorf("shouldFilterLintError() with defaults = %v, want %v", result, tt.expected)
 			}

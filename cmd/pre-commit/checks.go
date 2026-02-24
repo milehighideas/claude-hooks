@@ -173,7 +173,7 @@ func runFullChecks(appName, appPath, filter string, typecheckFilter TypecheckFil
 		fmt.Printf("   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
 	} else {
 		fmt.Printf("   → Starting typecheck for %s...\n", appName)
-		if err := runFilteredTypecheck(appName, filter, packageManager, appPath, typecheckFilter, nodeMemoryMB); err != nil {
+		if err := runFilteredTypecheck(appName, filter, packageManager, typecheckFilter, nodeMemoryMB); err != nil {
 			fmt.Printf("   ❌ %s typecheck failed\n", appName)
 			hasError = true
 		} else {
@@ -214,7 +214,7 @@ func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter Type
 		fmt.Fprintf(output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
 	} else {
 		fmt.Fprintf(output, "   → Starting typecheck for %s...\n", appName)
-		typecheckOutput, typecheckErr := runFilteredTypecheckBuffered(appName, filter, packageManager, appPath, typecheckFilter, nodeMemoryMB)
+		typecheckOutput, typecheckErr := runFilteredTypecheckBuffered(appName, filter, packageManager, typecheckFilter, nodeMemoryMB)
 		output.WriteString(typecheckOutput)
 		if typecheckErr != nil {
 			fmt.Fprintf(output, "   ❌ %s typecheck failed\n", appName)
