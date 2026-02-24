@@ -28,6 +28,17 @@ type Config struct {
 	TestCoverageConfig TestCoverageConfig    `json:"testCoverageConfig"`
 	SRPConfig          SRPConfig             `json:"srpConfig"`
 	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
+	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
+}
+
+// IsWarningCheck returns true if the named check should warn instead of block.
+func (c *Config) IsWarningCheck(name string) bool {
+	for _, w := range c.WarningChecks {
+		if w == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Features represents which pre-commit features are enabled

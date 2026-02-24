@@ -56,6 +56,18 @@ func printStatus(name string, passed bool, detail string) {
 	fmt.Printf("  %s %s%s\n", icon, name, status)
 }
 
+// printWarningStatus prints a compact warning status line for a non-blocking check.
+func printWarningStatus(name string, detail string) {
+	if !compactMode() {
+		return
+	}
+	status := ""
+	if detail != "" {
+		status = " (" + detail + ")"
+	}
+	fmt.Printf("  ⚠️  %s%s (warning)\n", name, status)
+}
+
 // printReportHint prints a pointer to the report directory for a failed check.
 func printReportHint(subdir string) {
 	if compactMode() {
@@ -272,35 +284,43 @@ func run() error {
 		}
 	}
 
-	// Collect all errors instead of failing fast
+	// Collect all errors and warnings instead of failing fast
 	var allErrors []string
+	var allWarnings []string
+
+	// collectResult routes a check failure to warnings or errors based on config
+	collectResult := func(checkName string, err error) {
+		if err == nil {
+			return
+		}
+		msg := fmt.Sprintf("%s: %v", checkName, err)
+		if config.IsWarningCheck(checkName) {
+			allWarnings = append(allWarnings, msg)
+		} else {
+			allErrors = append(allErrors, msg)
+		}
+	}
 
 	// Lint and typecheck
 	if config.Features.LintTypecheck {
 		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("lint/typecheck failed"))
+			collectResult("lintTypecheck", err)
 		}
 	}
 
 	// Console check
 	if config.Features.ConsoleCheck {
-		if err := runConsoleCheck(appFiles, config.ConsoleAllowed); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Console check: %v", err))
-		}
+		collectResult("consoleCheck", runConsoleCheck(appFiles, config.ConsoleAllowed))
 	}
 
 	// Data layer check
 	if config.Features.DataLayerCheck {
-		if err := runDataLayerCheck(appFiles, config.DataLayerAllowed); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Data layer check: %v", err))
-		}
+		collectResult("dataLayerCheck", runDataLayerCheck(appFiles, config.DataLayerAllowed))
 	}
 
 	// Frontend structure check
 	if config.Features.FrontendStructure {
-		if err := runFrontendStructureCheck(config.Apps, stagedFiles); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Frontend structure: %v", err))
-		}
+		collectResult("frontendStructure", runFrontendStructureCheck(config.Apps, stagedFiles))
 	}
 
 	// SRP check
@@ -323,37 +343,27 @@ func run() error {
 		}
 
 		filterResult := filterFilesForSRPWithDetails(srpFiles, config.SRPConfig)
-		if err := runSRPCheckWithFilter(filterResult, config.SRPConfig, fullMode); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("SRP: %v", err))
-		}
+		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, fullMode))
 	}
 
 	// Test files check
 	if config.Features.TestFiles {
-		if err := runTestFilesCheck(stagedFiles); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Test files: %v", err))
-		}
+		collectResult("testFiles", runTestFilesCheck(stagedFiles))
 	}
 
 	// Mock check - ensures test files use __mocks__/ instead of inline jest.mock
 	if config.Features.MockCheck {
-		if err := runMockCheck(stagedFiles, config.MockCheck); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Mock check: %v", err))
-		}
+		collectResult("mockCheck", runMockCheck(stagedFiles, config.MockCheck))
 	}
 
 	// Vitest assertions check - ensures vitest configs have requireAssertions: true
 	if config.Features.VitestAssertions {
-		if err := runVitestAssertionsCheck(config.Apps); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Vitest assertions: %v", err))
-		}
+		collectResult("vitestAssertions", runVitestAssertionsCheck(config.Apps))
 	}
 
 	// Test coverage check - ensures source files have corresponding test files
 	if config.Features.TestCoverage {
-		if err := runTestCoverageCheck(config.TestCoverageConfig); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Test coverage: %v", err))
-		}
+		collectResult("testCoverage", runTestCoverageCheck(config.TestCoverageConfig))
 	}
 
 	// Build check
@@ -364,7 +374,7 @@ func run() error {
 			fmt.Println("================================")
 		}
 		if err := checkBuild(config.Build, config.Apps); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Build: %v", err))
+			collectResult("buildCheck", err)
 			printStatus("Build check", false, "")
 		} else {
 			printStatus("Build check", true, "")
@@ -395,8 +405,22 @@ func run() error {
 			PackageManager: config.PackageManager,
 			Env:            config.Env,
 		}
-		if err := runTests(testCtx); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Tests: %v", err))
+		collectResult("tests", runTests(testCtx))
+	}
+
+	// Report warnings
+	if len(allWarnings) > 0 {
+		fmt.Println()
+		if compactMode() {
+			fmt.Printf("\n%d check(s) produced warnings (non-blocking)\n", len(allWarnings))
+		} else {
+			fmt.Println("================================")
+			fmt.Println("  WARNINGS (non-blocking)")
+			fmt.Println("================================")
+			for _, w := range allWarnings {
+				fmt.Printf("  ⚠️  %s\n", w)
+			}
+			fmt.Println()
 		}
 	}
 
@@ -711,61 +735,69 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	printDetectionSummary(appFiles, sharedChanged)
 
 	var allErrors []string
+	var allWarnings []string
+
+	collectResult := func(checkName string, err error) {
+		if err == nil {
+			return
+		}
+		msg := fmt.Sprintf("%s: %v", checkName, err)
+		if config.IsWarningCheck(checkName) {
+			allWarnings = append(allWarnings, msg)
+		} else {
+			allErrors = append(allErrors, msg)
+		}
+	}
 
 	// Frontend structure check
 	if config.Features.FrontendStructure {
-		if err := runFrontendStructureCheck(config.Apps, files); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Frontend structure: %v", err))
-		}
+		collectResult("frontendStructure", runFrontendStructureCheck(config.Apps, files))
 	}
 
 	// SRP check
 	if config.Features.SRP {
 		filterResult := filterFilesForSRPWithDetails(files, config.SRPConfig)
-		if err := runSRPCheckWithFilter(filterResult, config.SRPConfig, true); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("SRP: %v", err))
-		}
+		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, true))
 	}
 
 	// Mock check
 	if config.Features.MockCheck {
-		if err := runMockCheck(files, config.MockCheck); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Mock check: %v", err))
-		}
+		collectResult("mockCheck", runMockCheck(files, config.MockCheck))
 	}
 
 	// Console check
 	if config.Features.ConsoleCheck {
-		if err := runConsoleCheck(appFiles, config.ConsoleAllowed); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Console check: %v", err))
-		}
+		collectResult("consoleCheck", runConsoleCheck(appFiles, config.ConsoleAllowed))
 	}
 
 	// Data layer check
 	if config.Features.DataLayerCheck {
-		if err := runDataLayerCheck(appFiles, config.DataLayerAllowed); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Data layer check: %v", err))
-		}
+		collectResult("dataLayerCheck", runDataLayerCheck(appFiles, config.DataLayerAllowed))
 	}
 
 	// Vitest assertions check
 	if config.Features.VitestAssertions {
-		if err := runVitestAssertionsCheck(config.Apps); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Vitest assertions: %v", err))
-		}
+		collectResult("vitestAssertions", runVitestAssertionsCheck(config.Apps))
 	}
 
 	// Test coverage check
 	if config.Features.TestCoverage {
-		if err := runTestCoverageCheck(config.TestCoverageConfig); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Test coverage: %v", err))
-		}
+		collectResult("testCoverage", runTestCoverageCheck(config.TestCoverageConfig))
 	}
 
 	// Lint and typecheck
 	if config.Features.LintTypecheck {
-		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager); err != nil {
-			allErrors = append(allErrors, fmt.Sprintf("Lint/Typecheck: %v", err))
+		collectResult("lintTypecheck", runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager))
+	}
+
+	// Report warnings
+	if len(allWarnings) > 0 {
+		fmt.Println()
+		fmt.Println("================================")
+		fmt.Println("  WARNINGS (non-blocking)")
+		fmt.Println("================================")
+		for _, w := range allWarnings {
+			fmt.Printf("  ⚠️  %s\n", w)
 		}
 	}
 
