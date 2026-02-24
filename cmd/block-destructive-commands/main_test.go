@@ -290,8 +290,8 @@ func TestGitWhitelist(t *testing.T) {
 		{"git -C path status", "git -C /some/path status", false},
 		{"git -c key=val log", "git -c core.pager=cat log", false},
 
-		// === Blocked: not in whitelist ===
-		{"git merge", "git merge feature", true},
+		// === Allowed: merge (--abort caught by blacklist) ===
+		{"git merge", "git merge feature", false},
 		{"git cherry-pick", "git cherry-pick abc123", true},
 		{"git apply patch", "git apply patch.diff", true},
 		{"git am mailbox", "git am < patch.mbox", true},

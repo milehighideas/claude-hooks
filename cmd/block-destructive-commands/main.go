@@ -347,6 +347,7 @@ var allowedGitSubcommands = map[string]bool{
 	"remote":       true, // -v listing; modifying subcommands caught below
 	"tag":          true, // listing; create/delete caught below
 	"fetch":        true,
+	"merge":        true, // --abort caught by blacklist above
 	"grep":         true,
 	"name-rev":     true,
 	"verify-commit": true,
