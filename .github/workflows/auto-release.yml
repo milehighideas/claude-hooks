@@ -17,13 +17,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: false
 
       - name: Run tests
         run: go test ./...
 
       - name: Generate and push tag
         run: |
-          TAG="v0.$(date -u +%Y%m%d).${GITHUB_RUN_NUMBER}"
+          DATE="$(date -u +%Y%m%d)"
+          # Find next available sequence number for today
+          N=1
+          while git ls-remote --tags origin "refs/tags/v0.${DATE}.${N}" 2>/dev/null | grep -q .; do
+            N=$((N + 1))
+          done
+          TAG="v0.${DATE}.${N}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           git tag "$TAG"
           git push origin "$TAG"
