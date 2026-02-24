@@ -103,7 +103,31 @@ func (g *APIGenerator) Generate(functions []ConvexFunction) error {
 	// Generate index file
 	sort.Strings(files)
 	files = uniqueStrings(files)
+
+	if g.config.DataLayer.ExportAPI {
+		return g.generateAPIIndexFile(files)
+	}
 	return generateIndexFile(g.outputDir, files)
+}
+
+// generateAPIIndexFile creates index.ts with an api re-export at the top
+func (g *APIGenerator) generateAPIIndexFile(files []string) error {
+	if len(files) == 0 {
+		content := "// No files generated\nexport {};\n"
+		return os.WriteFile(filepath.Join(g.outputDir, "index.ts"), []byte(content), 0644)
+	}
+
+	var sb strings.Builder
+	sb.WriteString("/**\n")
+	sb.WriteString(" * AUTO-GENERATED INDEX - DO NOT EDIT\n")
+	sb.WriteString(" */\n\n")
+	sb.WriteString(fmt.Sprintf("export { api } from '%s';\n", g.config.Imports.API))
+
+	for _, file := range files {
+		sb.WriteString(fmt.Sprintf("export * from './%s';\n", file))
+	}
+
+	return os.WriteFile(filepath.Join(g.outputDir, "index.ts"), []byte(sb.String()), 0644)
 }
 
 // getUniqueExportName returns a unique export name for a function, prefixing with sub-namespace if needed

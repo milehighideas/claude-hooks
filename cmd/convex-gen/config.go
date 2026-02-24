@@ -32,6 +32,7 @@ type DataLayerConfig struct {
 	APIDir        string `json:"apiDir"`        // e.g., "generated-api"
 	TypesDir      string `json:"typesDir"`      // e.g., "generated-types"
 	FileStructure string `json:"fileStructure"` // "grouped", "split", or "both"
+	ExportAPI     bool   `json:"exportApi"`     // Re-export { api } from the generated-api index
 }
 
 // ImportsConfig configures how generated code imports dependencies
