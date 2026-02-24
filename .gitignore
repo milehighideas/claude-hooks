@@ -1,6 +1,9 @@
 # Binaries
 bin/*
 !bin/.gitkeep
+/pre-commit
+/block-destructive-commands
+/validate-srp
 
 # Go
 *.exe
