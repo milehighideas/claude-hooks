@@ -172,6 +172,7 @@ func printAvailableChecks() {
 	fmt.Println("  tests              - Run test suites")
 	fmt.Println("  changelog          - Validate changelog entries")
 	fmt.Println("  goLint             - Go linting (if enabled)")
+	fmt.Println("  nativeBuild        - Native app compilation check (iOS/Android)")
 	fmt.Println("  convexValidation   - Convex schema validation (if enabled)")
 	fmt.Println("  buildCheck         - Build verification (if enabled)")
 	fmt.Println("  vitestAssertions   - Ensure vitest configs have requireAssertions: true")
@@ -262,6 +263,25 @@ func run() error {
 			fmt.Println()
 		} else {
 			printStatus("Go linting", true, "")
+		}
+	}
+
+	// Native app compilation (iOS/Android)
+	if config.Features.NativeBuild {
+		if !compactMode() {
+			fmt.Println("================================")
+			fmt.Println("  NATIVE BUILD CHECK")
+			fmt.Println("================================")
+		}
+		if err := checkNativeBuild(stagedFiles, config.NativeBuild); err != nil {
+			printStatus("Native build", false, "")
+			return err
+		}
+		if !compactMode() {
+			fmt.Println("Native build check passed")
+			fmt.Println()
+		} else {
+			printStatus("Native build", true, "")
 		}
 	}
 
@@ -713,6 +733,8 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return checkChangelog(files, config.ChangelogExclude, config.ChangelogConfig, config.Apps)
 	case "goLint":
 		return checkGoLint(files, config.GoLint)
+	case "nativeBuild":
+		return checkNativeBuild(files, config.NativeBuild)
 	case "convexValidation":
 		return checkConvex(config.Convex)
 	case "buildCheck":

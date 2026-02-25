@@ -21,6 +21,7 @@ type Config struct {
 	LintFilter         LintFilter            `json:"lintFilter"`
 	LintStagedConfig   LintStagedConfig      `json:"lintStagedConfig"`
 	GoLint             GoLintConfig          `json:"goLint"`
+	NativeBuild        NativeBuildConfig     `json:"nativeBuild"`
 	Convex             ConvexConfig          `json:"convex"`
 	Build              BuildConfig           `json:"build"`
 	MockCheck          MockCheckConfig       `json:"mockCheck"`
@@ -60,6 +61,7 @@ type Features struct {
 	MockCheck          bool `json:"mockCheck"`
 	VitestAssertions   bool `json:"vitestAssertions"`
 	TestCoverage       bool `json:"testCoverage"`
+	NativeBuild        bool `json:"nativeBuild"`
 	DataLayerCheck     bool `json:"dataLayerCheck"`
 }
 
