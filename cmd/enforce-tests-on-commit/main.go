@@ -376,7 +376,7 @@ func runTests(testFiles []string, projectType, projectRoot string) (bool, string
 		args = append(args, relativePaths...)
 		cmd = exec.Command("npm", args...)
 	case "mobile":
-		args := []string{"run", "test", "--", "--watchAll=false"}
+		args := []string{"run", "test", "--", "--watchAll=false", "--no-watchman"}
 		// Escape regex special characters for Jest pattern matching
 		// This handles dynamic route files like [id].test.tsx
 		for _, p := range relativePaths {

@@ -65,6 +65,12 @@ func runTests(ctx TestRunContext) error {
 			args = []string{"--filter", appConfig.Filter, testCmd}
 		}
 
+		// Append per-app test args (e.g., --watchman=false for Jest)
+		if len(appConfig.TestArgs) > 0 {
+			args = append(args, "--")
+			args = append(args, appConfig.TestArgs...)
+		}
+
 		if compactMode() {
 			// Capture output and write to report file
 			output, err := runCommandCapturedWithEnv(ctx.Env, pm, args...)

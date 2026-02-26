@@ -70,6 +70,7 @@ type AppConfig struct {
 	Path            string           `json:"path"`
 	Filter          string           `json:"filter"`
 	TestCommand     string           `json:"testCommand,omitempty"`
+	TestArgs        []string         `json:"testArgs,omitempty"`        // Extra args passed to the test runner after "--" (e.g., ["--watchman=false"])
 	NodeMemoryMB    int              `json:"nodeMemoryMB,omitempty"`    // Memory limit for Node.js (e.g., 8192 for 8GB)
 	TypecheckFilter *TypecheckFilter `json:"typecheckFilter,omitempty"` // Per-app override for typecheck settings
 	SkipLint        bool             `json:"skipLint,omitempty"`        // Skip lint for this app (typecheck still runs)
