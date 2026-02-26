@@ -177,6 +177,12 @@ func TestDestructivePatterns(t *testing.T) {
 		{"git replace delete", "git replace -d abc123", true},
 		{"git replace list allowed", "git replace -l", true}, // still blocked - all replace is dangerous
 
+		// === System commands ===
+		{"reboot blocked", "reboot", true},
+		{"sudo reboot blocked", "sudo reboot", true},
+		{"adb reboot allowed", "adb reboot", false},
+		{"adb reboot bootloader allowed", "adb reboot bootloader", false},
+
 		// === Case insensitivity ===
 		{"GIT RESET uppercase", "GIT RESET --hard", true},
 		{"Git Reset mixed", "Git Reset HEAD", true},

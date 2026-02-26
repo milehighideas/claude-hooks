@@ -155,7 +155,7 @@ var destructivePatterns = []pattern{
 
 	// System shutdown/reboot
 	{regex: regexp.MustCompile(`(?i)\bshutdown\b`), name: "shutdown"},
-	{regex: regexp.MustCompile(`(?i)\breboot\b`), name: "reboot"},
+	{regex: regexp.MustCompile(`(?i)\breboot\b`), name: "reboot", exclude: regexp.MustCompile(`(?i)\badb\s+reboot\b`)},
 	{regex: regexp.MustCompile(`(?i)\bhalt\b`), name: "halt"},
 	{regex: regexp.MustCompile(`(?i)\bpoweroff\b`), name: "poweroff"},
 	{regex: regexp.MustCompile(`(?i)\binit\s+[0-6]\b`), name: "init runlevel change"},
