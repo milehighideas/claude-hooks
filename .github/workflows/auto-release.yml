@@ -3,7 +3,7 @@ name: Auto Release
 on:
   push:
     branches: [main]
-    paths: ['cmd/**', 'justfile', 'go.mod', 'go.sum']
+    paths: ['cmd/**', 'justfile', 'go.mod', 'go.sum', '.github/workflows/**']
 
 permissions:
   contents: write
