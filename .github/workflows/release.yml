@@ -30,7 +30,7 @@ jobs:
       - name: Package archives
         run: |
           cd bin
-          for platform in darwin-arm64 linux-amd64 windows-amd64; do
+          for platform in darwin-arm64 linux-amd64 linux-arm64 windows-amd64; do
             tar -czf "claude-hooks-${platform}.tar.gz" -C "$platform" .
           done
 
@@ -41,4 +41,5 @@ jobs:
           files: |
             bin/claude-hooks-darwin-arm64.tar.gz
             bin/claude-hooks-linux-amd64.tar.gz
+            bin/claude-hooks-linux-arm64.tar.gz
             bin/claude-hooks-windows-amd64.tar.gz

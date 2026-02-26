@@ -79,7 +79,7 @@ install: build
     done
 
 # Cross-compile for all platforms
-build-all: build-darwin build-linux build-windows
+build-all: build-darwin build-linux build-linux-arm64 build-windows
 
 # Build for macOS (Apple Silicon)
 build-darwin:
@@ -99,6 +99,15 @@ build-linux:
         GOOS=linux GOARCH=amd64 go build -o {{bindir}}/linux-amd64/$name ./cmd/$name
     done
 
+# Build for Linux (arm64 — Docker on Apple Silicon)
+build-linux-arm64:
+    #!/usr/bin/env bash
+    mkdir -p {{bindir}}/linux-arm64
+    for cmd in cmd/*/; do
+        name=$(basename "$cmd")
+        GOOS=linux GOARCH=arm64 go build -o {{bindir}}/linux-arm64/$name ./cmd/$name
+    done
+
 # Build for Windows (amd64)
 build-windows:
     #!/usr/bin/env bash
@@ -111,7 +120,7 @@ build-windows:
 # Package archives (mirrors release.yml packaging step)
 package: build-all
     cd bin && \
-    for platform in darwin-arm64 linux-amd64 windows-amd64; do \
+    for platform in darwin-arm64 linux-amd64 linux-arm64 windows-amd64; do \
         tar -czf "claude-hooks-${platform}.tar.gz" -C "$platform" . ; \
     done
     @echo "Archives created in bin/"
