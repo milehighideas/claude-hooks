@@ -511,3 +511,46 @@ func TestApplyDefaults(t *testing.T) {
 		})
 	}
 }
+
+func TestStripJSONComments(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "no comments unchanged",
+			input: `{"key": "value"}`,
+			want:  `{"key": "value"}`,
+		},
+		{
+			name:  "full-line comment removed",
+			input: "// this is a comment\n{\"key\": \"value\"}",
+			want:  "{\"key\": \"value\"}",
+		},
+		{
+			name:  "inline comment removed",
+			input: "{\"key\": \"value\" // inline comment\n}",
+			want:  "{\"key\": \"value\"\n}",
+		},
+		{
+			name:  "comment-like string preserved",
+			input: `{"url": "https://example.com"}`,
+			want:  `{"url": "https://example.com"}`,
+		},
+		{
+			name:  "double slash in string value preserved",
+			input: `{"pattern": "src//lib"}`,
+			want:  `{"pattern": "src//lib"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := string(stripJSONComments([]byte(tt.input)))
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

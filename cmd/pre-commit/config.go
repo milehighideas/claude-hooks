@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"strings"
 )
 
 // Config represents the .pre-commit.json configuration
@@ -292,7 +293,46 @@ func (c SRPConfig) resolvedTestRequired() TestRequiredConfig {
 	return cfg
 }
 
-// loadConfig loads configuration from .pre-commit.json
+// stripJSONComments removes single-line // comments from JSONC content.
+// It handles comments on their own line and inline after values.
+// It does not strip comments inside string literals.
+func stripJSONComments(data []byte) []byte {
+	lines := strings.Split(string(data), "\n")
+	var out []string
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// Skip full-line comments
+		if strings.HasPrefix(trimmed, "//") {
+			continue
+		}
+		// Strip inline comments (after a value, outside strings)
+		// Walk character by character to respect string boundaries
+		inString := false
+		escaped := false
+		for i, ch := range line {
+			if escaped {
+				escaped = false
+				continue
+			}
+			if ch == '\\' && inString {
+				escaped = true
+				continue
+			}
+			if ch == '"' {
+				inString = !inString
+				continue
+			}
+			if !inString && ch == '/' && i+1 < len(line) && line[i+1] == '/' {
+				line = strings.TrimRight(line[:i], " \t")
+				break
+			}
+		}
+		out = append(out, line)
+	}
+	return []byte(strings.Join(out, "\n"))
+}
+
+// loadConfig loads configuration from .pre-commit.json (supports JSONC comments)
 func loadConfig() (*Config, error) {
 	configPath := ".pre-commit.json"
 	data, err := os.ReadFile(configPath)
@@ -302,6 +342,9 @@ func loadConfig() (*Config, error) {
 		}
 		return nil, err
 	}
+
+	// Strip JSONC-style comments before parsing
+	data = stripJSONComments(data)
 
 	var config Config
 	if err := json.Unmarshal(data, &config); err != nil {
