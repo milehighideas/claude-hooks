@@ -177,6 +177,32 @@ type SRPConfig struct {
 	// If empty/unset, defaults to ["useState", "useReducer", "useContext"] for
 	// backwards compatibility.
 	ScreenHooks []string `json:"screenHooks"`
+	// EnabledRules specifies which SRP rules to run. If empty/unset, all 6
+	// existing rules run (backwards compatible). The "testRequired" rule is
+	// always opt-in — it only runs when explicitly listed here.
+	EnabledRules []string `json:"enabledRules"`
+	// WarnOnly specifies rules whose violations should be downgraded to warnings
+	// instead of errors, making them non-blocking.
+	WarnOnly []string `json:"warnOnly"`
+	// TestRequired configures the testRequired rule (requires enabledRules to include "testRequired")
+	TestRequired *TestRequiredConfig `json:"testRequired"`
+}
+
+// TestRequiredConfig configures the testRequired SRP rule
+type TestRequiredConfig struct {
+	// Scope controls which files are checked: "new" (only newly added), "changed" (all staged), "all" (everything).
+	// Default: "new"
+	Scope string `json:"scope"`
+	// Extensions specifies which file extensions to check. Default: [".tsx"]
+	Extensions []string `json:"extensions"`
+	// TestPatterns specifies test file suffixes to look for. Default: [".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts"]
+	TestPatterns []string `json:"testPatterns"`
+	// IncludePaths restricts checking to files within these paths (prefix match). If empty, all paths checked.
+	IncludePaths []string `json:"includePaths"`
+	// ExcludePaths skips files matching these patterns (substring match)
+	ExcludePaths []string `json:"excludePaths"`
+	// ExcludeFiles skips exact filenames (basename match, e.g., "index.tsx", "_layout.tsx")
+	ExcludeFiles []string `json:"excludeFiles"`
 }
 
 // resolvedScreenHooks returns the set of hooks to check in screens,
@@ -200,6 +226,70 @@ func (c SRPConfig) resolvedScreenHooks() map[string]bool {
 		}
 	}
 	return result
+}
+
+// existingRules lists the 6 original SRP rules (not including testRequired)
+var existingRules = []string{
+	"directConvexImports",
+	"stateInScreens",
+	"multipleExports",
+	"fileSize",
+	"typeExportsLocation",
+	"mixedConcerns",
+}
+
+// isRuleEnabled returns true if the given rule should run.
+// When EnabledRules is empty/nil, all 6 existing rules run and testRequired is off.
+// When EnabledRules is set, only listed rules run.
+func (c SRPConfig) isRuleEnabled(rule string) bool {
+	if len(c.EnabledRules) == 0 {
+		// Backwards compat: all existing rules on, testRequired off
+		for _, r := range existingRules {
+			if r == rule {
+				return true
+			}
+		}
+		return false
+	}
+	for _, r := range c.EnabledRules {
+		if r == rule {
+			return true
+		}
+	}
+	return false
+}
+
+// isWarnOnly returns true if violations from this rule should be downgraded to warnings.
+func (c SRPConfig) isWarnOnly(rule string) bool {
+	for _, r := range c.WarnOnly {
+		if r == rule {
+			return true
+		}
+	}
+	return false
+}
+
+// resolvedTestRequired returns the TestRequiredConfig with defaults applied.
+func (c SRPConfig) resolvedTestRequired() TestRequiredConfig {
+	defaults := TestRequiredConfig{
+		Scope:        "new",
+		Extensions:   []string{".tsx"},
+		TestPatterns: []string{".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts"},
+	}
+	if c.TestRequired == nil {
+		return defaults
+	}
+	cfg := *c.TestRequired
+	if cfg.Scope == "" {
+		cfg.Scope = defaults.Scope
+	}
+	if len(cfg.Extensions) == 0 {
+		cfg.Extensions = defaults.Extensions
+	}
+	if len(cfg.TestPatterns) == 0 {
+		cfg.TestPatterns = defaults.TestPatterns
+	}
+	return cfg
 }
 
 // loadConfig loads configuration from .pre-commit.json

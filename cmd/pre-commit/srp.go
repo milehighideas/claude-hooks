@@ -16,6 +16,7 @@ type SRPViolation struct {
 	Severity   string // "error" or "warning"
 	Message    string
 	Suggestion string
+	RuleID     string // e.g. "directConvexImports", "testRequired"
 }
 
 // SRPAnalysis represents the analysis of a TypeScript/TSX file
@@ -52,8 +53,10 @@ type SRPStateInfo struct {
 type SRPChecker struct {
 	gitShowFunc   func(file string) ([]byte, error)
 	readFileFunc  func(file string) ([]byte, error)
+	statFunc      func(file string) (os.FileInfo, error) // for test file existence checks
 	useFilesystem bool
 	config        SRPConfig
+	newFiles      map[string]bool // newly added files (git diff --diff-filter=A)
 }
 
 // NewSRPChecker creates a new SRP checker that reads from git staged content
@@ -66,6 +69,7 @@ func NewSRPChecker(config SRPConfig) *SRPChecker {
 		readFileFunc: func(file string) ([]byte, error) {
 			return os.ReadFile(file)
 		},
+		statFunc:      os.Stat,
 		useFilesystem: false,
 		config:        config,
 	}
@@ -81,6 +85,7 @@ func NewSRPCheckerFullMode(config SRPConfig) *SRPChecker {
 		readFileFunc: func(file string) ([]byte, error) {
 			return os.ReadFile(file)
 		},
+		statFunc:      os.Stat,
 		useFilesystem: true,
 		config:        config,
 	}
@@ -109,6 +114,11 @@ func (c *SRPChecker) CheckFiles(files []string) ([]SRPViolation, error) {
 		analysis := c.analyzeCode(string(content), file)
 		violations := c.validateSRPCompliance(analysis, file)
 		allViolations = append(allViolations, violations...)
+	}
+
+	// testRequired runs on the file list directly (doesn't need content analysis)
+	if c.config.isRuleEnabled("testRequired") {
+		allViolations = append(allViolations, c.checkTestRequired(files)...)
 	}
 
 	return allViolations, nil
@@ -221,12 +231,31 @@ func (c *SRPChecker) analyzeCode(code, filePath string) *SRPAnalysis {
 func (c *SRPChecker) validateSRPCompliance(analysis *SRPAnalysis, filePath string) []SRPViolation {
 	var violations []SRPViolation
 
-	violations = append(violations, c.checkDirectConvexImports(analysis, filePath)...)
-	violations = append(violations, c.checkStateInScreens(analysis, filePath)...)
-	violations = append(violations, c.checkMultipleExports(analysis, filePath)...)
-	violations = append(violations, c.checkFileSize(analysis, filePath)...)
-	violations = append(violations, c.checkTypeExportsLocation(analysis, filePath)...)
-	violations = append(violations, c.checkMixedConcerns(analysis, filePath)...)
+	if c.config.isRuleEnabled("directConvexImports") {
+		violations = append(violations, c.checkDirectConvexImports(analysis, filePath)...)
+	}
+	if c.config.isRuleEnabled("stateInScreens") {
+		violations = append(violations, c.checkStateInScreens(analysis, filePath)...)
+	}
+	if c.config.isRuleEnabled("multipleExports") {
+		violations = append(violations, c.checkMultipleExports(analysis, filePath)...)
+	}
+	if c.config.isRuleEnabled("fileSize") {
+		violations = append(violations, c.checkFileSize(analysis, filePath)...)
+	}
+	if c.config.isRuleEnabled("typeExportsLocation") {
+		violations = append(violations, c.checkTypeExportsLocation(analysis, filePath)...)
+	}
+	if c.config.isRuleEnabled("mixedConcerns") {
+		violations = append(violations, c.checkMixedConcerns(analysis, filePath)...)
+	}
+
+	// Apply warnOnly overrides
+	for i := range violations {
+		if c.config.isWarnOnly(violations[i].RuleID) {
+			violations[i].Severity = "warning"
+		}
+	}
 
 	return violations
 }
@@ -264,6 +293,7 @@ func (c *SRPChecker) checkDirectConvexImports(analysis *SRPAnalysis, filePath st
 						Severity:   "error",
 						Message:    "Direct Convex imports forbidden outside data-layer",
 						Suggestion: "Use data-layer hooks instead",
+						RuleID:     "directConvexImports",
 					})
 					break
 				}
@@ -276,6 +306,7 @@ func (c *SRPChecker) checkDirectConvexImports(analysis *SRPAnalysis, filePath st
 				Severity:   "error",
 				Message:    "Direct Convex API imports forbidden outside data-layer",
 				Suggestion: "Use data-layer hooks instead",
+				RuleID:     "directConvexImports",
 			})
 		}
 
@@ -290,6 +321,7 @@ func (c *SRPChecker) checkDirectConvexImports(analysis *SRPAnalysis, filePath st
 						Severity:   "error",
 						Message:    fmt.Sprintf("Only Id and Doc types allowed from _generated/dataModel, found: %s", name),
 						Suggestion: "Use data-layer types instead, or import only Id/Doc",
+						RuleID:     "directConvexImports",
 					})
 					break
 				}
@@ -333,6 +365,7 @@ func (c *SRPChecker) checkStateInScreens(analysis *SRPAnalysis, filePath string)
 			Severity:   "error",
 			Message:    fmt.Sprintf("%s has state management (%s)", fileType, strings.Join(flaggedHooks, ", ")),
 			Suggestion: "Move state to content component or hook - screens are navigation-only",
+			RuleID:     "stateInScreens",
 		})
 	}
 
@@ -369,6 +402,7 @@ func (c *SRPChecker) checkMultipleExports(analysis *SRPAnalysis, filePath string
 			Severity:   "error",
 			Message:    fmt.Sprintf("Multiple exports (%d) in CRUD component", nonTypeExports),
 			Suggestion: "Split into separate files (one component per file)",
+			RuleID:     "multipleExports",
 		})
 	}
 
@@ -400,6 +434,7 @@ func (c *SRPChecker) checkFileSize(analysis *SRPAnalysis, filePath string) []SRP
 			Severity:   "warning",
 			Message:    fmt.Sprintf("%s file is %d lines (limit: %d)", fileType, lineCount, limits["screen"]),
 			Suggestion: "Move logic to content component",
+			RuleID:     "fileSize",
 		})
 	} else if strings.Contains(filePath, "/hooks/") && lineCount > limits["hook"] {
 		violations = append(violations, SRPViolation{
@@ -407,6 +442,7 @@ func (c *SRPChecker) checkFileSize(analysis *SRPAnalysis, filePath string) []SRP
 			Severity:   "warning",
 			Message:    fmt.Sprintf("Hook file is %d lines (limit: %d)", lineCount, limits["hook"]),
 			Suggestion: "Split into smaller hooks",
+			RuleID:     "fileSize",
 		})
 	} else if lineCount > limits["component"] {
 		violations = append(violations, SRPViolation{
@@ -414,6 +450,7 @@ func (c *SRPChecker) checkFileSize(analysis *SRPAnalysis, filePath string) []SRP
 			Severity:   "warning",
 			Message:    fmt.Sprintf("File is %d lines (limit: %d)", lineCount, limits["component"]),
 			Suggestion: "Consider splitting",
+			RuleID:     "fileSize",
 		})
 	}
 
@@ -445,6 +482,7 @@ func (c *SRPChecker) checkTypeExportsLocation(analysis *SRPAnalysis, filePath st
 				Severity:   "error",
 				Message:    fmt.Sprintf("Type export '%s' found outside types/ folder", exp.Name),
 				Suggestion: "Move type definitions to types/ folder",
+				RuleID:     "typeExportsLocation",
 			})
 		}
 	}
@@ -498,10 +536,138 @@ func (c *SRPChecker) checkMixedConcerns(analysis *SRPAnalysis, filePath string) 
 			Severity:   "error",
 			Message:    fmt.Sprintf("File mixes multiple concerns: %s", strings.Join(concerns, ", ")),
 			Suggestion: "Separate data fetching (hooks), state (hooks/content), and UI (components)",
+			RuleID:     "mixedConcerns",
 		})
 	}
 
 	return violations
+}
+
+// checkTestRequired checks that component/feature files have corresponding test files.
+func (c *SRPChecker) checkTestRequired(files []string) []SRPViolation {
+	var violations []SRPViolation
+	cfg := c.config.resolvedTestRequired()
+
+	for _, file := range files {
+		if !c.shouldCheckTestRequired(file, cfg) {
+			continue
+		}
+		if !c.hasTestFile(file, cfg) {
+			// Suggest a co-located test path
+			ext := filepath.Ext(file)
+			base := strings.TrimSuffix(file, ext)
+			suggestedTest := base + ".test" + ext
+
+			v := SRPViolation{
+				File:       file,
+				Severity:   "error",
+				Message:    "Missing test file",
+				Suggestion: fmt.Sprintf("Create %s", suggestedTest),
+				RuleID:     "testRequired",
+			}
+			if c.config.isWarnOnly("testRequired") {
+				v.Severity = "warning"
+			}
+			violations = append(violations, v)
+		}
+	}
+	return violations
+}
+
+// shouldCheckTestRequired returns true if the file should be checked for a test file.
+func (c *SRPChecker) shouldCheckTestRequired(file string, cfg TestRequiredConfig) bool {
+	// Must match one of the configured extensions
+	hasExt := false
+	for _, ext := range cfg.Extensions {
+		if strings.HasSuffix(file, ext) {
+			hasExt = true
+			break
+		}
+	}
+	if !hasExt {
+		return false
+	}
+
+	// Must not be a test file itself
+	for _, pattern := range cfg.TestPatterns {
+		if strings.HasSuffix(file, pattern) {
+			return false
+		}
+	}
+
+	// Must not be an excluded filename (basename match)
+	base := filepath.Base(file)
+	for _, excl := range cfg.ExcludeFiles {
+		if base == excl {
+			return false
+		}
+	}
+
+	// Must not match excluded paths (substring match)
+	for _, excl := range cfg.ExcludePaths {
+		if strings.Contains(file, excl) {
+			return false
+		}
+	}
+
+	// Must be in includePaths if specified (prefix match)
+	if len(cfg.IncludePaths) > 0 {
+		inIncluded := false
+		for _, inc := range cfg.IncludePaths {
+			if strings.Contains(file, inc) {
+				inIncluded = true
+				break
+			}
+		}
+		if !inIncluded {
+			return false
+		}
+	}
+
+	// Scope filter
+	switch cfg.Scope {
+	case "new":
+		if !c.newFiles[file] {
+			return false
+		}
+	case "changed":
+		// All staged files pass (the file list is already staged files)
+	case "all":
+		// Everything passes
+	default:
+		// Default to "new" behavior
+		if !c.newFiles[file] {
+			return false
+		}
+	}
+
+	return true
+}
+
+// hasTestFile checks whether a corresponding test file exists for the given source file.
+func (c *SRPChecker) hasTestFile(file string, cfg TestRequiredConfig) bool {
+	ext := filepath.Ext(file)
+	base := strings.TrimSuffix(file, ext)
+	dir := filepath.Dir(file)
+	baseName := strings.TrimSuffix(filepath.Base(file), ext)
+
+	stat := c.statFunc
+	if stat == nil {
+		stat = os.Stat
+	}
+
+	for _, pattern := range cfg.TestPatterns {
+		// Co-located: foo.test.tsx next to foo.tsx
+		if _, err := stat(base + pattern); err == nil {
+			return true
+		}
+		// __tests__ directory: dir/__tests__/foo.test.tsx
+		testsDir := filepath.Join(dir, "__tests__", baseName+pattern)
+		if _, err := stat(testsDir); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // getSRPAppNameFromPath extracts the app name from a file path
@@ -637,11 +803,12 @@ func writeSRPReport(errors, warnings []SRPViolation, baseDir string) error {
 
 // runSRPCheck is the entry point for SRP checking (uses default config)
 func runSRPCheck(stagedFiles []string) error {
-	return runSRPCheckWithFilter(SRPFilterResult{Files: stagedFiles}, SRPConfig{}, false)
+	return runSRPCheckWithFilter(SRPFilterResult{Files: stagedFiles}, SRPConfig{}, false, nil)
 }
 
-// runSRPCheckWithFilter runs SRP check with filter information displayed
-func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullMode bool) error {
+// runSRPCheckWithFilter runs SRP check with filter information displayed.
+// newFiles is a set of newly added files (for testRequired scope:"new"); nil means no scope filtering.
+func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullMode bool, newFiles map[string]bool) error {
 	if !compactMode() {
 		fmt.Println("================================")
 		fmt.Println("  SRP COMPLIANCE CHECK")
@@ -690,6 +857,7 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 	} else {
 		checker = NewSRPChecker(config)
 	}
+	checker.newFiles = newFiles
 	violations, err := checker.CheckFiles(filterResult.Files)
 	if err != nil {
 		return fmt.Errorf("SRP check failed: %w", err)

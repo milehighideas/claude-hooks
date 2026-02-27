@@ -30,6 +30,24 @@ func parseStagedFiles(output string) []string {
 	return files
 }
 
+// getNewlyAddedFiles returns a set of files that are newly added (not modified) in the staging area.
+func getNewlyAddedFiles() (map[string]bool, error) {
+	cmd := exec.Command("git", "diff", "--cached", "--name-only", "--diff-filter=A", "--relative")
+	output, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+
+	result := make(map[string]bool)
+	for _, line := range strings.Split(string(output), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			result[line] = true
+		}
+	}
+	return result, nil
+}
+
 // categorizeFiles separates files into app-specific groups and detects shared path changes
 // Returns:
 //   - appFiles: map of app name to files belonging to that app
