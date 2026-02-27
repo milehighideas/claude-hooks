@@ -244,11 +244,6 @@ func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
 		}
 	}
 
-	// NOTE: Re-exports are intentionally NOT parsed.
-	// Re-exports (e.g., `export { func } from './other'`) create duplicate function
-	// entries which cause hook name collisions. The original functions in their
-	// source files are parsed directly, so re-exports are unnecessary.
-
 	// Find all exported functions
 	matches := exportFunctionRe.FindAllStringSubmatchIndex(text, -1)
 
@@ -267,12 +262,6 @@ func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
 		startIdx := match[1]
 		funcBody := extractFunctionBody(text[startIdx:])
 
-		if funcName == "getProject" && strings.Contains(file.Path, "projects.ts") {
-			if len(funcBody) > 200 {
-			} else {
-			}
-		}
-
 		// Parse arguments
 		args, isPaginated, useFunctionArgs := p.parseArgs(funcBody)
 
@@ -285,6 +274,14 @@ func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
 			IsPaginated:     isPaginated,
 			UseFunctionArgs: useFunctionArgs,
 		})
+	}
+
+	// If no direct exports found, try resolving re-exports.
+	// Re-exports (e.g., `export { func } from './model/path'`) delegate to
+	// functions defined in other files. We follow them and use this file's
+	// namespace so the generated API path matches the Convex API.
+	if len(functions) == 0 && reExportRe.MatchString(text) {
+		functions = p.parseReExports(file, text)
 	}
 
 	return functions, nil
