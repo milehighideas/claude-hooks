@@ -60,7 +60,7 @@ func runTests(ctx TestRunContext) error {
 		// Build args based on package manager
 		var args []string
 		if pm == "bun" {
-			args = []string{"run", "--filter", appConfig.Filter, testCmd}
+			args = []string{"--filter", appConfig.Filter, testCmd}
 		} else {
 			args = []string{"--filter", appConfig.Filter, testCmd}
 		}
