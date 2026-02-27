@@ -891,7 +891,12 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 			printReportHint("srp/")
 			return fmt.Errorf("SRP violations found")
 		}
-		printStatus("SRP compliance", true, fmt.Sprintf("%d files", len(filterResult.Files)))
+		if len(warnings) > 0 && !config.HideWarnings {
+			printWarningStatus("SRP compliance", fmt.Sprintf("%d warnings, %d files", len(warnings), len(filterResult.Files)))
+			printReportHint("srp/")
+		} else {
+			printStatus("SRP compliance", true, fmt.Sprintf("%d files", len(filterResult.Files)))
+		}
 		return nil
 	}
 
