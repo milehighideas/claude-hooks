@@ -273,7 +273,8 @@ func (g *HooksGenerator) generateGroupedHookFileContent(topNamespace string, fun
 	}
 
 	// Detect function name collisions across sub-namespaces
-	// Only add sub-namespace to hook name when there's a collision
+	// Used by "auto" mode to add sub-namespace only when needed
+	hookNaming := g.config.DataLayer.HookNaming
 	funcNameCount := make(map[string]int)
 	for _, fn := range funcs {
 		baseName := "use" + capitalize(topNamespace) + capitalize(fn.Name)
@@ -285,6 +286,9 @@ func (g *HooksGenerator) generateGroupedHookFileContent(topNamespace string, fun
 			collisions[name] = true
 		}
 	}
+
+	// In "flat" mode, deduplicate: first function seen with a given baseName wins
+	seen := make(map[string]bool)
 
 	// Sort sub-namespaces for consistent output
 	var subNamespaces []string
@@ -378,31 +382,54 @@ func (g *HooksGenerator) generateGroupedHookFileContent(topNamespace string, fun
 
 		// Generate hooks for this sub-namespace
 		for _, fn := range subFuncs {
-			sb.WriteString(g.generateHook(topNamespace, fn, collisions))
+			hook, hookName := g.generateHook(topNamespace, fn, collisions, hookNaming)
+			if hookNaming == "flat" {
+				if seen[hookName] {
+					continue // skip duplicate — first-seen wins
+				}
+				seen[hookName] = true
+			}
+			sb.WriteString(hook)
 		}
 	}
 
 	return sb.String()
 }
 
-// generateHook creates a single hook function matching TypeScript output format
-func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, collisions map[string]bool) string {
+// generateHook creates a single hook function matching TypeScript output format.
+// Returns the generated code and the hookName (used by caller for dedup in flat mode).
+func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, collisions map[string]bool, hookNaming string) (string, string) {
 	var sb strings.Builder
 
 	// Base hook name without sub-namespace
 	baseName := "use" + capitalize(topNamespace) + capitalize(fn.Name)
 
-	// Only include sub-namespace if there's a collision with another function
+	// Determine hook name based on naming strategy
 	var hookName string
-	if collisions[baseName] {
+	switch hookNaming {
+	case "qualified":
+		// Always include sub-namespace
 		subNs := getSubNamespace(fn.Namespace)
 		if subNs != "" && subNs != topNamespace {
 			hookName = "use" + capitalize(topNamespace) + capitalize(toCamelCase(subNs)) + capitalize(fn.Name)
 		} else {
 			hookName = baseName
 		}
-	} else {
+	case "flat":
+		// Never include sub-namespace
 		hookName = baseName
+	default: // "auto"
+		// Include sub-namespace only on collision
+		if collisions[baseName] {
+			subNs := getSubNamespace(fn.Namespace)
+			if subNs != "" && subNs != topNamespace {
+				hookName = "use" + capitalize(topNamespace) + capitalize(toCamelCase(subNs)) + capitalize(fn.Name)
+			} else {
+				hookName = baseName
+			}
+		} else {
+			hookName = baseName
+		}
 	}
 	apiPath := toApiPath(fn.Namespace, fn.Name)
 
@@ -456,7 +483,7 @@ func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, co
 	sb.WriteString(g.generateHookBodyV2(fn, apiPath))
 	sb.WriteString("}\n\n")
 
-	return sb.String()
+	return sb.String(), hookName
 }
 
 // generateSplitHook creates a hook for split files - always includes sub-namespace in name

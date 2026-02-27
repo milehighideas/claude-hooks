@@ -32,6 +32,7 @@ type DataLayerConfig struct {
 	APIDir        string `json:"apiDir"`        // e.g., "generated-api"
 	TypesDir      string `json:"typesDir"`      // e.g., "generated-types"
 	FileStructure string `json:"fileStructure"` // "grouped", "split", or "both"
+	HookNaming    string `json:"hookNaming"`    // "flat" (no sub-namespace), "qualified" (always sub-namespace), or "auto" (sub-namespace only on collision)
 	ExportAPI     bool   `json:"exportApi"`     // Re-export { api } from the generated-api index
 }
 
@@ -130,6 +131,9 @@ func applyConfigDefaults(config *Config) {
 	}
 	if config.DataLayer.FileStructure == "" {
 		config.DataLayer.FileStructure = "grouped" // default to grouped (single file per namespace)
+	}
+	if config.DataLayer.HookNaming == "" {
+		config.DataLayer.HookNaming = "flat" // default to flat for backward compatibility
 	}
 
 	// Imports defaults - prefer package aliases
