@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -327,10 +329,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithTest},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "all",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			wantCount: 0,
 		},
@@ -339,10 +341,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithoutTest},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "all",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			wantCount: 1,
 		},
@@ -351,10 +353,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithTestsDir},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "all",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			wantCount: 0,
 		},
@@ -363,11 +365,11 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{filepath.Join(tmpDir, "index.tsx")},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:        "all",
 					Extensions:   []string{".tsx"},
 					ExcludeFiles: []string{"index.tsx"},
-				},
+				}},
 			},
 			wantCount: 0,
 		},
@@ -376,11 +378,11 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{filepath.Join(tmpDir, "__mocks__", "Foo.tsx")},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:        "all",
 					Extensions:   []string{".tsx"},
 					ExcludePaths: []string{"__mocks__/"},
-				},
+				}},
 			},
 			wantCount: 0,
 		},
@@ -389,11 +391,11 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithoutTest},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:        "all",
 					Extensions:   []string{".tsx"},
 					IncludePaths: []string{"src/features/"},
-				},
+				}},
 			},
 			wantCount: 0,
 		},
@@ -402,10 +404,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithoutTest},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "new",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			newFiles:  map[string]bool{}, // srcWithoutTest not in newFiles
 			wantCount: 0,
@@ -415,10 +417,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithoutTest},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "new",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			newFiles:  map[string]bool{srcWithoutTest: true},
 			wantCount: 1,
@@ -429,10 +431,10 @@ func TestCheckTestRequired(t *testing.T) {
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
 				WarnOnly:     []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "all",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			wantCount: 1,
 		},
@@ -441,10 +443,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithoutTest},
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "changed",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			changedFiles: map[string]bool{srcWithoutTest: true},
 			wantCount:    1,
@@ -454,10 +456,10 @@ func TestCheckTestRequired(t *testing.T) {
 			files: []string{srcWithoutTest, srcWithTest}, // full file list
 			config: SRPConfig{
 				EnabledRules: []string{"testRequired"},
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "changed",
 					Extensions: []string{".tsx"},
-				},
+				}},
 			},
 			changedFiles: map[string]bool{srcWithTest: true}, // only srcWithTest is staged
 			wantCount:    0,                                  // srcWithTest has a test, srcWithoutTest is not staged
@@ -488,13 +490,15 @@ func TestCheckTestRequired(t *testing.T) {
 
 func TestResolvedTestRequired(t *testing.T) {
 	tests := []struct {
-		name   string
-		config SRPConfig
-		want   TestRequiredConfig
+		name      string
+		config    SRPConfig
+		wantCount int
+		want      TestRequiredConfig // checked against first element
 	}{
 		{
-			name:   "nil config returns defaults",
-			config: SRPConfig{},
+			name:      "nil config returns single default profile",
+			config:    SRPConfig{},
+			wantCount: 1,
 			want: TestRequiredConfig{
 				Scope:        "new",
 				Extensions:   []string{".tsx"},
@@ -502,15 +506,33 @@ func TestResolvedTestRequired(t *testing.T) {
 			},
 		},
 		{
-			name: "partial config merges with defaults",
+			name: "single legacy profile merges with defaults",
 			config: SRPConfig{
-				TestRequired: &TestRequiredConfig{
+				TestRequired: TestRequiredProfiles{{
 					Scope:      "changed",
 					Extensions: []string{".tsx", ".ts"},
-				},
+				}},
 			},
+			wantCount: 1,
 			want: TestRequiredConfig{
 				Scope:        "changed",
+				Extensions:   []string{".tsx", ".ts"},
+				TestPatterns: []string{".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts"},
+				Name:         "profile-0",
+			},
+		},
+		{
+			name: "multiple profiles each get defaults",
+			config: SRPConfig{
+				TestRequired: TestRequiredProfiles{
+					{Name: "unit", Scope: "all", Extensions: []string{".tsx", ".ts"}},
+					{Name: "e2e", Extensions: []string{".tsx"}, TestPatterns: []string{".yaml"}, TestDirs: []string{"flows/"}},
+				},
+			},
+			wantCount: 2,
+			want: TestRequiredConfig{
+				Name:         "unit",
+				Scope:        "all",
 				Extensions:   []string{".tsx", ".ts"},
 				TestPatterns: []string{".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts"},
 			},
@@ -520,15 +542,297 @@ func TestResolvedTestRequired(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := tt.config.resolvedTestRequired()
-			if got.Scope != tt.want.Scope {
-				t.Errorf("Scope = %q, want %q", got.Scope, tt.want.Scope)
+			if len(got) != tt.wantCount {
+				t.Fatalf("got %d profiles, want %d", len(got), tt.wantCount)
 			}
-			if len(got.Extensions) != len(tt.want.Extensions) {
-				t.Errorf("Extensions = %v, want %v", got.Extensions, tt.want.Extensions)
+			first := got[0]
+			if first.Scope != tt.want.Scope {
+				t.Errorf("Scope = %q, want %q", first.Scope, tt.want.Scope)
 			}
-			if len(got.TestPatterns) != len(tt.want.TestPatterns) {
-				t.Errorf("TestPatterns = %v, want %v", got.TestPatterns, tt.want.TestPatterns)
+			if len(first.Extensions) != len(tt.want.Extensions) {
+				t.Errorf("Extensions = %v, want %v", first.Extensions, tt.want.Extensions)
+			}
+			if len(first.TestPatterns) != len(tt.want.TestPatterns) {
+				t.Errorf("TestPatterns = %v, want %v", first.TestPatterns, tt.want.TestPatterns)
+			}
+			if tt.want.Name != "" && first.Name != tt.want.Name {
+				t.Errorf("Name = %q, want %q", first.Name, tt.want.Name)
 			}
 		})
+	}
+}
+
+func TestTestRequiredProfiles_UnmarshalJSON(t *testing.T) {
+	tests := []struct {
+		name      string
+		input     string
+		wantCount int
+		wantName  string // first profile name (if set)
+	}{
+		{
+			name:      "null returns empty",
+			input:     `{"testRequired": null}`,
+			wantCount: 0,
+		},
+		{
+			name:      "object unmarshals as single-element array",
+			input:     `{"testRequired": {"name": "unit", "scope": "all"}}`,
+			wantCount: 1,
+			wantName:  "unit",
+		},
+		{
+			name:      "array unmarshals as array",
+			input:     `{"testRequired": [{"name": "unit"}, {"name": "e2e"}]}`,
+			wantCount: 2,
+			wantName:  "unit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var cfg SRPConfig
+			if err := json.Unmarshal([]byte(tt.input), &cfg); err != nil {
+				t.Fatalf("unmarshal error: %v", err)
+			}
+			if len(cfg.TestRequired) != tt.wantCount {
+				t.Errorf("got %d profiles, want %d", len(cfg.TestRequired), tt.wantCount)
+			}
+			if tt.wantName != "" && len(cfg.TestRequired) > 0 {
+				if cfg.TestRequired[0].Name != tt.wantName {
+					t.Errorf("first profile name = %q, want %q", cfg.TestRequired[0].Name, tt.wantName)
+				}
+			}
+		})
+	}
+}
+
+func TestCheckTestRequired_TestDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Source file without co-located test
+	srcFile := filepath.Join(tmpDir, "src", "app", "search-results.tsx")
+	os.MkdirAll(filepath.Join(tmpDir, "src", "app"), 0755)
+	os.WriteFile(srcFile, []byte("export default function SearchResults() {}"), 0644)
+
+	// Test file in a testDir (basename match)
+	maestroDir := filepath.Join(tmpDir, ".maestro", "flows")
+	os.MkdirAll(maestroDir, 0755)
+	os.WriteFile(filepath.Join(maestroDir, "search-results.yaml"), []byte("appId: com.test"), 0644)
+
+	// Second testDir (empty — should still be searched)
+	altDir := filepath.Join(tmpDir, "e2e")
+	os.MkdirAll(altDir, 0755)
+
+	tests := []struct {
+		name      string
+		testDirs  []string
+		wantCount int
+	}{
+		{
+			name:      "found in testDir passes",
+			testDirs:  []string{maestroDir},
+			wantCount: 0,
+		},
+		{
+			name:      "not found in testDir produces violation",
+			testDirs:  []string{altDir},
+			wantCount: 1,
+		},
+		{
+			name:      "multiple testDirs searched — found in second",
+			testDirs:  []string{altDir, maestroDir},
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := &SRPChecker{
+				config: SRPConfig{
+					EnabledRules: []string{"testRequired"},
+					TestRequired: TestRequiredProfiles{{
+						Name:         "e2e-mobile",
+						Scope:        "all",
+						Extensions:   []string{".tsx"},
+						TestPatterns: []string{".yaml"},
+						TestDirs:     tt.testDirs,
+					}},
+				},
+				statFunc: os.Stat,
+			}
+			violations := checker.checkTestRequired([]string{srcFile})
+			if len(violations) != tt.wantCount {
+				t.Errorf("got %d violations, want %d: %+v", len(violations), tt.wantCount, violations)
+			}
+			// Verify violation includes profile name
+			if tt.wantCount > 0 && len(violations) > 0 {
+				if !strings.Contains(violations[0].Message, "e2e-mobile") {
+					t.Errorf("violation message %q should contain profile name", violations[0].Message)
+				}
+			}
+			// Verify suggestion uses testDir path
+			if tt.wantCount > 0 && len(violations) > 0 {
+				if !strings.Contains(violations[0].Suggestion, tt.testDirs[0]) {
+					t.Errorf("suggestion %q should reference testDir %q", violations[0].Suggestion, tt.testDirs[0])
+				}
+			}
+		})
+	}
+}
+
+func TestCheckTestRequired_PerProfileSeverity(t *testing.T) {
+	tmpDir := t.TempDir()
+	srcFile := filepath.Join(tmpDir, "Foo.tsx")
+	os.WriteFile(srcFile, []byte("export function Foo() {}"), 0644)
+
+	tests := []struct {
+		name         string
+		severity     string
+		warnOnly     []string
+		wantSeverity string
+	}{
+		{
+			name:         "default severity is error",
+			severity:     "",
+			wantSeverity: "error",
+		},
+		{
+			name:         "profile severity warning",
+			severity:     "warning",
+			wantSeverity: "warning",
+		},
+		{
+			name:         "profile severity error",
+			severity:     "error",
+			wantSeverity: "error",
+		},
+		{
+			name:         "global warnOnly overrides profile error to warning",
+			severity:     "error",
+			warnOnly:     []string{"testRequired"},
+			wantSeverity: "warning",
+		},
+		{
+			name:         "global warnOnly overrides default to warning",
+			severity:     "",
+			warnOnly:     []string{"testRequired"},
+			wantSeverity: "warning",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			checker := &SRPChecker{
+				config: SRPConfig{
+					EnabledRules: []string{"testRequired"},
+					WarnOnly:     tt.warnOnly,
+					TestRequired: TestRequiredProfiles{{
+						Scope:      "all",
+						Extensions: []string{".tsx"},
+						Severity:   tt.severity,
+					}},
+				},
+				statFunc: os.Stat,
+			}
+			violations := checker.checkTestRequired([]string{srcFile})
+			if len(violations) == 0 {
+				t.Fatal("expected at least 1 violation")
+			}
+			if violations[0].Severity != tt.wantSeverity {
+				t.Errorf("got severity %q, want %q", violations[0].Severity, tt.wantSeverity)
+			}
+		})
+	}
+}
+
+func TestCheckTestRequired_MultipleProfiles(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Source file with a unit test but no e2e test
+	srcFile := filepath.Join(tmpDir, "src", "Button.tsx")
+	os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	os.WriteFile(srcFile, []byte("export function Button() {}"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "src", "Button.test.tsx"), []byte("test('Button')"), 0644)
+
+	e2eDir := filepath.Join(tmpDir, "flows")
+	os.MkdirAll(e2eDir, 0755)
+	// No Button.yaml in flows/
+
+	checker := &SRPChecker{
+		config: SRPConfig{
+			EnabledRules: []string{"testRequired"},
+			TestRequired: TestRequiredProfiles{
+				{
+					Name:       "unit",
+					Scope:      "all",
+					Extensions: []string{".tsx"},
+				},
+				{
+					Name:         "e2e",
+					Scope:        "all",
+					Extensions:   []string{".tsx"},
+					TestPatterns: []string{".yaml"},
+					TestDirs:     []string{e2eDir},
+					Severity:     "warning",
+				},
+			},
+		},
+		statFunc: os.Stat,
+	}
+
+	violations := checker.checkTestRequired([]string{srcFile})
+	// Unit profile should pass (has Button.test.tsx), e2e should fail (no Button.yaml in flows/)
+	if len(violations) != 1 {
+		t.Fatalf("got %d violations, want 1: %+v", len(violations), violations)
+	}
+	if !strings.Contains(violations[0].Message, "e2e") {
+		t.Errorf("violation should be from e2e profile, got: %s", violations[0].Message)
+	}
+	if violations[0].Severity != "warning" {
+		t.Errorf("e2e violation should be warning, got: %s", violations[0].Severity)
+	}
+}
+
+func TestHasTestFile_TestDirs(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Source file
+	srcFile := filepath.Join(tmpDir, "src", "profile.tsx")
+	os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	os.WriteFile(srcFile, []byte("export function Profile() {}"), 0644)
+
+	// Test in testDir
+	testDir := filepath.Join(tmpDir, "e2e")
+	os.MkdirAll(testDir, 0755)
+	os.WriteFile(filepath.Join(testDir, "profile.spec.ts"), []byte("test('profile')"), 0644)
+
+	// Co-located test (separate case)
+	colocatedSrc := filepath.Join(tmpDir, "src", "settings.tsx")
+	os.WriteFile(colocatedSrc, []byte("export function Settings() {}"), 0644)
+	os.WriteFile(filepath.Join(tmpDir, "src", "settings.test.tsx"), []byte("test('settings')"), 0644)
+
+	checker := &SRPChecker{statFunc: os.Stat}
+
+	cfg := TestRequiredConfig{
+		Extensions:   []string{".tsx"},
+		TestPatterns: []string{".spec.ts", ".test.tsx"},
+		TestDirs:     []string{testDir},
+	}
+
+	// profile.tsx should be found via testDir (profile.spec.ts)
+	if !checker.hasTestFile(srcFile, cfg) {
+		t.Error("expected hasTestFile=true for profile.tsx (found in testDir)")
+	}
+
+	// settings.tsx should be found via co-located (settings.test.tsx)
+	if !checker.hasTestFile(colocatedSrc, cfg) {
+		t.Error("expected hasTestFile=true for settings.tsx (co-located)")
+	}
+
+	// nonexistent.tsx should not be found
+	noFile := filepath.Join(tmpDir, "src", "nonexistent.tsx")
+	os.WriteFile(noFile, []byte("export function X() {}"), 0644)
+	if checker.hasTestFile(noFile, cfg) {
+		t.Error("expected hasTestFile=false for nonexistent.tsx")
 	}
 }

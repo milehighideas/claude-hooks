@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 )
@@ -185,12 +187,16 @@ type SRPConfig struct {
 	// WarnOnly specifies rules whose violations should be downgraded to warnings
 	// instead of errors, making them non-blocking.
 	WarnOnly []string `json:"warnOnly"`
-	// TestRequired configures the testRequired rule (requires enabledRules to include "testRequired")
-	TestRequired *TestRequiredConfig `json:"testRequired"`
+	// TestRequired configures the testRequired rule (requires enabledRules to include "testRequired").
+	// Accepts a single object (legacy) or an array of named profiles.
+	TestRequired TestRequiredProfiles `json:"testRequired"`
 }
 
 // TestRequiredConfig configures the testRequired SRP rule
 type TestRequiredConfig struct {
+	// Name identifies this profile in violation messages (e.g., "unit", "e2e-mobile").
+	// Auto-generated as "profile-0", "profile-1", etc. when unset.
+	Name string `json:"name"`
 	// Scope controls which files are checked: "new" (only newly added), "changed" (all staged), "all" (everything).
 	// Default: "new"
 	Scope string `json:"scope"`
@@ -198,12 +204,43 @@ type TestRequiredConfig struct {
 	Extensions []string `json:"extensions"`
 	// TestPatterns specifies test file suffixes to look for. Default: [".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts"]
 	TestPatterns []string `json:"testPatterns"`
+	// TestDirs specifies repo-root-relative directories to search for test files (basename match).
+	// Example: ["apps/native/.maestro/flows"] matches source basename against files in that directory.
+	TestDirs []string `json:"testDirs"`
 	// IncludePaths restricts checking to files within these paths (prefix match). If empty, all paths checked.
 	IncludePaths []string `json:"includePaths"`
 	// ExcludePaths skips files matching these patterns (substring match)
 	ExcludePaths []string `json:"excludePaths"`
 	// ExcludeFiles skips exact filenames (basename match, e.g., "index.tsx", "_layout.tsx")
 	ExcludeFiles []string `json:"excludeFiles"`
+	// Severity controls violation severity: "error" (default) or "warning".
+	// Global warnOnly for "testRequired" overrides this to "warning".
+	Severity string `json:"severity"`
+}
+
+// TestRequiredProfiles wraps []TestRequiredConfig with backwards-compatible JSON unmarshaling.
+// Accepts a single object (legacy) or an array of named profiles.
+type TestRequiredProfiles []TestRequiredConfig
+
+func (t *TestRequiredProfiles) UnmarshalJSON(data []byte) error {
+	data = bytes.TrimSpace(data)
+	if len(data) == 0 || string(data) == "null" {
+		return nil
+	}
+	if data[0] == '[' {
+		var arr []TestRequiredConfig
+		if err := json.Unmarshal(data, &arr); err != nil {
+			return err
+		}
+		*t = arr
+		return nil
+	}
+	var single TestRequiredConfig
+	if err := json.Unmarshal(data, &single); err != nil {
+		return err
+	}
+	*t = []TestRequiredConfig{single}
+	return nil
 }
 
 // resolvedScreenHooks returns the set of hooks to check in screens,
@@ -270,27 +307,33 @@ func (c SRPConfig) isWarnOnly(rule string) bool {
 	return false
 }
 
-// resolvedTestRequired returns the TestRequiredConfig with defaults applied.
-func (c SRPConfig) resolvedTestRequired() TestRequiredConfig {
+// resolvedTestRequired returns test profiles with defaults applied per profile.
+func (c SRPConfig) resolvedTestRequired() []TestRequiredConfig {
 	defaults := TestRequiredConfig{
 		Scope:        "new",
 		Extensions:   []string{".tsx"},
 		TestPatterns: []string{".test.tsx", ".test.ts", ".spec.tsx", ".spec.ts"},
 	}
-	if c.TestRequired == nil {
-		return defaults
+	if len(c.TestRequired) == 0 {
+		return []TestRequiredConfig{defaults}
 	}
-	cfg := *c.TestRequired
-	if cfg.Scope == "" {
-		cfg.Scope = defaults.Scope
+	result := make([]TestRequiredConfig, len(c.TestRequired))
+	for i, cfg := range c.TestRequired {
+		if cfg.Scope == "" {
+			cfg.Scope = defaults.Scope
+		}
+		if len(cfg.Extensions) == 0 {
+			cfg.Extensions = defaults.Extensions
+		}
+		if len(cfg.TestPatterns) == 0 {
+			cfg.TestPatterns = defaults.TestPatterns
+		}
+		if cfg.Name == "" {
+			cfg.Name = fmt.Sprintf("profile-%d", i)
+		}
+		result[i] = cfg
 	}
-	if len(cfg.Extensions) == 0 {
-		cfg.Extensions = defaults.Extensions
-	}
-	if len(cfg.TestPatterns) == 0 {
-		cfg.TestPatterns = defaults.TestPatterns
-	}
-	return cfg
+	return result
 }
 
 // stripJSONComments removes single-line // comments from JSONC content.

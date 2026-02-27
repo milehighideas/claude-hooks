@@ -545,31 +545,45 @@ func (c *SRPChecker) checkMixedConcerns(analysis *SRPAnalysis, filePath string) 
 }
 
 // checkTestRequired checks that component/feature files have corresponding test files.
+// Each profile is evaluated independently against the file list.
 func (c *SRPChecker) checkTestRequired(files []string) []SRPViolation {
 	var violations []SRPViolation
-	cfg := c.config.resolvedTestRequired()
+	profiles := c.config.resolvedTestRequired()
 
-	for _, file := range files {
-		if !c.shouldCheckTestRequired(file, cfg) {
-			continue
-		}
-		if !c.hasTestFile(file, cfg) {
-			// Suggest a co-located test path
-			ext := filepath.Ext(file)
-			base := strings.TrimSuffix(file, ext)
-			suggestedTest := base + ".test" + ext
+	for _, cfg := range profiles {
+		for _, file := range files {
+			if !c.shouldCheckTestRequired(file, cfg) {
+				continue
+			}
+			if !c.hasTestFile(file, cfg) {
+				ext := filepath.Ext(file)
+				base := strings.TrimSuffix(file, ext)
 
-			v := SRPViolation{
-				File:       file,
-				Severity:   "error",
-				Message:    "Missing test file",
-				Suggestion: fmt.Sprintf("Create %s", suggestedTest),
-				RuleID:     "testRequired",
+				// Suggest path based on first testDir if available, else co-located
+				var suggestedTest string
+				if len(cfg.TestDirs) > 0 {
+					baseName := strings.TrimSuffix(filepath.Base(file), ext)
+					suggestedTest = filepath.Join(cfg.TestDirs[0], baseName+cfg.TestPatterns[0])
+				} else {
+					suggestedTest = base + ".test" + ext
+				}
+
+				severity := "error"
+				if cfg.Severity == "warning" {
+					severity = "warning"
+				}
+				if c.config.isWarnOnly("testRequired") {
+					severity = "warning"
+				}
+
+				violations = append(violations, SRPViolation{
+					File:       file,
+					Severity:   severity,
+					Message:    fmt.Sprintf("Missing test file (%s)", cfg.Name),
+					Suggestion: fmt.Sprintf("Create %s", suggestedTest),
+					RuleID:     "testRequired",
+				})
 			}
-			if c.config.isWarnOnly("testRequired") {
-				v.Severity = "warning"
-			}
-			violations = append(violations, v)
 		}
 	}
 	return violations
@@ -649,6 +663,7 @@ func (c *SRPChecker) shouldCheckTestRequired(file string, cfg TestRequiredConfig
 }
 
 // hasTestFile checks whether a corresponding test file exists for the given source file.
+// It searches in three locations: co-located, __tests__/ subdirectory, and configured testDirs.
 func (c *SRPChecker) hasTestFile(file string, cfg TestRequiredConfig) bool {
 	ext := filepath.Ext(file)
 	base := strings.TrimSuffix(file, ext)
@@ -661,14 +676,19 @@ func (c *SRPChecker) hasTestFile(file string, cfg TestRequiredConfig) bool {
 	}
 
 	for _, pattern := range cfg.TestPatterns {
-		// Co-located: foo.test.tsx next to foo.tsx
+		// 1. Co-located: foo.test.tsx next to foo.tsx
 		if _, err := stat(base + pattern); err == nil {
 			return true
 		}
-		// __tests__ directory: dir/__tests__/foo.test.tsx
-		testsDir := filepath.Join(dir, "__tests__", baseName+pattern)
-		if _, err := stat(testsDir); err == nil {
+		// 2. __tests__ directory: dir/__tests__/foo.test.tsx
+		if _, err := stat(filepath.Join(dir, "__tests__", baseName+pattern)); err == nil {
 			return true
+		}
+		// 3. testDirs: each configured directory (repo-root-relative, basename match)
+		for _, testDir := range cfg.TestDirs {
+			if _, err := stat(filepath.Join(testDir, baseName+pattern)); err == nil {
+				return true
+			}
 		}
 	}
 	return false
