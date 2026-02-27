@@ -315,11 +315,12 @@ func TestCheckTestRequired(t *testing.T) {
 	os.WriteFile(filepath.Join(testsDir, "Modal.test.tsx"), []byte("test('Modal', () => {})"), 0644)
 
 	tests := []struct {
-		name       string
-		files      []string
-		config     SRPConfig
-		newFiles   map[string]bool
-		wantCount  int
+		name         string
+		files        []string
+		config       SRPConfig
+		newFiles     map[string]bool
+		changedFiles map[string]bool
+		wantCount    int
 	}{
 		{
 			name:  "file with co-located test passes",
@@ -435,14 +436,41 @@ func TestCheckTestRequired(t *testing.T) {
 			},
 			wantCount: 1,
 		},
+		{
+			name:  "scope changed checks only staged files",
+			files: []string{srcWithoutTest},
+			config: SRPConfig{
+				EnabledRules: []string{"testRequired"},
+				TestRequired: &TestRequiredConfig{
+					Scope:      "changed",
+					Extensions: []string{".tsx"},
+				},
+			},
+			changedFiles: map[string]bool{srcWithoutTest: true},
+			wantCount:    1,
+		},
+		{
+			name:  "scope changed skips non-staged files (fullSRPOnCommit scenario)",
+			files: []string{srcWithoutTest, srcWithTest}, // full file list
+			config: SRPConfig{
+				EnabledRules: []string{"testRequired"},
+				TestRequired: &TestRequiredConfig{
+					Scope:      "changed",
+					Extensions: []string{".tsx"},
+				},
+			},
+			changedFiles: map[string]bool{srcWithTest: true}, // only srcWithTest is staged
+			wantCount:    0,                                  // srcWithTest has a test, srcWithoutTest is not staged
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			checker := &SRPChecker{
-				config:   tt.config,
-				statFunc: os.Stat,
-				newFiles: tt.newFiles,
+				config:       tt.config,
+				statFunc:     os.Stat,
+				newFiles:     tt.newFiles,
+				changedFiles: tt.changedFiles,
 			}
 			violations := checker.checkTestRequired(tt.files)
 			if len(violations) != tt.wantCount {

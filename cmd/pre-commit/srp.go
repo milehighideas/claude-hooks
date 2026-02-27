@@ -56,7 +56,8 @@ type SRPChecker struct {
 	statFunc      func(file string) (os.FileInfo, error) // for test file existence checks
 	useFilesystem bool
 	config        SRPConfig
-	newFiles      map[string]bool // newly added files (git diff --diff-filter=A)
+	newFiles      map[string]bool     // newly added files (git diff --diff-filter=A)
+	changedFiles  map[string]bool     // all staged files (git diff --cached --diff-filter=ACMR)
 }
 
 // NewSRPChecker creates a new SRP checker that reads from git staged content
@@ -624,18 +625,21 @@ func (c *SRPChecker) shouldCheckTestRequired(file string, cfg TestRequiredConfig
 		}
 	}
 
-	// Scope filter
+	// Scope filter: controls which files are eligible for the test requirement.
+	// With fullSRPOnCommit the file list may contain ALL files in appPaths,
+	// so "changed" must explicitly check against the staged file set.
 	switch cfg.Scope {
 	case "new":
 		if !c.newFiles[file] {
 			return false
 		}
 	case "changed":
-		// All staged files pass (the file list is already staged files)
+		if c.changedFiles != nil && !c.changedFiles[file] {
+			return false
+		}
 	case "all":
 		// Everything passes
 	default:
-		// Default to "new" behavior
 		if !c.newFiles[file] {
 			return false
 		}
@@ -803,12 +807,13 @@ func writeSRPReport(errors, warnings []SRPViolation, baseDir string) error {
 
 // runSRPCheck is the entry point for SRP checking (uses default config)
 func runSRPCheck(stagedFiles []string) error {
-	return runSRPCheckWithFilter(SRPFilterResult{Files: stagedFiles}, SRPConfig{}, false, nil)
+	return runSRPCheckWithFilter(SRPFilterResult{Files: stagedFiles}, SRPConfig{}, false, nil, nil)
 }
 
 // runSRPCheckWithFilter runs SRP check with filter information displayed.
-// newFiles is a set of newly added files (for testRequired scope:"new"); nil means no scope filtering.
-func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullMode bool, newFiles map[string]bool) error {
+// newFiles is a set of newly added files (for testRequired scope:"new").
+// changedFiles is all staged files (for testRequired scope:"changed"); nil disables scope filtering.
+func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullMode bool, newFiles, changedFiles map[string]bool) error {
 	if !compactMode() {
 		fmt.Println("================================")
 		fmt.Println("  SRP COMPLIANCE CHECK")
@@ -858,6 +863,7 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 		checker = NewSRPChecker(config)
 	}
 	checker.newFiles = newFiles
+	checker.changedFiles = changedFiles
 	violations, err := checker.CheckFiles(filterResult.Files)
 	if err != nil {
 		return fmt.Errorf("SRP check failed: %w", err)

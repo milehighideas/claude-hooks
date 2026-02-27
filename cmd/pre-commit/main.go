@@ -362,14 +362,19 @@ func run() error {
 			srpFiles = stagedFiles
 		}
 
-		// Get newly added files for testRequired scope:"new"
-		var newFiles map[string]bool
+		// Build scope maps for testRequired rule
+		var newFiles, changedFiles map[string]bool
 		if config.SRPConfig.isRuleEnabled("testRequired") {
 			newFiles, _ = getNewlyAddedFiles()
+			// Build changedFiles set so scope:"changed" works with fullSRPOnCommit
+			changedFiles = make(map[string]bool, len(stagedFiles))
+			for _, f := range stagedFiles {
+				changedFiles[f] = true
+			}
 		}
 
 		filterResult := filterFilesForSRPWithDetails(srpFiles, config.SRPConfig)
-		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, fullMode, newFiles))
+		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, fullMode, newFiles, changedFiles))
 	}
 
 	// Test files check
@@ -703,7 +708,7 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runFrontendStructureCheck(config.Apps, files)
 	case "srp":
 		filterResult := filterFilesForSRPWithDetails(files, config.SRPConfig)
-		return runSRPCheckWithFilter(filterResult, config.SRPConfig, true, nil)
+		return runSRPCheckWithFilter(filterResult, config.SRPConfig, true, nil, nil)
 	case "mockCheck":
 		return runMockCheck(files, config.MockCheck)
 	case "consoleCheck":
@@ -785,7 +790,7 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	// SRP check
 	if config.Features.SRP {
 		filterResult := filterFilesForSRPWithDetails(files, config.SRPConfig)
-		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, true, nil))
+		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, true, nil, nil))
 	}
 
 	// Mock check
