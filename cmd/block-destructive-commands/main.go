@@ -367,6 +367,7 @@ var allowedGitSubcommands = map[string]bool{
 	"diff-index":   true,
 	"hash-object":  true, // read-only unless -w, but low risk
 	"var":          true,
+	"worktree":     true, // list/add allowed; remove/prune caught by modifying patterns
 }
 
 // gitModifyingSubcommands are subcommands that are allowed in the whitelist above but
@@ -380,6 +381,9 @@ var gitModifyingPatterns = []pattern{
 	{regex: regexp.MustCompile(`(?i)\bgit\s+tag\s+(-a|--annotate|-s|--sign|-f|--force)\b`), name: "git tag create"},
 	// git tag <name> (creating a tag - has a non-flag argument)
 	{regex: regexp.MustCompile(`(?i)\bgit\s+tag\s+[^-]\S*\s`), name: "git tag create"},
+
+	// git worktree - allow list/add but block remove/prune
+	{regex: regexp.MustCompile(`(?i)\bgit\s+worktree\s+(remove|prune)\b`), name: "git worktree modification (only list and add allowed)"},
 
 	// git config - all modifications blocked
 	{regex: regexp.MustCompile(`(?i)\bgit\s+config\b`), name: "git config (user must modify config manually)"},
