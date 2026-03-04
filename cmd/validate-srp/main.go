@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
 // CLI flags
@@ -30,17 +32,12 @@ func loadScreenHooksConfig() {
 
 	screenHooksConfig = defaults
 
-	data, err := os.ReadFile(".pre-commit.json")
-	if err != nil {
-		return
-	}
-
 	var raw struct {
 		SRPConfig struct {
 			ScreenHooks []string `json:"screenHooks"`
 		} `json:"srpConfig"`
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
+	if err := jsonc.Unmarshal(".pre-commit.json", &raw); err != nil {
 		return
 	}
 

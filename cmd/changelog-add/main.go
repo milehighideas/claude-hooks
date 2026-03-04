@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -10,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
 var validTypes = map[string]bool{
@@ -133,16 +134,12 @@ func findProjectRoot() (string, error) {
 	}
 }
 
-// loadConfig loads the full configuration from .pre-commit.json
+// loadConfig loads the full configuration from .pre-commit.json (supports JSONC comments)
 func loadConfig(projectRoot string) (*PreCommitConfig, error) {
 	configPath := filepath.Join(projectRoot, ".pre-commit.json")
-	data, err := os.ReadFile(configPath)
-	if err != nil {
-		return nil, err
-	}
 
 	var config PreCommitConfig
-	if err := json.Unmarshal(data, &config); err != nil {
+	if err := jsonc.Unmarshal(configPath, &config); err != nil {
 		return nil, err
 	}
 
