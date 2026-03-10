@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
 func TestLoadConfig(t *testing.T) {
@@ -547,7 +549,7 @@ func TestStripJSONComments(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := string(stripJSONComments([]byte(tt.input)))
+			got := string(jsonc.StripComments([]byte(tt.input)))
 			if got != tt.want {
 				t.Errorf("got %q, want %q", got, tt.want)
 			}

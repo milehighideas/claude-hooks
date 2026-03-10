@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -425,6 +426,104 @@ func TestShouldFilterErrorWithDefaults(t *testing.T) {
 			result := shouldFilterError(tt.err, DefaultErrorCodes, DefaultExcludePaths)
 			if result != tt.expected {
 				t.Errorf("shouldFilterError() with defaults = %v, want %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestBuildTypecheckCmd(t *testing.T) {
+	boolPtr := func(b bool) *bool { return &b }
+
+	tests := []struct {
+		name           string
+		packageManager string
+		filter         string
+		appPath        string
+		tf             TypecheckFilter
+		wantDir        string   // expected cmd.Dir (empty means unset)
+		wantPath       string   // substring expected in cmd.Path
+		wantNoFilter   bool     // bun should NOT have --filter in args
+		wantArgs       []string // expected args (nil to skip check)
+	}{
+		{
+			name:           "bun uses cmd.Dir instead of --filter",
+			packageManager: "bun",
+			filter:         "@camconow/portal",
+			appPath:        "/project/apps/portal",
+			tf:             TypecheckFilter{},
+			wantDir:        "/project/apps/portal",
+			wantPath:       "tsc",
+			wantNoFilter:   true,
+			wantArgs:       []string{"tsc", "--noEmit"},
+		},
+		{
+			name:           "bun build mode uses cmd.Dir",
+			packageManager: "bun",
+			filter:         "@camconow/portal",
+			appPath:        "/project/apps/portal",
+			tf:             TypecheckFilter{UseBuildMode: boolPtr(true)},
+			wantDir:        "/project/apps/portal",
+			wantPath:       "tsc",
+			wantNoFilter:   true,
+			wantArgs:       []string{"tsc", "-b"},
+		},
+		{
+			name:           "bun with skipLibCheck",
+			packageManager: "bun",
+			filter:         "@camconow/portal",
+			appPath:        "/project/apps/portal",
+			tf:             TypecheckFilter{SkipLibCheck: boolPtr(true)},
+			wantDir:        "/project/apps/portal",
+			wantPath:       "tsc",
+			wantNoFilter:   true,
+			wantArgs:       []string{"tsc", "--noEmit", "--skipLibCheck"},
+		},
+		{
+			name:           "pnpm uses --filter flag",
+			packageManager: "pnpm",
+			filter:         "@camconow/portal",
+			appPath:        "/project/apps/portal",
+			tf:             TypecheckFilter{},
+			wantDir:        "",
+			wantPath:       "pnpm",
+			wantArgs:       []string{"pnpm", "--filter", "@camconow/portal", "exec", "tsc", "--noEmit"},
+		},
+		{
+			name:           "yarn uses workspace flag",
+			packageManager: "yarn",
+			filter:         "@camconow/portal",
+			appPath:        "/project/apps/portal",
+			tf:             TypecheckFilter{},
+			wantDir:        "",
+			wantPath:       "yarn",
+			wantArgs:       []string{"yarn", "workspace", "@camconow/portal", "exec", "tsc", "--noEmit"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := buildTypecheckCmd(tt.packageManager, tt.filter, tt.appPath, tt.tf)
+
+			if cmd.Dir != tt.wantDir {
+				t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, tt.wantDir)
+			}
+
+			if !strings.Contains(cmd.Path, tt.wantPath) && !strings.HasSuffix(cmd.Path, tt.wantPath) {
+				t.Errorf("cmd.Path = %q, want it to contain %q", cmd.Path, tt.wantPath)
+			}
+
+			if tt.wantNoFilter {
+				for _, arg := range cmd.Args {
+					if arg == "--filter" {
+						t.Error("bun command should not use --filter flag")
+					}
+				}
+			}
+
+			if tt.wantArgs != nil {
+				if !reflect.DeepEqual(cmd.Args, tt.wantArgs) {
+					t.Errorf("cmd.Args = %v, want %v", cmd.Args, tt.wantArgs)
+				}
 			}
 		})
 	}

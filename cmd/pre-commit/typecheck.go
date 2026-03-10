@@ -24,12 +24,16 @@ var DefaultErrorCodes = []string{"TS2589", "TS2742"}
 // DefaultExcludePaths are the path patterns excluded by default (test files)
 var DefaultExcludePaths = []string{"__tests__/", ".test.", ".spec."}
 
-// buildTypecheckCmd builds the tsc command using the configured package manager
-func buildTypecheckCmd(packageManager, filter string, tf TypecheckFilter) *exec.Cmd {
+// buildTypecheckCmd builds the tsc command using the configured package manager.
+// For bun, --filter only works with package scripts, not direct executables like tsc,
+// so we run tsc directly and set cmd.Dir to the app path instead.
+func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilter) *exec.Cmd {
 	if tf.UseBuildMode != nil && *tf.UseBuildMode {
 		switch packageManager {
 		case "bun":
-			return exec.Command("bun", "--filter", filter, "tsc", "-b")
+			cmd := exec.Command("tsc", "-b")
+			cmd.Dir = appPath
+			return cmd
 		case "yarn":
 			return exec.Command("yarn", "workspace", filter, "exec", "tsc", "-b")
 		default:
@@ -44,7 +48,9 @@ func buildTypecheckCmd(packageManager, filter string, tf TypecheckFilter) *exec.
 
 	switch packageManager {
 	case "bun":
-		return exec.Command("bun", append([]string{"--filter", filter, "tsc"}, args...)...)
+		cmd := exec.Command("tsc", args...)
+		cmd.Dir = appPath
+		return cmd
 	case "yarn":
 		return exec.Command("yarn", append([]string{"workspace", filter, "exec", "tsc"}, args...)...)
 	default:
@@ -53,7 +59,7 @@ func buildTypecheckCmd(packageManager, filter string, tf TypecheckFilter) *exec.
 }
 
 // runFilteredTypecheck runs tsc and filters out configured errors
-func runFilteredTypecheck(appName, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) error {
+func runFilteredTypecheck(appName, appPath, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) error {
 	// Default filter patterns if none configured (nil = not set, use defaults; empty = explicitly no filtering)
 	errorCodes := tf.ErrorCodes
 	if errorCodes == nil {
@@ -65,7 +71,7 @@ func runFilteredTypecheck(appName, filter, packageManager string, tf TypecheckFi
 	}
 
 	// Build tsc command using configured package manager
-	cmd := buildTypecheckCmd(packageManager, filter, tf)
+	cmd := buildTypecheckCmd(packageManager, filter, appPath, tf)
 
 	// Set NODE_OPTIONS for memory limit if configured
 	if nodeMemoryMB > 0 {
@@ -239,7 +245,7 @@ func shouldFilterError(err tsError, errorCodes, excludePaths []string) bool {
 }
 
 // runFilteredTypecheckBuffered runs tsc and returns buffered output (for parallel execution)
-func runFilteredTypecheckBuffered(appName, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) (string, error) {
+func runFilteredTypecheckBuffered(appName, appPath, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) (string, error) {
 	var output strings.Builder
 
 	// Default filter patterns if none configured (nil = not set, use defaults; empty = explicitly no filtering)
@@ -253,7 +259,7 @@ func runFilteredTypecheckBuffered(appName, filter, packageManager string, tf Typ
 	}
 
 	// Build tsc command using configured package manager
-	cmd := buildTypecheckCmd(packageManager, filter, tf)
+	cmd := buildTypecheckCmd(packageManager, filter, appPath, tf)
 
 	// Set NODE_OPTIONS for memory limit if configured
 	if nodeMemoryMB > 0 {
