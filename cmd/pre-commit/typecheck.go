@@ -31,7 +31,7 @@ func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilte
 	if tf.UseBuildMode != nil && *tf.UseBuildMode {
 		switch packageManager {
 		case "bun":
-			cmd := exec.Command("tsc", "-b")
+			cmd := exec.Command("npx", "tsc", "-b")
 			cmd.Dir = appPath
 			return cmd
 		case "yarn":
@@ -48,7 +48,7 @@ func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilte
 
 	switch packageManager {
 	case "bun":
-		cmd := exec.Command("tsc", args...)
+		cmd := exec.Command("npx", append([]string{"tsc"}, args...)...)
 		cmd.Dir = appPath
 		return cmd
 	case "yarn":
