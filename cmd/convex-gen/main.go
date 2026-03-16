@@ -81,10 +81,12 @@ func run() error {
 
 	// Scan and parse schema
 	var allTables []TableInfo
-	if config.Generators.Types {
+	var schemaFiles []SchemaFile
+	if config.Generators.Types || config.Generators.Metadata {
 		fmt.Println("Scanning schema files...")
 
-		schemaFiles, err := scanner.ScanSchemaFiles()
+		var err error
+		schemaFiles, err = scanner.ScanSchemaFiles()
 		if err != nil {
 			return fmt.Errorf("failed to scan schema files: %w", err)
 		}
@@ -184,6 +186,30 @@ func run() error {
 		fmt.Printf("  %d table types\n", len(allTables))
 		fmt.Printf("  %d ID types\n", len(allTables))
 		fmt.Printf("  Output: %s\n", config.GetTypesOutputDir())
+		fmt.Println()
+	}
+
+	// Generate schema metadata
+	if config.Generators.Metadata {
+		fmt.Println("Enriching tables with field metadata...")
+		parser.EnrichTablesWithFields(schemaFiles, allTables)
+
+		fieldsFound := 0
+		for _, t := range allTables {
+			if len(t.Fields) > 0 {
+				fieldsFound++
+			}
+		}
+		fmt.Printf("  %d/%d tables with field definitions\n", fieldsFound, len(allTables))
+		fmt.Println()
+
+		fmt.Println("Generating schema metadata...")
+		metadataGen := NewMetadataGenerator(config)
+		if err := metadataGen.Generate(allTables); err != nil {
+			return fmt.Errorf("failed to generate metadata: %w", err)
+		}
+		fmt.Printf("  %d tables with field metadata\n", len(allTables))
+		fmt.Printf("  Output: %s\n", config.GetMetadataOutputDir())
 		fmt.Println()
 	}
 

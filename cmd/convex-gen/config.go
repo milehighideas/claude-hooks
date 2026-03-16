@@ -31,6 +31,7 @@ type DataLayerConfig struct {
 	HooksDir      string `json:"hooksDir"`      // e.g., "generated-hooks"
 	APIDir        string `json:"apiDir"`        // e.g., "generated-api"
 	TypesDir      string `json:"typesDir"`      // e.g., "generated-types"
+	MetadataDir   string `json:"metadataDir"`   // e.g., "generated-schema"
 	FileStructure string `json:"fileStructure"` // "grouped", "split", or "both"
 	HookNaming    string `json:"hookNaming"`    // "flat" (no sub-namespace), "qualified" (always sub-namespace), or "auto" (sub-namespace only on collision)
 	ExportAPI     bool   `json:"exportApi"`     // Re-export { api } from the generated-api index
@@ -45,9 +46,10 @@ type ImportsConfig struct {
 
 // GeneratorsConfig controls which generators run
 type GeneratorsConfig struct {
-	Hooks bool `json:"hooks"`
-	API   bool `json:"api"`
-	Types bool `json:"types"`
+	Hooks    bool `json:"hooks"`
+	API      bool `json:"api"`
+	Types    bool `json:"types"`
+	Metadata bool `json:"metadata"`
 }
 
 // SkipConfig configures files/directories to skip
@@ -129,6 +131,9 @@ func applyConfigDefaults(config *Config) {
 	if config.DataLayer.TypesDir == "" {
 		config.DataLayer.TypesDir = "generated-types"
 	}
+	if config.DataLayer.MetadataDir == "" {
+		config.DataLayer.MetadataDir = "generated-schema"
+	}
 	if config.DataLayer.FileStructure == "" {
 		config.DataLayer.FileStructure = "grouped" // default to grouped (single file per namespace)
 	}
@@ -156,10 +161,11 @@ func applyConfigDefaults(config *Config) {
 	}
 
 	// Generator defaults - all enabled
-	if !config.Generators.Hooks && !config.Generators.API && !config.Generators.Types {
+	if !config.Generators.Hooks && !config.Generators.API && !config.Generators.Types && !config.Generators.Metadata {
 		config.Generators.Hooks = true
 		config.Generators.API = true
 		config.Generators.Types = true
+		config.Generators.Metadata = true
 	}
 
 	// Skip defaults
@@ -212,6 +218,11 @@ func (c *Config) GetAPIOutputDir() string {
 // GetTypesOutputDir returns the full path for generated types
 func (c *Config) GetTypesOutputDir() string {
 	return filepath.Join(c.DataLayer.Path, c.DataLayer.TypesDir)
+}
+
+// GetMetadataOutputDir returns the full path for generated schema metadata
+func (c *Config) GetMetadataOutputDir() string {
+	return filepath.Join(c.DataLayer.Path, c.DataLayer.MetadataDir)
 }
 
 // IsSchemaDirectory returns true if schema is a directory (vs single file)

@@ -36,12 +36,25 @@ type ArgInfo struct {
 	TableName  string // For ID types, the table name
 }
 
+// FieldInfo represents a field in a schema table
+type FieldInfo struct {
+	Name      string   // Field name
+	Type      string   // "string", "number", "boolean", "id", "object", "array", "union", "any"
+	Optional  bool     // Wrapped in v.optional()
+	IsID      bool     // Is v.id("table")
+	TableRef  string   // For ID fields, the referenced table name
+	IsArray   bool     // Is v.array(...)
+	ArrayType string   // For arrays, the inner type
+	Literals  []string // For v.union(v.literal(...)) enums
+}
+
 // TableInfo represents a parsed schema table
 type TableInfo struct {
-	Name       string // Table name in schema
-	TypeName   string // PascalCase type name
-	Domain     string // Schema domain/file
-	FieldCount int    // Number of fields (approximate)
+	Name       string      // Table name in schema
+	TypeName   string      // PascalCase type name
+	Domain     string      // Schema domain/file
+	FieldCount int         // Number of fields (approximate)
+	Fields     []FieldInfo // Parsed field definitions (populated when metadata generation is enabled)
 }
 
 // Parser extracts information from TypeScript files
@@ -1039,4 +1052,316 @@ func toPascalCase(s string) string {
 
 	// Simple capitalize first letter
 	return strings.ToUpper(s[:1]) + s[1:]
+}
+
+// EnrichTablesWithFields reads individual schema files to extract field definitions
+// and enriches the provided tables slice with field information.
+func (p *Parser) EnrichTablesWithFields(schemaFiles []SchemaFile, tables []TableInfo) {
+	// Build a map of table name → index for quick lookup
+	tableIdx := make(map[string]int)
+	for i, t := range tables {
+		tableIdx[t.Name] = i
+	}
+
+	// Parse each schema file for field definitions
+	for _, file := range schemaFiles {
+		if file.Domain == "main" {
+			continue // Skip main schema file - it doesn't have field definitions
+		}
+
+		content, err := os.ReadFile(file.Path)
+		if err != nil {
+			continue
+		}
+
+		text := stripComments(string(content))
+		fieldsMap := p.extractAllTableFields(text)
+
+		for tableName, fields := range fieldsMap {
+			if idx, ok := tableIdx[tableName]; ok {
+				tables[idx].Fields = fields
+				tables[idx].FieldCount = len(fields)
+			}
+		}
+	}
+}
+
+// extractAllTableFields finds all defineTable blocks in text and extracts field info.
+// Returns a map of table variable name → field definitions.
+func (p *Parser) extractAllTableFields(text string) map[string][]FieldInfo {
+	result := make(map[string][]FieldInfo)
+
+	// Find all defineTable occurrences
+	matches := defineTableRe.FindAllStringSubmatchIndex(text, -1)
+
+	for _, match := range matches {
+		tableName := text[match[2]:match[3]]
+
+		// Find the opening { after defineTable(
+		searchStart := match[1]
+		braceIdx := -1
+		for i := searchStart; i < len(text); i++ {
+			if text[i] == '{' {
+				braceIdx = i
+				break
+			}
+		}
+		if braceIdx == -1 {
+			continue
+		}
+
+		// Extract content between braces using depth tracking
+		depth := 1
+		endIdx := braceIdx + 1
+		for endIdx < len(text) && depth > 0 {
+			switch text[endIdx] {
+			case '{':
+				depth++
+			case '}':
+				depth--
+			}
+			endIdx++
+		}
+
+		if depth != 0 {
+			continue
+		}
+
+		bodyContent := text[braceIdx+1 : endIdx-1]
+		fields := parseTableFields(bodyContent)
+		if len(fields) > 0 {
+			result[tableName] = fields
+		}
+	}
+
+	return result
+}
+
+// parseTableFields splits a defineTable body into individual field entries and classifies each.
+func parseTableFields(body string) []FieldInfo {
+	var fields []FieldInfo
+
+	entries := splitFieldEntries(body)
+
+	for _, entry := range entries {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+
+		// Find first colon at depth 0
+		colonIdx := findTopLevelColon(entry)
+		if colonIdx == -1 {
+			continue
+		}
+
+		name := strings.TrimSpace(entry[:colonIdx])
+		validator := strings.TrimSpace(entry[colonIdx+1:])
+
+		if !isValidIdentifier(name) {
+			continue
+		}
+
+		field := classifyValidator(name, validator)
+		fields = append(fields, field)
+	}
+
+	return fields
+}
+
+// splitFieldEntries splits a defineTable body by commas at depth 0.
+func splitFieldEntries(body string) []string {
+	var entries []string
+	depth := 0
+	start := 0
+
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '{', '(':
+			depth++
+		case '}', ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				entries = append(entries, body[start:i])
+				start = i + 1
+			}
+		}
+	}
+
+	// Don't forget the last entry (no trailing comma)
+	if start < len(body) {
+		remaining := strings.TrimSpace(body[start:])
+		if remaining != "" {
+			entries = append(entries, remaining)
+		}
+	}
+
+	return entries
+}
+
+// findTopLevelColon finds the first colon at brace/paren depth 0.
+func findTopLevelColon(entry string) int {
+	depth := 0
+	for i := 0; i < len(entry); i++ {
+		switch entry[i] {
+		case '{', '(':
+			depth++
+		case '}', ')':
+			depth--
+		case ':':
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// unwrapValidatorCall strips a validator call prefix (e.g., "v.optional(", "v.array(")
+// and returns the inner content. Returns ("", false) if prefix doesn't match.
+func unwrapValidatorCall(prefix, validator string) (string, bool) {
+	if !strings.HasPrefix(validator, prefix) {
+		return "", false
+	}
+	// Find matching closing paren
+	depth := 0
+	start := len(prefix)
+	for i := start - 1; i < len(validator); i++ {
+		switch validator[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return strings.TrimSpace(validator[start:i]), true
+			}
+		}
+	}
+	// Fallback
+	inner := validator[start:]
+	if strings.HasSuffix(inner, ")") {
+		inner = inner[:len(inner)-1]
+	}
+	return strings.TrimSpace(inner), true
+}
+
+// classifyValidator determines the type information for a validator expression.
+func classifyValidator(name, validator string) FieldInfo {
+	field := FieldInfo{Name: name, Type: "any"}
+
+	validator = strings.TrimSpace(validator)
+
+	// Check and unwrap v.optional()
+	if inner, ok := unwrapValidatorCall("v.optional(", validator); ok {
+		field.Optional = true
+		validator = inner
+	}
+
+	// v.id("tableName")
+	if match := idRe.FindStringSubmatch(validator); match != nil {
+		field.Type = "id"
+		field.IsID = true
+		field.TableRef = match[1]
+		return field
+	}
+
+	// v.string()
+	if validator == "v.string()" {
+		field.Type = "string"
+		return field
+	}
+
+	// v.number() or v.float64()
+	if validator == "v.number()" || validator == "v.float64()" {
+		field.Type = "number"
+		return field
+	}
+
+	// v.boolean()
+	if validator == "v.boolean()" {
+		field.Type = "boolean"
+		return field
+	}
+
+	// v.any()
+	if validator == "v.any()" {
+		field.Type = "any"
+		return field
+	}
+
+	// v.bigint()
+	if validator == "v.bigint()" {
+		field.Type = "number"
+		return field
+	}
+
+	// v.bytes()
+	if validator == "v.bytes()" {
+		field.Type = "string"
+		return field
+	}
+
+	// v.null()
+	if validator == "v.null()" {
+		field.Type = "any"
+		return field
+	}
+
+	// v.array(...)
+	if inner, ok := unwrapValidatorCall("v.array(", validator); ok {
+		field.Type = "array"
+		field.IsArray = true
+		switch {
+		case inner == "v.string()":
+			field.ArrayType = "string"
+		case inner == "v.number()" || inner == "v.float64()":
+			field.ArrayType = "number"
+		case inner == "v.boolean()":
+			field.ArrayType = "boolean"
+		default:
+			if idMatch := idRe.FindStringSubmatch(inner); idMatch != nil {
+				field.ArrayType = "id"
+				field.TableRef = idMatch[1]
+			} else {
+				field.ArrayType = "object"
+			}
+		}
+		return field
+	}
+
+	// v.union(...) - check for enum-like literal unions
+	if inner, ok := unwrapValidatorCall("v.union(", validator); ok {
+		field.Type = "union"
+		// Extract literals
+		literalRe := regexp.MustCompile(`v\.literal\(["']([^"']+)["']\)`)
+		litMatches := literalRe.FindAllStringSubmatch(inner, -1)
+		if len(litMatches) > 0 {
+			for _, m := range litMatches {
+				field.Literals = append(field.Literals, m[1])
+			}
+		}
+		// Check if it's a union of IDs
+		idMatches := idRe.FindAllStringSubmatch(inner, -1)
+		if len(idMatches) > 0 && len(litMatches) == 0 {
+			field.Type = "id"
+			field.IsID = true
+			field.TableRef = idMatches[0][1]
+		}
+		return field
+	}
+
+	// v.object({...})
+	if strings.HasPrefix(validator, "v.object(") {
+		field.Type = "object"
+		return field
+	}
+
+	// External validator reference (identifier not starting with v.)
+	if isValidIdentifier(validator) {
+		field.Type = "object"
+		return field
+	}
+
+	return field
 }
