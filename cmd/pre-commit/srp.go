@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -907,7 +908,16 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 
 	if compactMode() {
 		if len(errors) > 0 {
-			printStatus("SRP compliance", false, fmt.Sprintf("%d errors", len(errors)))
+			appSet := make(map[string]bool)
+			for _, e := range errors {
+				appSet[getSRPAppNameFromPath(e.File)] = true
+			}
+			apps := make([]string, 0, len(appSet))
+			for app := range appSet {
+				apps = append(apps, app)
+			}
+			sort.Strings(apps)
+			printStatus("SRP compliance", false, fmt.Sprintf("%s — %d errors", strings.Join(apps, ", "), len(errors)))
 			printReportHint("srp/")
 			return fmt.Errorf("SRP violations found")
 		}

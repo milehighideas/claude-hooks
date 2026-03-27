@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -179,7 +180,16 @@ func runTestCoverageCheck(config TestCoverageConfig) error {
 
 	if compactMode() {
 		if len(violations) > 0 {
-			printStatus("Test coverage", false, fmt.Sprintf("%d missing", len(violations)))
+			appSet := make(map[string]bool)
+			for _, v := range violations {
+				appSet[filepath.Base(v.AppPath)] = true
+			}
+			apps := make([]string, 0, len(appSet))
+			for app := range appSet {
+				apps = append(apps, app)
+			}
+			sort.Strings(apps)
+			printStatus("Test coverage", false, fmt.Sprintf("%s — %d missing", strings.Join(apps, ", "), len(violations)))
 			printReportHint("test-coverage/")
 			return fmt.Errorf("test coverage check failed")
 		}
