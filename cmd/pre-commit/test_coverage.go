@@ -180,16 +180,20 @@ func runTestCoverageCheck(config TestCoverageConfig) error {
 
 	if compactMode() {
 		if len(violations) > 0 {
-			appSet := make(map[string]bool)
+			appCounts := make(map[string]int)
 			for _, v := range violations {
-				appSet[filepath.Base(v.AppPath)] = true
+				appCounts[filepath.Base(v.AppPath)]++
 			}
-			apps := make([]string, 0, len(appSet))
-			for app := range appSet {
+			apps := make([]string, 0, len(appCounts))
+			for app := range appCounts {
 				apps = append(apps, app)
 			}
 			sort.Strings(apps)
-			printStatus("Test coverage", false, fmt.Sprintf("%s — %d missing", strings.Join(apps, ", "), len(violations)))
+			parts := make([]string, len(apps))
+			for i, app := range apps {
+				parts[i] = fmt.Sprintf("%s %d missing", app, appCounts[app])
+			}
+			printStatus("Test coverage", false, strings.Join(parts, ", "))
 			printReportHint("test-coverage/")
 			return fmt.Errorf("test coverage check failed")
 		}

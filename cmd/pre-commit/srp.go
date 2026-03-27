@@ -908,16 +908,20 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 
 	if compactMode() {
 		if len(errors) > 0 {
-			appSet := make(map[string]bool)
+			appCounts := make(map[string]int)
 			for _, e := range errors {
-				appSet[getSRPAppNameFromPath(e.File)] = true
+				appCounts[getSRPAppNameFromPath(e.File)]++
 			}
-			apps := make([]string, 0, len(appSet))
-			for app := range appSet {
+			apps := make([]string, 0, len(appCounts))
+			for app := range appCounts {
 				apps = append(apps, app)
 			}
 			sort.Strings(apps)
-			printStatus("SRP compliance", false, fmt.Sprintf("%s — %d errors", strings.Join(apps, ", "), len(errors)))
+			parts := make([]string, len(apps))
+			for i, app := range apps {
+				parts[i] = fmt.Sprintf("%s %d errors", app, appCounts[app])
+			}
+			printStatus("SRP compliance", false, strings.Join(parts, ", "))
 			printReportHint("srp/")
 			return fmt.Errorf("SRP violations found")
 		}
