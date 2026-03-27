@@ -3,15 +3,31 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 )
 
 // AppCheckResult holds the result of checking a single app
 type AppCheckResult struct {
-	AppName string
-	Output  string
-	Err     error
+	AppName         string
+	Output          string
+	Err             error
+	LintErrors      int
+	TypecheckErrors int
+}
+
+// extractErrorCount parses the error count from formatted error messages
+// like "found 5 typecheck error(s)" or "found 3 lint error(s)".
+func extractErrorCount(err error) int {
+	if err == nil {
+		return 0
+	}
+	var count int
+	if _, scanErr := fmt.Sscanf(err.Error(), "found %d ", &count); scanErr == nil {
+		return count
+	}
+	return 1 // fallback: at least 1 error if the function returned an error
 }
 
 // runLintTypecheck orchestrates lint and typecheck for all affected apps IN PARALLEL
@@ -65,20 +81,23 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 
 			var output bytes.Buffer
 			var err error
+			var lintErrs, typecheckErrs int
 
 			// Merge global typecheck filter with per-app override
 			effectiveTypecheckFilter := GetTypecheckFilter(typecheckFilter, j.config.TypecheckFilter)
 
 			if j.full {
-				err = runFullChecksBuffered(j.name, j.config.Path, j.config.Filter, effectiveTypecheckFilter, lintFilter, j.config.NodeMemoryMB, j.skipLint, j.skipTypecheck, packageManager, &output)
+				lintErrs, typecheckErrs, err = runFullChecksBuffered(j.name, j.config.Path, j.config.Filter, effectiveTypecheckFilter, lintFilter, j.config.NodeMemoryMB, j.skipLint, j.skipTypecheck, packageManager, &output)
 			} else {
-				err = runIncrementalChecksBuffered(j.name, j.config.Path, j.config.Filter, j.files, effectiveTypecheckFilter, lintFilter, fullLintOnCommit, j.config.NodeMemoryMB, j.skipLint, j.skipTypecheck, packageManager, &output)
+				lintErrs, typecheckErrs, err = runIncrementalChecksBuffered(j.name, j.config.Path, j.config.Filter, j.files, effectiveTypecheckFilter, lintFilter, fullLintOnCommit, j.config.NodeMemoryMB, j.skipLint, j.skipTypecheck, packageManager, &output)
 			}
 
 			results[idx] = AppCheckResult{
-				AppName: j.name,
-				Output:  output.String(),
-				Err:     err,
+				AppName:         j.name,
+				Output:          output.String(),
+				Err:             err,
+				LintErrors:      lintErrs,
+				TypecheckErrors: typecheckErrs,
 			}
 		}(i, job)
 	}
@@ -102,7 +121,7 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 
 	// Print results sequentially
 	checksFailed := false
-	var failedApps []string
+	var failedResults []AppCheckResult
 
 	// Append convex ESLint result if it ran
 	if convexResult.Output != "" {
@@ -114,7 +133,7 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 			// Compact: show per-app one-liner
 			if result.Err != nil {
 				checksFailed = true
-				failedApps = append(failedApps, result.AppName)
+				failedResults = append(failedResults, result)
 			}
 		} else {
 			if result.Output != "" {
@@ -129,8 +148,19 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 
 	if compactMode() {
 		if checksFailed {
-			detail := fmt.Sprintf("%s failed", strings.Join(failedApps, ", "))
-			printStatus("Lint & typecheck", false, detail)
+			sort.Slice(failedResults, func(i, j int) bool {
+				return failedResults[i].AppName < failedResults[j].AppName
+			})
+			parts := make([]string, 0, len(failedResults))
+			for _, r := range failedResults {
+				total := r.LintErrors + r.TypecheckErrors
+				if total > 0 {
+					parts = append(parts, fmt.Sprintf("%s %d errors", r.AppName, total))
+				} else {
+					parts = append(parts, r.AppName+" failed")
+				}
+			}
+			printStatus("Lint & typecheck", false, strings.Join(parts, ", "))
 			printReportHint("lint/ and typecheck/")
 			return fmt.Errorf("lint/typecheck failed")
 		}
@@ -204,7 +234,7 @@ func runFullChecks(appName, appPath, filter string, typecheckFilter TypecheckFil
 }
 
 // runFullChecksBuffered runs full checks and writes output to a buffer (for parallel execution)
-func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter TypecheckFilter, lintFilter LintFilter, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string, output *bytes.Buffer) error {
+func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter TypecheckFilter, lintFilter LintFilter, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string, output *bytes.Buffer) (lintErrs int, typecheckErrs int, err error) {
 	fmt.Fprintf(output, "🔍 Running full lint and typecheck for %s...\n", appName)
 
 	var hasError bool
@@ -218,6 +248,7 @@ func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter Type
 		output.WriteString(typecheckOutput)
 		if typecheckErr != nil {
 			fmt.Fprintf(output, "   ❌ %s typecheck failed\n", appName)
+			typecheckErrs = extractErrorCount(typecheckErr)
 			hasError = true
 		} else {
 			fmt.Fprintf(output, "   ✓ %s passed typecheck\n", appName)
@@ -233,6 +264,7 @@ func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter Type
 		output.WriteString(lintOutput)
 		if lintErr != nil {
 			fmt.Fprintf(output, "   ❌ %s lint failed\n", appName)
+			lintErrs = extractErrorCount(lintErr)
 			hasError = true
 		} else {
 			fmt.Fprintf(output, "   ✓ %s passed lint\n", appName)
@@ -241,11 +273,11 @@ func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter Type
 
 	if hasError {
 		fmt.Fprintf(output, "❌ %s had failures\n", appName)
-		return fmt.Errorf("%s checks failed", appName)
+		return lintErrs, typecheckErrs, fmt.Errorf("%s checks failed", appName)
 	}
 
 	fmt.Fprintf(output, "✅ %s passed all checks\n", appName)
-	return nil
+	return 0, 0, nil
 }
 
 func runIncrementalChecks(appName string, appPath string, filter string, files []string, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string) error {
@@ -280,12 +312,12 @@ func runIncrementalChecks(appName string, appPath string, filter string, files [
 }
 
 // runIncrementalChecksBuffered runs incremental checks and writes output to a buffer (for parallel execution)
-func runIncrementalChecksBuffered(appName string, appPath string, filter string, files []string, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string, output *bytes.Buffer) error {
+func runIncrementalChecksBuffered(appName string, appPath string, filter string, files []string, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string, output *bytes.Buffer) (lintErrs int, typecheckErrs int, err error) {
 	lintFiles := filterLintableFiles(files)
 
 	if len(lintFiles) == 0 {
 		fmt.Fprintf(output, "   No lintable files in %s\n", appName)
-		return nil
+		return 0, 0, nil
 	}
 
 	// When fullLintOnCommit is enabled, run full checks instead of incremental
@@ -303,14 +335,14 @@ func runIncrementalChecksBuffered(appName string, appPath string, filter string,
 	if skipTypecheck {
 		fmt.Fprintf(output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
 	} else {
-		typecheckOutput, err := runIncrementalTypecheckBuffered(appPath, lintFiles, typecheckFilter)
+		typecheckOutput, typecheckErr := runIncrementalTypecheckBuffered(appPath, lintFiles, typecheckFilter)
 		output.WriteString(typecheckOutput)
-		if err != nil {
+		if typecheckErr != nil {
 			fmt.Fprintf(output, "❌ %s incremental typecheck failed\n", appName)
-			return err
+			return 0, extractErrorCount(typecheckErr), typecheckErr
 		}
 	}
 
 	fmt.Fprintf(output, "✅ %s passed incremental checks\n", appName)
-	return nil
+	return 0, 0, nil
 }
