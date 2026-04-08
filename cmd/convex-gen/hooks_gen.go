@@ -456,9 +456,10 @@ func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, co
 		}
 	}
 
-	// Add shouldSkip param in JSDoc for no-required-ID functions
+	// Add shouldSkip param in JSDoc for no-required-ID non-paginated queries.
+	// (Paginated queries expose shouldSkip via options.shouldSkip — documented below.)
 	hasRequiredSkippable := hasRequiredSkippableArg(fn.Args)
-	if fn.Type == FunctionTypeQuery && !fn.UseFunctionArgs && !hasRequiredSkippable {
+	if fn.Type == FunctionTypeQuery && !fn.UseFunctionArgs && !hasRequiredSkippable && !fn.IsPaginated {
 		if len(fn.Args) > 0 {
 			sb.WriteString(" * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n")
 		} else {
@@ -468,7 +469,11 @@ func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, co
 	}
 
 	if fn.IsPaginated {
-		sb.WriteString(" * @param options - Pagination options (optional)\n")
+		if !hasRequiredSkippable && !fn.UseFunctionArgs {
+			sb.WriteString(" * @param options - Pagination options (optional). Pass { shouldSkip: true } to skip the query.\n")
+		} else {
+			sb.WriteString(" * @param options - Pagination options (optional)\n")
+		}
 	}
 	sb.WriteString(" */\n")
 
@@ -523,9 +528,10 @@ func (g *HooksGenerator) generateSplitHook(topNamespace string, fn ConvexFunctio
 		}
 	}
 
-	// Add shouldSkip param in JSDoc for no-required-ID functions
+	// Add shouldSkip param in JSDoc for no-required-ID non-paginated queries.
+	// (Paginated queries expose shouldSkip via options.shouldSkip — documented below.)
 	hasRequiredSkippable := hasRequiredSkippableArg(fn.Args)
-	if fn.Type == FunctionTypeQuery && !fn.UseFunctionArgs && !hasRequiredSkippable {
+	if fn.Type == FunctionTypeQuery && !fn.UseFunctionArgs && !hasRequiredSkippable && !fn.IsPaginated {
 		if len(fn.Args) > 0 {
 			sb.WriteString(" * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n")
 		} else {
@@ -535,7 +541,11 @@ func (g *HooksGenerator) generateSplitHook(topNamespace string, fn ConvexFunctio
 	}
 
 	if fn.IsPaginated {
-		sb.WriteString(" * @param options - Pagination options (optional)\n")
+		if !hasRequiredSkippable && !fn.UseFunctionArgs {
+			sb.WriteString(" * @param options - Pagination options (optional). Pass { shouldSkip: true } to skip the query.\n")
+		} else {
+			sb.WriteString(" * @param options - Pagination options (optional)\n")
+		}
 	}
 	sb.WriteString(" */\n")
 
@@ -571,9 +581,16 @@ func (g *HooksGenerator) generateParamsV2(fn ConvexFunction) string {
 
 	if fn.UseFunctionArgs {
 		apiPath := toApiPath(fn.Namespace, fn.Name)
-		params := fmt.Sprintf("args: FunctionArgs<typeof %s> | null", apiPath)
+		var params string
 		if fn.IsPaginated {
+			// Paginated queries: omit `paginationOpts` from caller args because the hook
+			// body provides it via the `usePaginatedQuery` third argument. Without Omit,
+			// callers would have to pass `paginationOpts` explicitly even though the hook
+			// supplies it internally.
+			params = fmt.Sprintf("args: Omit<FunctionArgs<typeof %s>, 'paginationOpts'> | null", apiPath)
 			params += ", options?: { initialNumItems?: number }"
+		} else {
+			params = fmt.Sprintf("args: FunctionArgs<typeof %s> | null", apiPath)
 		}
 		return params
 	}
@@ -601,7 +618,11 @@ func (g *HooksGenerator) generateParamsV2(fn ConvexFunction) string {
 	}
 
 	if fn.IsPaginated {
-		params = append(params, "options?: { initialNumItems?: number }")
+		if !hasRequiredSkippable {
+			params = append(params, "options?: { initialNumItems?: number; shouldSkip?: boolean }")
+		} else {
+			params = append(params, "options?: { initialNumItems?: number }")
+		}
 	}
 
 	return strings.Join(params, ", ")
@@ -645,9 +666,17 @@ func (g *HooksGenerator) generateHookBodyV2(fn ConvexFunction, apiPath string) s
 				sb.WriteString(fmt.Sprintf("  return useQuery(%s, args ?? \"skip\");\n", apiPath))
 			}
 		} else if fn.IsPaginated {
+			hasRequiredSkippable := hasRequiredSkippableArg(fn.Args)
 			sb.WriteString("  return usePaginatedQuery(\n")
 			sb.WriteString(fmt.Sprintf("    %s,\n", apiPath))
-			sb.WriteString(g.generateArgsWithSpread(fn.Args, false))
+			if hasRequiredSkippable {
+				sb.WriteString(g.generateArgsWithSpread(fn.Args, false))
+			} else {
+				// Wrap args in shouldSkip check via options
+				argsLine := g.generateArgsWithSpread(fn.Args, false)
+				trimmed := strings.TrimSuffix(strings.TrimPrefix(argsLine, "    "), ",\n")
+				sb.WriteString(fmt.Sprintf("    options?.shouldSkip ? \"skip\" : %s,\n", trimmed))
+			}
 			sb.WriteString("    { initialNumItems: options?.initialNumItems || 20 }\n")
 			sb.WriteString("  );\n")
 		} else {
