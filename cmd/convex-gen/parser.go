@@ -74,7 +74,14 @@ func NewParser(config *Config) *Parser {
 // BuildValidatorCache scans validator files and builds a cache of validator definitions
 func (p *Parser) BuildValidatorCache(convexPath string) error {
 	// Pattern to match: export const validatorName = v.object({ ... })
-	validatorDefRe := regexp.MustCompile(`export\s+const\s+(\w+)\s*=\s*(v\.object\s*\([^;]+)`)
+	// Match validator definitions in two forms:
+	//   1. `export const X = v.object({ ... })` — wrapped form
+	//   2. `export const X = { ... }` — plain object literal (Convex accepts both for `args:`)
+	// Multiline-aware: lazy match terminated by `}` on its own line (with optional `)` for v.object form).
+	// The optional `;?` allows the conventional TypeScript trailing semicolon — without it,
+	// validators written as `export const X = v.object({...});` are silently dropped.
+	// Limitation: validators with nested braces aren't fully supported (lazy match stops at first inner `}`).
+	validatorDefRe := regexp.MustCompile(`(?m)export\s+const\s+(\w+)\s*=\s*(v\.object\s*\(\s*\{[\s\S]*?\}\s*\)|\{[\s\S]*?\})\s*;?\s*$`)
 
 
 	// Walk through model directories looking for validators
@@ -106,8 +113,6 @@ func (p *Parser) scanValidatorDir(dirPath string, validatorDefRe *regexp.Regexp)
 		if entry.IsDir() {
 			p.scanValidatorDir(fullPath, validatorDefRe)
 		} else if strings.HasSuffix(entry.Name(), "validators.ts") || strings.HasSuffix(entry.Name(), "validator.ts") {
-			if strings.Contains(fullPath, "projects") {
-			}
 			p.parseValidatorFile(fullPath, validatorDefRe)
 		}
 	}
@@ -133,24 +138,12 @@ func (p *Parser) parseValidatorFile(filePath string, validatorDefRe *regexp.Rege
 		}
 	}
 
-	if strings.Contains(filePath, "projects") {
-		// Check if it contains getProjectValidator
-		if strings.Contains(text, "getProjectValidator") {
-		}
-	}
-
 	// Find all validator definitions
 	matches := validatorDefRe.FindAllStringSubmatch(text, -1)
-
-	if strings.Contains(filePath, "projects") {
-	}
 
 	for _, match := range matches {
 		validatorName := match[1]
 		validatorDef := match[2]
-
-		if strings.Contains(validatorName, "getProjectValidator") {
-		}
 
 		// Store with full reference (e.g., "Issues.getIssueValidator")
 		if namespace != "" {
@@ -220,7 +213,34 @@ var (
 
 	// Match .input(validatorRef) — for referenced validators
 	inputRefRe = regexp.MustCompile(`\.input\(\s*(\w+(?:\.\w+)?)\s*\)`)
+
+	// Inner-content extractors used to pull the args block out of a cached
+	// validator definition string. The two forms mirror the two branches of
+	// validatorDefRe in BuildValidatorCache:
+	//   1. v.object({ ... })  → wrapped form
+	//   2. { ... }            → plain object literal form
+	// Limitation: like validatorDefRe, these don't handle nested braces — the
+	// `[^}]+` class stops at the first `}`. Validators with nested v.object()
+	// inside their fields will only have the outer fields parsed correctly.
+	validatorObjectInnerRe = regexp.MustCompile(`v\.object\s*\(\s*\{([^}]+)\}`)
+	validatorPlainInnerRe  = regexp.MustCompile(`^\s*\{([^}]+)\}`)
 )
+
+// extractValidatorArgsBlock pulls the inner args block (the contents of the
+// outer `{ ... }`) out of a cached validator definition string. It handles
+// both `v.object({...})` and plain `{...}` forms. Returns "" if neither form
+// matches. Used by both the standard and fluent-convex parsing paths so they
+// stay in sync — previously each path had its own copy of the v.object regex
+// and the fluent path was missing the plain-literal fallback entirely.
+func extractValidatorArgsBlock(validatorDef string) string {
+	if m := validatorObjectInnerRe.FindStringSubmatch(validatorDef); m != nil {
+		return m[1]
+	}
+	if m := validatorPlainInnerRe.FindStringSubmatch(validatorDef); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 // Fluent-convex chain root → function type maps
 var fluentQueryRoots = map[string]bool{
@@ -248,14 +268,6 @@ func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
 	// Strip comments to avoid matching exports inside JSDoc examples
 	text := stripComments(string(content))
 	var functions []ConvexFunction
-
-	if strings.Contains(file.Path, "projects.ts") && !strings.Contains(file.Path, "Internal") {
-		if strings.Contains(string(content), "getProjectValidator") {
-		}
-		if strings.Contains(text, "getProjectValidator") {
-		} else {
-		}
-	}
 
 	// Find all exported functions
 	matches := exportFunctionRe.FindAllStringSubmatchIndex(text, -1)
@@ -458,10 +470,7 @@ func (p *Parser) parseFluentArgs(chainText string) ([]ArgInfo, bool, bool) {
 		}
 
 		if found {
-			innerMatch := regexp.MustCompile(`v\.object\s*\(\s*\{([^}]+)\}`).FindStringSubmatch(validatorDef)
-			if innerMatch != nil {
-				argsBlock = innerMatch[1]
-			}
+			argsBlock = extractValidatorArgsBlock(validatorDef)
 		}
 	}
 
@@ -645,12 +654,6 @@ func (p *Parser) parseArgs(funcBody string) ([]ArgInfo, bool, bool) {
 	isPaginated := false
 	useFunctionArgs := false
 
-	if strings.Contains(funcBody, "getProjectValidator") {
-		if len(funcBody) > 200 {
-		} else {
-		}
-	}
-
 	// Check for pagination
 	if paginationRe.MatchString(funcBody) {
 		isPaginated = true
@@ -662,66 +665,24 @@ func (p *Parser) parseArgs(funcBody string) ([]ArgInfo, bool, bool) {
 
 	if argsMatch != nil {
 		argsBlock = argsMatch[1]
-		if strings.Contains(funcBody, "getProjectValidator") {
-		}
-	} else {
-		if strings.Contains(funcBody, "getProjectValidator") {
-		}
+	} else if refMatch := argsRefRe.FindStringSubmatch(funcBody); refMatch != nil {
 		// Try to find referenced validator: args: SomeValidator or args: Module.validatorName
-		refMatch := argsRefRe.FindStringSubmatch(funcBody)
-		if strings.Contains(funcBody, "getProjectValidator") {
-			if refMatch != nil {
-			} else {
-				// Try to manually find what's around "args:"
-				idx := strings.Index(funcBody, "args:")
-				if idx >= 0 {
-					end := idx + 80
-					if end > len(funcBody) {
-						end = len(funcBody)
-					}
-				}
+		validatorRef := strings.TrimSpace(refMatch[1])
+		var validatorDef string
+		var found bool
+
+		// First try exact match
+		if validatorDef, found = p.validatorCache[validatorRef]; !found {
+			// If not found and has dot notation (e.g., ProjectModel.listProjectsValidator),
+			// try looking up just the validator name after the last dot.
+			if dotIdx := strings.LastIndex(validatorRef, "."); dotIdx != -1 {
+				shortName := validatorRef[dotIdx+1:]
+				validatorDef, found = p.validatorCache[shortName]
 			}
 		}
-		if refMatch != nil {
-			validatorRef := strings.TrimSpace(refMatch[1])
-			var validatorDef string
-			var found bool
 
-			if strings.Contains(validatorRef, "getProject") {
-			}
-
-			// First try exact match
-			if validatorDef, found = p.validatorCache[validatorRef]; !found {
-				// If not found and has dot notation (e.g., ProjectModel.listProjectsValidator)
-				// try looking up just the validator name after the last dot
-				if dotIdx := strings.LastIndex(validatorRef, "."); dotIdx != -1 {
-					shortName := validatorRef[dotIdx+1:]
-					if strings.Contains(shortName, "getProject") {
-					}
-					validatorDef, found = p.validatorCache[shortName]
-					if strings.Contains(shortName, "getProject") {
-					}
-				}
-			}
-
-			if found {
-				if strings.Contains(validatorRef, "getProject") {
-					// Print each character to see what's actually in there
-					printLen := 100
-					if len(validatorDef) < printLen {
-						printLen = len(validatorDef)
-					}
-				}
-				// Extract the inner content of v.object({ ... })
-				innerMatch := regexp.MustCompile(`v\.object\s*\(\s*\{([^}]+)\}`).FindStringSubmatch(validatorDef)
-				if innerMatch != nil {
-					argsBlock = innerMatch[1]
-					if strings.Contains(validatorRef, "getProject") {
-					}
-				} else if strings.Contains(validatorRef, "getProject") {
-				}
-			} else if strings.Contains(validatorRef, "getProject") {
-			}
+		if found {
+			argsBlock = extractValidatorArgsBlock(validatorDef)
 		}
 	}
 
