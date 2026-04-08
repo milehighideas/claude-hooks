@@ -6,7 +6,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 )
+
+// ansiRegex matches ANSI escape sequences (colors, cursor movement, etc.)
+var ansiRegex = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
+
+// stripANSI removes ANSI escape codes from a string so report files are clean text.
+func stripANSI(s string) string {
+	return ansiRegex.ReplaceAllString(s, "")
+}
 
 // runCommand executes a command with stdout/stderr connected to os.Stdout/os.Stderr.
 // It bypasses Go 1.19+ ErrDot security check for relative paths (e.g., node_modules/.bin).
@@ -76,7 +85,7 @@ func runCommandCapturedWithEnv(env map[string]string, name string, args ...strin
 	}
 
 	err := cmd.Run()
-	return stdout.String() + stderr.String(), err
+	return stripANSI(stdout.String() + stderr.String()), err
 }
 
 // runCommandCapturedInDir executes a command in a specific directory,
@@ -91,7 +100,7 @@ func runCommandCapturedInDir(dir, name string, args ...string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
-	return stdout.String() + stderr.String(), err
+	return stripANSI(stdout.String() + stderr.String()), err
 }
 
 // runCommandWithOutput executes a command and returns stdout as a string.
