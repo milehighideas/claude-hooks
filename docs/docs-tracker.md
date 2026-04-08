@@ -236,8 +236,10 @@ echo '{
 Build the binary:
 
 ```bash
-go build -o docs-tracker
+just docs-tracker
 ```
+
+This produces `bin/docs-tracker` from the repo root.
 
 ## Testing
 

@@ -19,8 +19,10 @@ This tool provides two operational modes:
 ## Building
 
 ```bash
-go build -o docs-tracker
+just docs-tracker
 ```
+
+This produces `bin/docs-tracker` from the repo root.
 
 ## Usage
 

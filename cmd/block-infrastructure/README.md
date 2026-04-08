@@ -55,9 +55,10 @@ Otherwise:
 1. Build the binary:
 
    ```bash
-   cd /Volumes/Developer/code/shared/claude-hooks/block-infrastructure
-   go build -o block-infrastructure
+   just block-infrastructure
    ```
+
+   This produces `bin/block-infrastructure` from the repo root.
 
 2. Configure Claude Code to use this hook as a PreToolUse hook for both Bash and Edit tools.
 

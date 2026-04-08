@@ -25,11 +25,11 @@ This tool operates as a **PreToolUse hook** in Claude Code, meaning it validates
 You can also build and run the tool manually:
 
 ```bash
-# Build the binary
-go build -o validate-frontend-structure
+# Build the binary (produces bin/validate-frontend-structure)
+just validate-frontend-structure
 
 # Run it directly (accepts JSON on stdin)
-echo '{"tool_name": "Write", "tool_input": {"file_path": "/project/components/feature.tsx"}}' | ./validate-frontend-structure
+echo '{"tool_name": "Write", "tool_input": {"file_path": "/project/components/feature.tsx"}}' | ./bin/validate-frontend-structure
 ```
 
 ## Configuration
@@ -311,16 +311,15 @@ apps/web/components/
 ### Build from Source
 
 ```bash
-cd validate-frontend-structure
-go build -o validate-frontend-structure
+just validate-frontend-structure
 ```
 
-Requires Go 1.25.5 or later.
+Requires Go 1.25.5 or later. This produces `bin/validate-frontend-structure` from the repo root.
 
 ### Install as Claude Hook
 
 ```bash
-cp validate-frontend-structure ~/.claude/hooks/
+cp bin/validate-frontend-structure ~/.claude/hooks/
 ```
 
 The hook will automatically be loaded when enabled via `CLAUDE_HOOKS_AST_VALIDATION=true`.

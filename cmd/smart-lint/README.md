@@ -22,14 +22,13 @@ A Go-based intelligent project-aware code quality checker for Claude Code hooks.
 ## Installation
 
 ```bash
-cd /Volumes/Developer/code/shared/claude-hooks/smart-lint
-go build -o smart-lint
+just smart-lint
 ```
 
-Install to your Claude Code hooks directory:
+This produces `bin/smart-lint` from the repo root. Install to your Claude Code hooks directory:
 
 ```bash
-cp smart-lint ~/.claude/hooks/
+cp bin/smart-lint ~/.claude/hooks/
 ```
 
 Configure as a Claude Code hook in your `~/.claude/config.json`:
@@ -104,7 +103,7 @@ go test -v
 ### Building
 
 ```bash
-go build -o smart-lint
+just smart-lint
 ```
 
 ## Architecture

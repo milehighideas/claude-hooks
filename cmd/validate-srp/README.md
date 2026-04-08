@@ -16,8 +16,10 @@ This tool validates code against architectural rules:
 ## Building
 
 ```bash
-go build -o validate-srp
+just validate-srp
 ```
+
+This produces `bin/validate-srp` from the repo root.
 
 ## Usage
 

@@ -5,7 +5,34 @@ default:
     @just --list
 
 # Build all binaries
-build: auto-convex-gen block-destructive-commands block-generated-files block-infrastructure block-lint-workarounds changelog-add convex-gen docs-tracker enforce-tests-on-commit format-on-save markdown-formatter pre-commit smart-lint smart-test track-edited-files validate-frontend-structure validate-srp validate-test-files
+build: check-workspace auto-convex-gen block-destructive-commands block-generated-files block-infrastructure block-lint-workarounds changelog-add convex-gen docs-tracker enforce-tests-on-commit format-on-save markdown-formatter pre-commit smart-lint smart-test track-edited-files validate-frontend-structure validate-srp validate-test-files
+
+# Fail if any executable exists at the repo root with the same name as a cmd/*/ subdir.
+# These get created when someone runs `go build ./cmd/<name>` from the repo root without -o,
+# which pollutes the workspace. Legit builds go to bin/ via `just <name>`.
+check-workspace:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
+    stray=()
+    for cmd in cmd/*/; do
+        name=$(basename "$cmd")
+        if [ -f "$name" ]; then
+            stray+=("$name")
+        fi
+    done
+    if [ ${#stray[@]} -gt 0 ]; then
+        echo "Error: found stray binaries at repo root:" >&2
+        for name in "${stray[@]}"; do
+            echo "  - $name" >&2
+        done
+        echo "" >&2
+        echo "These were probably built with 'go build ./cmd/<name>' from the repo root." >&2
+        echo "Use 'just <name>' or 'just build' — they write to {{bindir}}/ where they belong." >&2
+        echo "" >&2
+        echo "Fix: just clean" >&2
+        exit 1
+    fi
 
 # Individual binaries
 auto-convex-gen:
@@ -66,9 +93,19 @@ validate-test-files:
 test:
     go test ./...
 
-# Clean all binaries
+# Clean all binaries (bin/ and any stray root binaries from misguided `go build`s)
 clean:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    shopt -s nullglob
     rm -rf {{bindir}}/*
+    for cmd in cmd/*/; do
+        name=$(basename "$cmd")
+        if [ -f "$name" ]; then
+            echo "Removing stray root binary: $name"
+            rm "$name"
+        fi
+    done
 
 # Install binaries to /usr/local/bin
 install: build
@@ -79,7 +116,7 @@ install: build
     done
 
 # Cross-compile for all platforms
-build-all: build-darwin build-linux build-linux-arm64 build-windows
+build-all: check-workspace build-darwin build-linux build-linux-arm64 build-windows
 
 # Build for macOS (Apple Silicon)
 build-darwin:

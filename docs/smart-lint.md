@@ -35,14 +35,15 @@ The tool is a modernized replacement for the bash `smart-lint.sh` script, offeri
 1. Build the binary:
 
 ```bash
-cd /Volumes/Developer/code/shared/claude-hooks/smart-lint
-go build -o smart-lint
+just smart-lint
 ```
+
+   This produces `bin/smart-lint` from the repo root.
 
 2. Copy to your Claude hooks directory:
 
 ```bash
-cp smart-lint ~/.claude/hooks/
+cp bin/smart-lint ~/.claude/hooks/
 ```
 
 3. Configure in your `~/.claude/config.json`:

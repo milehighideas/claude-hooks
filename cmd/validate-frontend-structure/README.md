@@ -80,8 +80,10 @@ feature-name/
 ## Building
 
 ```bash
-go build -o validate-frontend-structure
+just validate-frontend-structure
 ```
+
+This produces `bin/validate-frontend-structure` from the repo root.
 
 ## Testing
 

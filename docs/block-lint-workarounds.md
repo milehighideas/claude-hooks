@@ -193,9 +193,10 @@ The tool uses the following regex patterns for detection:
 To build the binary from source:
 
 ```bash
-cd /Volumes/Developer/code/shared/claude-hooks/block-lint-workarounds
-go build -o block-lint-workarounds main.go
+just block-lint-workarounds
 ```
+
+This produces `bin/block-lint-workarounds` from the repo root.
 
 ## Testing
 

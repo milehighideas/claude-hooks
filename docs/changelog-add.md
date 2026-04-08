@@ -32,15 +32,14 @@ The tool integrates with your project's `.pre-commit.json` configuration to dete
 Build the binary:
 
 ```bash
-cd /Volumes/Developer/code/shared/claude-hooks/changelog-add
-go build -o changelog-add
+just changelog-add
 ```
 
-Optionally, install to a directory in your PATH:
+This produces `bin/changelog-add` from the repo root. Optionally, install to a directory in your PATH:
 
 ```bash
-go build -o changelog-add
-sudo install changelog-add /usr/local/bin/
+just changelog-add
+sudo install bin/changelog-add /usr/local/bin/
 ```
 
 ### Basic Usage

@@ -19,9 +19,10 @@ A Claude Code PostToolUse hook that automatically runs tests after editing files
 ## Installation
 
 ```bash
-cd /Volumes/Developer/code/shared/claude-hooks/smart-test
-go build -o smart-test
+just smart-test
 ```
+
+This produces `bin/smart-test` from the repo root.
 
 ## Configuration
 
