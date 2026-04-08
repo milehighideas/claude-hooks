@@ -12,17 +12,18 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+          cache: false  # No external deps → no go.sum → nothing to cache
 
       - name: Run tests
         run: go test ./...
 
       - name: Install just
-        uses: extractions/setup-just@v2
+        uses: extractions/setup-just@v4
 
       - name: Build all platforms
         run: just build-all
@@ -47,6 +48,8 @@ jobs:
           git push origin "$TAG"
 
       - name: Create release
+        # Still on v2 (Node 20) — softprops/action-gh-release#670 tracks the
+        # Node 24 upgrade. Bump when a release lands.
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TAG }}
