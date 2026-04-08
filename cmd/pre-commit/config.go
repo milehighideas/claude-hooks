@@ -31,6 +31,7 @@ type Config struct {
 	MockCheck          MockCheckConfig       `json:"mockCheck"`
 	TestConfig         TestConfig            `json:"testConfig"`
 	TestCoverageConfig TestCoverageConfig    `json:"testCoverageConfig"`
+	TestQualityConfig  TestQualityConfig     `json:"testQualityConfig"`
 	SRPConfig          SRPConfig             `json:"srpConfig"`
 	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
 	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
@@ -65,6 +66,7 @@ type Features struct {
 	MockCheck          bool `json:"mockCheck"`
 	VitestAssertions   bool `json:"vitestAssertions"`
 	TestCoverage       bool `json:"testCoverage"`
+	TestQuality        bool `json:"testQuality"`
 	NativeBuild        bool `json:"nativeBuild"`
 	DataLayerCheck     bool `json:"dataLayerCheck"`
 }

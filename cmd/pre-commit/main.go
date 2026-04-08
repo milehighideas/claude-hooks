@@ -177,6 +177,7 @@ func printAvailableChecks() {
 	fmt.Println("  buildCheck         - Build verification (if enabled)")
 	fmt.Println("  vitestAssertions   - Ensure vitest configs have requireAssertions: true")
 	fmt.Println("  testCoverage       - Ensure source files have corresponding test files")
+	fmt.Println("  testQuality        - Ban export-only stub tests (toBeDefined/typeof checks)")
 	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
 }
 
@@ -395,6 +396,11 @@ func run() error {
 	// Test coverage check - ensures source files have corresponding test files
 	if config.Features.TestCoverage {
 		collectResult("testCoverage", runTestCoverageCheck(config.TestCoverageConfig))
+	}
+
+	// Test quality check - bans export-only stub tests
+	if config.Features.TestQuality {
+		collectResult("testQuality", runTestQualityCheck(config.TestQualityConfig))
 	}
 
 	// Build check
@@ -754,6 +760,8 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runVitestAssertionsCheck(config.Apps)
 	case "testCoverage":
 		return runTestCoverageCheck(config.TestCoverageConfig)
+	case "testQuality":
+		return runTestQualityCheck(config.TestQualityConfig)
 	case "dataLayerCheck":
 		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
 	default:
@@ -816,6 +824,11 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	// Test coverage check
 	if config.Features.TestCoverage {
 		collectResult("testCoverage", runTestCoverageCheck(config.TestCoverageConfig))
+	}
+
+	// Test quality check
+	if config.Features.TestQuality {
+		collectResult("testQuality", runTestQualityCheck(config.TestQualityConfig))
 	}
 
 	// Lint and typecheck
