@@ -34,6 +34,7 @@ type Config struct {
 	TestQualityConfig  TestQualityConfig     `json:"testQualityConfig"`
 	SRPConfig          SRPConfig             `json:"srpConfig"`
 	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
+	MaestroValidation  MaestroValidationConfig `json:"maestroValidation"`
 	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
 }
 
@@ -69,6 +70,7 @@ type Features struct {
 	TestQuality        bool `json:"testQuality"`
 	NativeBuild        bool `json:"nativeBuild"`
 	DataLayerCheck     bool `json:"dataLayerCheck"`
+	MaestroValidation  bool `json:"maestroValidation"`
 }
 
 // AppConfig represents configuration for a single app
@@ -155,6 +157,27 @@ type TestCoverageConfig struct {
 	ExcludeFiles []string `json:"excludeFiles"`
 	// ExcludePaths specifies path patterns to exclude entirely
 	ExcludePaths []string `json:"excludePaths"`
+}
+
+// MaestroValidationConfig configures static validation that every id: selector
+// used in a Maestro .yaml flow still resolves to a testID in source code.
+// This catches drift when screens are refactored and testIDs rename/disappear
+// without the corresponding flows being updated.
+type MaestroValidationConfig struct {
+	// FlowsDir is the repo-root-relative directory containing Maestro .yaml
+	// flow files (e.g. "apps/mobile/.maestro/flows"). The directory is walked
+	// recursively and every .yaml file is scanned for `id:` selectors.
+	FlowsDir string `json:"flowsDir"`
+	// SourceDirs lists repo-root-relative directories to scan for testID
+	// definitions. Must include any directory where production code lives that
+	// the flows interact with — typically the mobile app source and any shared
+	// UI package that hosts components rendered by the app.
+	// Example: ["apps/mobile/app", "apps/mobile/components", "packages/mobile-ui/src"]
+	SourceDirs []string `json:"sourceDirs"`
+	// ExcludeDirs adds directory basenames to skip while walking SourceDirs.
+	// These are merged with a built-in set of critical skips (node_modules,
+	// build output, coverage, __tests__, etc) that are always applied.
+	ExcludeDirs []string `json:"excludeDirs"`
 }
 
 // ChangelogConfig configures changelog fragment checking

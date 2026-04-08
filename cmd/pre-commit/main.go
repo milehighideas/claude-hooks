@@ -179,6 +179,7 @@ func printAvailableChecks() {
 	fmt.Println("  testCoverage       - Ensure source files have corresponding test files")
 	fmt.Println("  testQuality        - Ban export-only stub tests (toBeDefined/typeof checks)")
 	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
+	fmt.Println("  maestroValidation  - Validate Maestro flow id: selectors resolve to source testIDs")
 }
 
 func run() error {
@@ -337,6 +338,11 @@ func run() error {
 	// Data layer check
 	if config.Features.DataLayerCheck {
 		collectResult("dataLayerCheck", runDataLayerCheck(appFiles, config.DataLayerAllowed))
+	}
+
+	// Maestro flow validation
+	if config.Features.MaestroValidation {
+		collectResult("maestroValidation", runMaestroValidation(config.MaestroValidation))
 	}
 
 	// Frontend structure check
@@ -764,6 +770,8 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runTestQualityCheck(config.TestQualityConfig)
 	case "dataLayerCheck":
 		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
+	case "maestroValidation":
+		return runMaestroValidation(config.MaestroValidation)
 	default:
 		return fmt.Errorf("unknown check: %s (use --list to see available checks)", name)
 	}
@@ -814,6 +822,11 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	// Data layer check
 	if config.Features.DataLayerCheck {
 		collectResult("dataLayerCheck", runDataLayerCheck(appFiles, config.DataLayerAllowed))
+	}
+
+	// Maestro flow validation
+	if config.Features.MaestroValidation {
+		collectResult("maestroValidation", runMaestroValidation(config.MaestroValidation))
 	}
 
 	// Vitest assertions check
