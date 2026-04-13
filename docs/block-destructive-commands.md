@@ -257,6 +257,22 @@ All forms of removing or corrupting `.git`:
 - `git merge --no-verify`
 - Works with git global flags (e.g., `git -C <path> commit --no-verify`)
 
+**Git inline config overrides (`-c` flag):**
+
+- `git -c core.hooksPath=...` (disables hooks by overriding hooks directory)
+- `git --config-env=core.hooksPath=...` (same bypass via environment variable mapping)
+- `git -c commit.gpgSign=false` / `no` / `off` / `0` (disables commit signing)
+- `git -c tag.gpgSign=false` / `no` / `off` / `0` (disables tag signing)
+- `git -c gpg.program=...` (redirects GPG to a no-op program)
+- Works with other git global flags (e.g., `git -C <path> -c core.hooksPath=/dev/null commit`)
+
+**Git environment variable config overrides:**
+
+- `GIT_CONFIG_GLOBAL=` (overrides global config file path)
+- `GIT_CONFIG_NOSYSTEM=` (skips reading system config)
+- `GIT_CONFIG_SYSTEM=` (overrides system config file path)
+- `GIT_DIR=` (overrides git directory, can point to a fake repo with no hooks)
+
 ### Framework-Specific Unsafe Deployments
 
 - `convex dev` / `convex deploy` with `--typecheck=disable`
