@@ -318,6 +318,19 @@ var hookBypassPatterns = []pattern{
 	{regex: regexp.MustCompile(`(?i)\bgit\s+.*\bcommit\s+.*-n\b`), name: "git commit -n"},
 	{regex: regexp.MustCompile(`(?i)\bgit\s+.*\bpush\s+.*--no-verify\b`), name: "git push --no-verify"},
 	{regex: regexp.MustCompile(`(?i)\bgit\s+.*\bmerge\s+.*--no-verify\b`), name: "git merge --no-verify"},
+
+	// Git -c config overrides that bypass hooks or signing
+	{regex: regexp.MustCompile(`(?i)\bgit\s+.*-c\s+core\.hooksPath\s*=`), name: "git -c core.hooksPath (hook bypass via inline config)"},
+	{regex: regexp.MustCompile(`(?i)\bgit\s+.*--config-env\s*=\s*core\.hooksPath\s*=`), name: "git --config-env=core.hooksPath (hook bypass via config-env)"},
+	{regex: regexp.MustCompile(`(?i)\bgit\s+.*-c\s+commit\.gpgSign\s*=\s*(false|no|off|0)\b`), name: "git -c commit.gpgSign=false (signing bypass)"},
+	{regex: regexp.MustCompile(`(?i)\bgit\s+.*-c\s+tag\.gpgSign\s*=\s*(false|no|off|0)\b`), name: "git -c tag.gpgSign=false (signing bypass)"},
+	{regex: regexp.MustCompile(`(?i)\bgit\s+.*-c\s+gpg\.program\s*=`), name: "git -c gpg.program (GPG program override)"},
+
+	// Git environment variables that override config files
+	{regex: regexp.MustCompile(`(?i)\bGIT_CONFIG_GLOBAL\s*=`), name: "GIT_CONFIG_GLOBAL (global config override)"},
+	{regex: regexp.MustCompile(`(?i)\bGIT_CONFIG_NOSYSTEM\s*=`), name: "GIT_CONFIG_NOSYSTEM (system config bypass)"},
+	{regex: regexp.MustCompile(`(?i)\bGIT_CONFIG_SYSTEM\s*=`), name: "GIT_CONFIG_SYSTEM (system config override)"},
+	{regex: regexp.MustCompile(`(?i)\bGIT_DIR\s*=`), name: "GIT_DIR (git directory override)"},
 }
 
 // gitCommandRegex detects any git command invocation and extracts the subcommand.
