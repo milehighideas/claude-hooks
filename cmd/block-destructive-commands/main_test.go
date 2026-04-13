@@ -234,6 +234,28 @@ func TestHookBypassPatterns(t *testing.T) {
 
 		// === Combined bypass attempts ===
 		{"triple bypass", "SKIP_TESTS=1 SKIP_HOOK=1 git commit --no-verify", true},
+
+		// === Git -c config override bypasses ===
+		{"core.hooksPath /dev/null", "git -c core.hooksPath=/dev/null commit -m 'msg'", true},
+		{"core.hooksPath empty", "git -c core.hooksPath= commit -m 'msg'", true},
+		{"core.hooksPath with -C flag", "git -C /path -c core.hooksPath=/dev/null commit -m 'msg'", true},
+		{"core.hooksPath via config-env", "git --config-env=core.hooksPath=HOOKS_PATH commit -m 'msg'", true},
+		{"commit.gpgSign=false", "git -c commit.gpgSign=false commit -m 'msg'", true},
+		{"commit.gpgSign=no", "git -c commit.gpgSign=no commit -m 'msg'", true},
+		{"commit.gpgsign=0 case insensitive", "git -c commit.gpgsign=0 commit -m 'msg'", true},
+		{"commit.gpgSign=off", "git -c commit.gpgSign=off commit -m 'msg'", true},
+		{"tag.gpgSign=false", "git -c tag.gpgSign=false tag v1.0", true},
+		{"gpg.program override", "git -c gpg.program=/bin/true commit -m 'msg'", true},
+
+		// === Git environment variable config overrides ===
+		{"GIT_CONFIG_GLOBAL", "GIT_CONFIG_GLOBAL=/dev/null git commit -m 'msg'", true},
+		{"GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_NOSYSTEM=1 git commit -m 'msg'", true},
+		{"GIT_CONFIG_SYSTEM", "GIT_CONFIG_SYSTEM=/dev/null git commit -m 'msg'", true},
+		{"GIT_DIR override", "GIT_DIR=/tmp/fake git commit -m 'msg'", true},
+
+		// === Safe -c usage (should NOT be blocked) ===
+		{"safe core.pager override", "git -c core.pager=cat log --oneline", false},
+		{"gpgSign=true (enabling)", "git -c commit.gpgSign=true commit -m 'msg'", false},
 	}
 
 	for _, tt := range tests {
