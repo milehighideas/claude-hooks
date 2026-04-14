@@ -653,3 +653,237 @@ func TestCheckDisabled(t *testing.T) {
 		})
 	}
 }
+
+func TestIsTestFileWriteOperation(t *testing.T) {
+	tests := []struct {
+		name         string
+		data         HookData
+		wantIsOp     bool
+		wantFilePath string
+	}{
+		{
+			name: "Write .test.tsx",
+			data: HookData{
+				ToolName:  "Write",
+				ToolInput: ToolInput{FilePath: "/src/components/Button.test.tsx"},
+			},
+			wantIsOp:     true,
+			wantFilePath: "/src/components/Button.test.tsx",
+		},
+		{
+			name: "Write .test.ts",
+			data: HookData{
+				ToolName:  "Write",
+				ToolInput: ToolInput{FilePath: "/src/hooks/useAuth.test.ts"},
+			},
+			wantIsOp:     true,
+			wantFilePath: "/src/hooks/useAuth.test.ts",
+		},
+		{
+			name: "Edit .test.tsx",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: "/src/components/Button.test.tsx"},
+			},
+			wantIsOp:     true,
+			wantFilePath: "/src/components/Button.test.tsx",
+		},
+		{
+			name: "Write non-test file",
+			data: HookData{
+				ToolName:  "Write",
+				ToolInput: ToolInput{FilePath: "/src/components/Button.tsx"},
+			},
+			wantIsOp:     false,
+			wantFilePath: "",
+		},
+		{
+			name: "Read .test.tsx",
+			data: HookData{
+				ToolName:  "Read",
+				ToolInput: ToolInput{FilePath: "/src/components/Button.test.tsx"},
+			},
+			wantIsOp:     false,
+			wantFilePath: "",
+		},
+		{
+			name: ".spec.ts is not targeted",
+			data: HookData{
+				ToolName:  "Write",
+				ToolInput: ToolInput{FilePath: "/src/util.spec.ts"},
+			},
+			wantIsOp:     false,
+			wantFilePath: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotIsOp, gotFilePath := isTestFileWriteOperation(tt.data)
+			if gotIsOp != tt.wantIsOp {
+				t.Errorf("isTestFileWriteOperation() gotIsOp = %v, want %v", gotIsOp, tt.wantIsOp)
+			}
+			if gotFilePath != tt.wantFilePath {
+				t.Errorf("isTestFileWriteOperation() gotFilePath = %v, want %v", gotFilePath, tt.wantFilePath)
+			}
+		})
+	}
+}
+
+func TestIsStubContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name: "canonical stub",
+			content: `import { describe, it, expect } from "vitest";
+
+describe("Component.test.tsx", () => {
+  it("should be defined", () => {
+    expect(true).toBe(true);
+  });
+});`,
+			want: true,
+		},
+		{
+			name: "multiple stubs, all placeholder",
+			content: `describe("x", () => {
+  it("a", () => { expect(true).toBe(true); });
+  it("b", () => { expect(true).toBe(true); });
+});`,
+			want: true,
+		},
+		{
+			name: "stub with whitespace variations",
+			content: `it("stub", () => { expect( true ) . toBe( true ); });`,
+			want: true,
+		},
+		{
+			name: "real test, no stub at all",
+			content: `import { render, screen } from "@testing-library/react";
+import { Button } from "./Button";
+it("renders label", () => {
+  render(<Button label="Hi" />);
+  expect(screen.getByText("Hi")).toBeTruthy();
+});`,
+			want: false,
+		},
+		{
+			name: "mixed: one stub plus one real assertion — NOT a stub",
+			content: `it("a", () => { expect(true).toBe(true); });
+it("b", () => { expect(value).toBe(42); });`,
+			want: false,
+		},
+		{
+			name:    "empty file",
+			content: ``,
+			want:    false,
+		},
+		{
+			name:    "file with no expect calls",
+			content: `describe("x", () => { it("a", () => {}); });`,
+			want:    false,
+		},
+		{
+			name: "expect(true).toBe(false) is not the stub pattern",
+			content: `it("a", () => { expect(true).toBe(false); });`,
+			want:    false,
+		},
+		{
+			name: "comment mentioning expect(true).toBe(true) alongside real tests",
+			content: `// avoid expect(true).toBe(true)
+it("real", () => { expect(x).toBe(1); });`,
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isStubContent(tt.content)
+			if got != tt.want {
+				t.Errorf("isStubContent() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetResultingTestContent(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Seed a file for Edit simulation
+	existingPath := filepath.Join(tmpDir, "Seed.test.tsx")
+	existingContent := `it("a", () => { expect(x).toBe(1); });`
+	if err := os.WriteFile(existingPath, []byte(existingContent), 0644); err != nil {
+		t.Fatalf("failed to seed file: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		data    HookData
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "Write returns content directly",
+			data: HookData{
+				ToolName: "Write",
+				ToolInput: ToolInput{
+					FilePath: "/virtual/new.test.tsx",
+					Content:  `expect(true).toBe(true);`,
+				},
+			},
+			want:    `expect(true).toBe(true);`,
+			wantErr: false,
+		},
+		{
+			name: "Edit applies replacement to existing file",
+			data: HookData{
+				ToolName: "Edit",
+				ToolInput: ToolInput{
+					FilePath:  existingPath,
+					OldString: `expect(x).toBe(1)`,
+					NewString: `expect(true).toBe(true)`,
+				},
+			},
+			want:    `it("a", () => { expect(true).toBe(true); });`,
+			wantErr: false,
+		},
+		{
+			name: "Edit on missing file errors",
+			data: HookData{
+				ToolName: "Edit",
+				ToolInput: ToolInput{
+					FilePath:  filepath.Join(tmpDir, "does-not-exist.test.tsx"),
+					OldString: "a",
+					NewString: "b",
+				},
+			},
+			want:    "",
+			wantErr: true,
+		},
+		{
+			name: "Unknown tool errors",
+			data: HookData{
+				ToolName:  "Read",
+				ToolInput: ToolInput{FilePath: existingPath},
+			},
+			want:    "",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := getResultingTestContent(tt.data)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("getResultingTestContent() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if got != tt.want {
+				t.Errorf("getResultingTestContent() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

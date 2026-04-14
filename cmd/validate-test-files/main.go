@@ -28,7 +28,10 @@ type Violation struct {
 
 // ToolInput represents the input to a tool call
 type ToolInput struct {
-	FilePath string `json:"file_path"`
+	FilePath  string `json:"file_path"`
+	Content   string `json:"content,omitempty"`    // Write
+	OldString string `json:"old_string,omitempty"` // Edit
+	NewString string `json:"new_string,omitempty"` // Edit
 }
 
 // HookData represents the JSON input from Claude
@@ -293,6 +296,54 @@ func isComponentWriteOperation(data HookData) (bool, string) {
 	return false, ""
 }
 
+// isTestFileWriteOperation checks if the tool call writes or edits a unit test file.
+func isTestFileWriteOperation(data HookData) (bool, string) {
+	if data.ToolName != "Write" && data.ToolName != "Edit" {
+		return false, ""
+	}
+	fp := data.ToolInput.FilePath
+	if strings.HasSuffix(fp, ".test.tsx") || strings.HasSuffix(fp, ".test.ts") {
+		return true, fp
+	}
+	return false, ""
+}
+
+// Regex patterns for stub detection. Compiled once at package init.
+var (
+	stubExpectPattern = regexp.MustCompile(`expect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)`)
+	anyExpectPattern  = regexp.MustCompile(`\bexpect\s*\(`)
+)
+
+// isStubContent returns true if the file content contains only placeholder
+// expect(true).toBe(true) assertions. A file is a stub if every expect() call
+// is the placeholder form.
+func isStubContent(content string) bool {
+	stubMatches := stubExpectPattern.FindAllString(content, -1)
+	if len(stubMatches) == 0 {
+		return false
+	}
+	expectMatches := anyExpectPattern.FindAllString(content, -1)
+	return len(expectMatches) == len(stubMatches)
+}
+
+// getResultingTestContent computes the file content that would exist after the
+// tool call completes. Write supplies content directly; Edit applies a single
+// replacement to the existing file.
+func getResultingTestContent(data HookData) (string, error) {
+	switch data.ToolName {
+	case "Write":
+		return data.ToolInput.Content, nil
+	case "Edit":
+		existing, err := os.ReadFile(data.ToolInput.FilePath)
+		if err != nil {
+			return "", fmt.Errorf("failed to read file for edit simulation: %w", err)
+		}
+		return strings.Replace(string(existing), data.ToolInput.OldString, data.ToolInput.NewString, 1), nil
+	default:
+		return "", fmt.Errorf("unsupported tool: %s", data.ToolName)
+	}
+}
+
 // checkDisabled checks if the hook is disabled via environment variable
 func checkDisabled() bool {
 	return os.Getenv("CLAUDE_HOOKS_AST_VALIDATION") == "false"
@@ -310,6 +361,29 @@ func main() {
 	if err := decoder.Decode(&data); err != nil {
 		// Allow if we can't parse
 		os.Exit(0)
+	}
+
+	// Reject stub test files (expect(true).toBe(true) placeholders).
+	// Runs before the component-write check because test files are skipped there.
+	if isTestOp, testPath := isTestFileWriteOperation(data); isTestOp {
+		content, err := getResultingTestContent(data)
+		if err == nil && isStubContent(content) {
+			msg := fmt.Sprintf(`BLOCKED: Stub test file rejected
+
+File: %s
+
+Test file contains only placeholder assertions (expect(true).toBe(true)).
+Write real assertions that verify the component's behavior.
+
+If the component is genuinely hard to test (complex Convex/Clerk context,
+auth gating, etc.), ask the user how much mocking infrastructure to build
+rather than falling back to stubs.
+
+To bypass (not recommended): set CLAUDE_HOOKS_AST_VALIDATION=false
+`, filepath.Base(testPath))
+			fmt.Fprintln(os.Stderr, msg)
+			os.Exit(2)
+		}
 	}
 
 	// Only validate on component write operations
