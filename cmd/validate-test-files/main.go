@@ -5,13 +5,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/milehighideas/claude-hooks/internal/jsonc"
+	"github.com/milehighideas/claude-hooks/internal/stubs"
 )
 
 // E2E test extensions by app type
@@ -313,22 +313,11 @@ func isTestFileWriteOperation(data HookData) (bool, string) {
 	return false, ""
 }
 
-// Regex patterns for stub detection. Compiled once at package init.
-var (
-	stubExpectPattern = regexp.MustCompile(`expect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)`)
-	anyExpectPattern  = regexp.MustCompile(`\bexpect\s*\(`)
-)
-
-// isStubContent returns true if the file content contains only placeholder
-// expect(true).toBe(true) assertions. A file is a stub if every expect() call
-// is the placeholder form.
+// isStubContent is an alias for the shared stubs.IsStub detector. Kept as a
+// package-local name so the tests that exercise it don't need to know where
+// the implementation lives.
 func isStubContent(content string) bool {
-	stubMatches := stubExpectPattern.FindAllString(content, -1)
-	if len(stubMatches) == 0 {
-		return false
-	}
-	expectMatches := anyExpectPattern.FindAllString(content, -1)
-	return len(expectMatches) == len(stubMatches)
+	return stubs.IsStub(content)
 }
 
 // getResultingTestContent computes the file content that would exist after the
@@ -555,55 +544,10 @@ To fix:
 	return 2
 }
 
-// stubWalkSkipDirs lists directory basenames that listStubs never descends
-// into. Kept intentionally small — generated code, VCS, and installed
-// dependencies are the three places real test authors never touch.
-var stubWalkSkipDirs = map[string]bool{
-	"node_modules": true,
-	".git":         true,
-	"_generated":   true,
-	"dist":         true,
-	"build":        true,
-	".next":        true,
-	".turbo":       true,
-	".vercel":      true,
-}
-
-// listStubs walks root for *.test.ts and *.test.tsx files, reporting paths
-// whose every expect() call is the expect(true).toBe(true) placeholder. Uses
-// the same isStubContent detector that rejects new stubs at Write/Edit time,
-// so what the hook prevents and what this flag finds can never drift.
-// Returns the count of stubs discovered.
+// listStubs is a thin wrapper around stubs.List so the CLI and tests keep
+// the same entry point while the implementation lives in the shared package.
 func listStubs(root string, out io.Writer) (int, error) {
-	if _, err := os.Stat(root); err != nil {
-		return 0, err
-	}
-	count := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
-		if werr != nil {
-			return nil // tolerate unreadable subtrees
-		}
-		if d.IsDir() {
-			if path != root && stubWalkSkipDirs[d.Name()] {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		name := d.Name()
-		if !strings.HasSuffix(name, ".test.ts") && !strings.HasSuffix(name, ".test.tsx") {
-			return nil
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return nil
-		}
-		if isStubContent(string(data)) {
-			fmt.Fprintln(out, path)
-			count++
-		}
-		return nil
-	})
-	return count, err
+	return stubs.List(root, out)
 }
 
 func main() {
