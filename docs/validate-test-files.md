@@ -71,9 +71,35 @@ The hook receives JSON input via stdin containing:
 ### Command Line Usage
 
 ```bash
-# Run directly with JSON input via stdin
+# Run directly with JSON input via stdin (how Claude Code invokes the hook)
 echo '{"tool_name":"Write","tool_input":{"file_path":"/path/to/component.tsx"}}' | ./validate-test-files
 ```
+
+### Listing existing stub tests
+
+Use the `-list-stubs` flag to scan one or more paths for test files whose every `expect()` call is the `expect(true).toBe(true)` placeholder. Same detector used to reject new stubs at Write/Edit time, so what the hook prevents and what this flag finds can never drift.
+
+```bash
+# Scan apps/ and packages/ in the current project
+validate-test-files -list-stubs apps packages
+
+# Scan the whole repo (no args defaults to cwd)
+validate-test-files -list-stubs
+
+# Pipe-friendly: exit 1 if any stubs found, 0 if clean
+validate-test-files -list-stubs apps | wc -l
+validate-test-files -list-stubs apps | xargs -I{} code {}
+```
+
+Skipped directories: `node_modules`, `.git`, `_generated`, `dist`, `build`, `.next`, `.turbo`, `.vercel`.
+
+Exit codes:
+
+- **0** — no stubs found
+- **1** — one or more stubs found (paths printed to stdout)
+- **2** — a supplied path could not be read (error written to stderr)
+
+This mode does **not** require `.pre-commit.json` or `features.testFiles: true` — it's a standalone audit tool that runs anywhere.
 
 ## How It Works
 

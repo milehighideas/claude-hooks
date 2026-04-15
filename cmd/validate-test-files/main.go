@@ -2,8 +2,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -553,7 +555,82 @@ To fix:
 	return 2
 }
 
+// stubWalkSkipDirs lists directory basenames that listStubs never descends
+// into. Kept intentionally small — generated code, VCS, and installed
+// dependencies are the three places real test authors never touch.
+var stubWalkSkipDirs = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	"_generated":   true,
+	"dist":         true,
+	"build":        true,
+	".next":        true,
+	".turbo":       true,
+	".vercel":      true,
+}
+
+// listStubs walks root for *.test.ts and *.test.tsx files, reporting paths
+// whose every expect() call is the expect(true).toBe(true) placeholder. Uses
+// the same isStubContent detector that rejects new stubs at Write/Edit time,
+// so what the hook prevents and what this flag finds can never drift.
+// Returns the count of stubs discovered.
+func listStubs(root string, out io.Writer) (int, error) {
+	if _, err := os.Stat(root); err != nil {
+		return 0, err
+	}
+	count := 0
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+		if werr != nil {
+			return nil // tolerate unreadable subtrees
+		}
+		if d.IsDir() {
+			if path != root && stubWalkSkipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".test.ts") && !strings.HasSuffix(name, ".test.tsx") {
+			return nil
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		if isStubContent(string(data)) {
+			fmt.Fprintln(out, path)
+			count++
+		}
+		return nil
+	})
+	return count, err
+}
+
 func main() {
+	listStubsMode := flag.Bool("list-stubs", false,
+		"scan positional paths (or cwd) for pure-stub test files and exit")
+	flag.Parse()
+
+	if *listStubsMode {
+		roots := flag.Args()
+		if len(roots) == 0 {
+			roots = []string{"."}
+		}
+		total := 0
+		for _, r := range roots {
+			n, err := listStubs(r, os.Stdout)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "validate-test-files: %v\n", err)
+				os.Exit(2)
+			}
+			total += n
+		}
+		if total == 0 {
+			os.Exit(0)
+		}
+		os.Exit(1)
+	}
+
 	var data HookData
 	if err := json.NewDecoder(os.Stdin).Decode(&data); err != nil {
 		// Allow if we can't parse

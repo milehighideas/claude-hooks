@@ -1326,6 +1326,116 @@ func TestRunRespectsEnvDisable(t *testing.T) {
 	}
 }
 
+func TestListStubs(t *testing.T) {
+	root := t.TempDir()
+
+	write := func(rel, content string) string {
+		full := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatalf("mkdir %s: %v", rel, err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatalf("write %s: %v", rel, err)
+		}
+		return full
+	}
+
+	// Pure stub — should be reported.
+	stub := write("a/Foo.test.tsx",
+		`it("x", () => { expect(true).toBe(true); });`)
+
+	// Real test — not a stub.
+	write("a/Bar.test.tsx",
+		`it("x", () => { expect(actual).toBe(42); });`)
+
+	// Mixed file — has at least one real assertion, NOT a stub.
+	write("b/Mixed.test.ts",
+		`it("a", () => { expect(true).toBe(true); });
+		 it("b", () => { expect(x).toBe(1); });`)
+
+	// Non-test source file — ignored.
+	write("a/Foo.tsx", `export const Foo = () => null;`)
+
+	// Non-ts file — ignored.
+	write("a/README.md", `# docs`)
+
+	// Stub inside node_modules — skipped.
+	write("node_modules/pkg/nm.test.tsx",
+		`it("x", () => { expect(true).toBe(true); });`)
+
+	// Stub inside _generated — skipped.
+	write("packages/backend/convex/_generated/gen.test.ts",
+		`it("x", () => { expect(true).toBe(true); });`)
+
+	// Stub inside .git — skipped.
+	write(".git/hooks/sample.test.ts",
+		`it("x", () => { expect(true).toBe(true); });`)
+
+	// Another stub, nested — should be reported.
+	stubNested := write("packages/ui/components/Button.test.ts",
+		`describe("x", () => { it("a", () => { expect(true).toBe(true); }); });`)
+
+	var buf bytes.Buffer
+	count, err := listStubs(root, &buf)
+	if err != nil {
+		t.Fatalf("listStubs: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2 (stdout: %q)", count, buf.String())
+	}
+	out := buf.String()
+	if !strings.Contains(out, stub) {
+		t.Errorf("expected %s in output, got %q", stub, out)
+	}
+	if !strings.Contains(out, stubNested) {
+		t.Errorf("expected %s in output, got %q", stubNested, out)
+	}
+	if strings.Contains(out, "Bar.test.tsx") {
+		t.Errorf("Bar.test.tsx is a real test, should not appear: %q", out)
+	}
+	if strings.Contains(out, "Mixed.test.ts") {
+		t.Errorf("Mixed.test.ts has real assertions alongside stub, should not appear: %q", out)
+	}
+	if strings.Contains(out, "node_modules") {
+		t.Errorf("node_modules should be skipped: %q", out)
+	}
+	if strings.Contains(out, "_generated") {
+		t.Errorf("_generated should be skipped: %q", out)
+	}
+	if strings.Contains(out, ".git") {
+		t.Errorf(".git should be skipped: %q", out)
+	}
+}
+
+func TestListStubs_CleanTree(t *testing.T) {
+	root := t.TempDir()
+	full := filepath.Join(root, "Foo.test.tsx")
+	if err := os.WriteFile(full, []byte(`it("x", () => { expect(y).toBe(1); });`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	var buf bytes.Buffer
+	count, err := listStubs(root, &buf)
+	if err != nil {
+		t.Fatalf("listStubs: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected empty output, got %q", buf.String())
+	}
+}
+
+func TestListStubs_NonexistentPath(t *testing.T) {
+	// Gracefully handle missing paths — return error rather than panicking.
+	var buf bytes.Buffer
+	_, err := listStubs("/this/does/not/exist", &buf)
+	if err == nil {
+		t.Error("expected error for nonexistent path, got nil")
+	}
+}
+
 func TestGetResultingTestContent(t *testing.T) {
 	tmpDir := t.TempDir()
 
