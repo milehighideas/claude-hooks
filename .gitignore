@@ -17,6 +17,10 @@ bin/*
 *.swp
 *.swo
 
+# Claude Code per-user session state (permissions, transcripts, local skills)
+.claude/settings.local.json
+.claude/sessions/
+
 # OS
 .DS_Store
 Thumbs.db
