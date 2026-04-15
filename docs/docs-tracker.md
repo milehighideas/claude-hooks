@@ -2,159 +2,108 @@
 
 **Repository:** [claude-hooks](https://github.com/milehighideas/claude-hooks) (`cmd/docs-tracker`)
 
-A unified Go binary that replaces two Python hooks for tracking and enforcing documentation reads in Claude Code sessions.
+A Go binary that gates Edit/Write operations on reading required documentation, and tracks documentation reads so the gate clears once a doc has been read.
 
 ## Overview
 
-`docs-tracker` is a Claude Code hook that ensures developers read required documentation before editing code in specific directories. It provides two operational modes:
+`docs-tracker` is a Claude Code hook with two operational modes:
 
-1. **Enforce Mode** (PreToolUse hook): Blocks Edit/Write operations if required documentation hasn't been read during the current session
-2. **Track Mode** (PostToolUse hook): Records when documentation files are read during a session
+1. **Enforce Mode** (PreToolUse hook): Blocks Edit/Write operations if required documentation hasn't been read during the current session.
+2. **Track Mode** (PostToolUse hook): Records when documentation files are read during a session.
 
-## How It's Used
+## Opt-in per project
 
-### As a Claude Code Hook
+The hook is **opt-in per project**. It only does anything when a project contains:
 
-This tool is designed to be integrated with Claude Code as a hook system:
-
-- **PreToolUse Hook**: Invoked before Edit and Write tools execute. Blocks operations if required documentation hasn't been read.
-- **PostToolUse Hook**: Invoked after the Read tool executes. Tracks which documentation files have been read.
-
-The hooks receive JSON input via stdin containing tool information and session data, and communicate results via exit codes and stderr messages.
-
-### Command Line Usage
-
-```bash
-docs-tracker --mode=enforce < hook_input.json
-docs-tracker --mode=track < hook_input.json
+```text
+<project-root>/.claude/docs-tracker.json
 ```
 
-## Command Line Arguments
+The file's presence is what enables the hook. The contents may be `{}` for the default behavior (future fields can extend config). Projects without this file see no-op behavior, which makes the hook safe to wire up globally in `~/.claude/settings.json`.
 
-### `--mode` (required)
+### Project root discovery
 
-Specifies the operation mode. Must be one of:
+At invocation the binary walks up from the tool's `file_path` looking for a directory that contains `.claude/docs-tracker.json`. That directory is treated as the project root. If none is found anywhere on the path, the hook exits 0 and does nothing.
 
-- `enforce`: PreToolUse mode - blocks edits if required docs haven't been read
-- `track`: PostToolUse mode - tracks documentation reads
+## Auto-discovered mappings
 
-Example:
+Once a project is opted in, the binary walks the project root looking for `CLAUDE.md` files. Each `<subdir>/CLAUDE.md` becomes a mapping: any Edit/Write of a file under `<subdir>/` requires reading that `CLAUDE.md` first.
+
+- The **root-level** `CLAUDE.md` is ignored (Claude Code already loads it as project context).
+- These directories are **skipped** during discovery: `node_modules`, `.git`, `dist`, `build`, `.next`, `.turbo`, `.vercel`, `_generated`.
+- When multiple `CLAUDE.md` files apply to a path, the **most specific** (longest pattern) wins. E.g. `apps/mobile/components/CLAUDE.md` takes precedence over `apps/mobile/CLAUDE.md` for files under `components/`.
+
+No hardcoded paths: add, move, or rename `CLAUDE.md` files freely and the mapping updates on the next invocation.
+
+## Skip patterns
+
+The following files are always allowed without reading documentation, even inside a mapped directory:
+
+- `CLAUDE.md` itself
+- `__tests__/` directories
+- `.test.ts`, `.test.tsx` files
+- `_generated/` directories
+- `.d.ts` TypeScript declaration files
+- `node_modules/`
+
+## Command-line usage
 
 ```bash
-docs-tracker --mode=enforce < input.json
-docs-tracker --mode=track < input.json
+docs-tracker -mode enforce < hook_input.json
+docs-tracker -mode track   < hook_input.json
 ```
 
-## Environment Variables
+### `-mode` (required)
 
-None. The tool uses:
+- `enforce`: PreToolUse mode — blocks edits if required docs haven't been read.
+- `track`: PostToolUse mode — tracks documentation reads.
 
-- `$HOME/.claude/sessions/{session_id}-docs.json` for session storage
-- Falls back to current directory if `$HOME` cannot be determined
+## Input format
 
-## Exit Codes
-
-### Enforce Mode
-
-- `0`: Operation allowed (documentation was read or file doesn't require documentation)
-- `1`: System error (invalid input, file I/O error)
-- `2`: Operation blocked (required documentation has not been read)
-
-### Track Mode
-
-- `0`: Success
-- `1`: System error (invalid input, file I/O error)
-
-## Input Format
-
-The tool expects JSON input on stdin:
+Both modes read the standard Claude Code hook JSON on stdin:
 
 ```json
 {
   "tool_name": "Edit",
-  "tool_input": {
-    "file_path": "packages/backend/foo.ts"
-  },
+  "tool_input": { "file_path": "/abs/path/to/file.ts" },
   "session_id": "unique-session-id"
 }
 ```
 
-### Input Fields
+`file_path` may be absolute or relative; relative paths are resolved against the current working directory before walking up for the project root.
 
-- `tool_name` (string): Name of the tool being used (Edit, Write, Read, etc.)
-- `tool_input` (object): Tool-specific parameters, must include `file_path`
-- `session_id` (string): Unique identifier for the Claude Code session
+## Exit codes
 
-## Enforce Mode Behavior
+### Enforce mode
 
-Enforce mode checks Edit and Write operations:
+- `0`: Operation allowed (no config, no mapping, file skipped, or doc already read).
+- `1`: System error (I/O, marshal failure).
+- `2`: Operation blocked — required doc not read yet.
 
-1. If the tool is not Edit or Write, the operation is allowed
-2. If the file path doesn't require documentation (test files, generated files, etc.), the operation is allowed
-3. If the file path requires documentation:
-   - Checks if that documentation has been read in the current session
-   - If yes: operation is allowed (exit code 0)
-   - If no: operation is blocked (exit code 2) with an error message
+### Track mode
 
-### Blocked Operations Output
+- `0`: Success (including no-op cases).
+- `1`: System error.
 
-When an operation is blocked, the tool writes a message to stderr:
+## Blocked output
 
-```bash
+When an Edit/Write is blocked, a message is written to stderr:
+
+```text
 ⚠️  PLEASE READ DOCUMENTATION FIRST
 
-Before editing files in Mobile components, please read:
-  apps/mobile/components/CLAUDE.md
+Before editing files in packages/backend, please read:
+  packages/backend/CLAUDE.md
 
 This ensures you follow project conventions and patterns.
 
-Run: Read apps/mobile/components/CLAUDE.md
+Run: Read packages/backend/CLAUDE.md
 Then retry your edit.
 ```
 
-## Track Mode Behavior
+`Name` is derived from the mapped subdirectory's relative path.
 
-Track mode monitors Read operations:
-
-1. If the tool is not Read, nothing is tracked
-2. If the file path is not a tracked documentation file, nothing is tracked
-3. If the file is a tracked documentation file:
-   - Records that file in the session's doc tracking data
-   - Prevents duplicates (same file won't be recorded twice)
-   - Returns exit code 0
-
-Tracked documentation files:
-
-- `packages/backend/CLAUDE.md`
-- `apps/mobile/components/CLAUDE.md`
-- `apps/mobile/app/CLAUDE.md`
-
-## Configuration
-
-Configuration is hardcoded in the binary and maps file patterns to required documentation:
-
-### Directory Mappings
-
-Files in these directories require reading the corresponding documentation:
-
-| Directory Pattern         | Required Documentation             |
-| ------------------------- | ---------------------------------- |
-| `packages/backend/`       | `packages/backend/CLAUDE.md`       |
-| `apps/mobile/components/` | `apps/mobile/components/CLAUDE.md` |
-| `apps/mobile/app/`        | `apps/mobile/app/CLAUDE.md`        |
-
-### Skip Patterns
-
-The following files are automatically allowed without reading documentation:
-
-- `CLAUDE.md` - documentation files themselves
-- `__tests__/` - test directories
-- `.test.ts`, `.test.tsx` - test files
-- `_generated/` - generated code directories
-- `.d.ts` - TypeScript declaration files
-- `node_modules/` - node modules directories
-
-## Session Storage
+## Session storage
 
 Session data is persisted to:
 
@@ -162,135 +111,99 @@ Session data is persisted to:
 ~/.claude/sessions/{session_id}-docs.json
 ```
 
-### Session File Format
+Format:
+
+```json
+{ "docs_read": ["packages/backend/CLAUDE.md"] }
+```
+
+Doc paths are stored **relative to the project root** so enforce/track share the same keys.
+
+## Graceful degradation
+
+The tool fails open (allow operations) on unrecoverable issues:
+
+- Invalid JSON input → allow.
+- Missing session file → allow (first session, nothing tracked yet).
+- Session file I/O error → allow.
+- No project root (no `.claude/docs-tracker.json`) → allow.
+
+System errors (exit code 1) only happen when track mode cannot write its session state.
+
+## Wiring into Claude Code
+
+Register the binary globally in `~/.claude/settings.json`:
 
 ```json
 {
-  "docs_read": [
-    "packages/backend/CLAUDE.md",
-    "apps/mobile/components/CLAUDE.md"
-  ]
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/bin/docs-tracker -mode enforce"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Read",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/path/to/bin/docs-tracker -mode track"
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-The directory is created automatically if it doesn't exist (with mode 0755).
-
-## Example Usage
-
-### Scenario 1: User reads backend documentation, then edits a backend file
-
-Step 1 - Read documentation (Track mode):
-
-```bash
-echo '{
-  "tool_name":"Read",
-  "tool_input":{"file_path":"packages/backend/CLAUDE.md"},
-  "session_id":"abc123"
-}' | docs-tracker --mode=track
-
-# Exit code: 0
-# Session file created with packages/backend/CLAUDE.md tracked
-```
-
-Step 2 - Edit backend file (Enforce mode):
-
-```bash
-echo '{
-  "tool_name":"Edit",
-  "tool_input":{"file_path":"packages/backend/utils.ts"},
-  "session_id":"abc123"
-}' | docs-tracker --mode=enforce
-
-# Exit code: 0 (allowed - documentation was read)
-```
-
-### Scenario 2: User tries to edit file without reading documentation
-
-```bash
-echo '{
-  "tool_name":"Edit",
-  "tool_input":{"file_path":"apps/mobile/components/Button.tsx"},
-  "session_id":"abc123"
-}' | docs-tracker --mode=enforce
-
-# Exit code: 2 (blocked)
-# Stderr output explains which documentation must be read
-```
-
-### Scenario 3: Edit test files without documentation
-
-Test files are automatically allowed:
-
-```bash
-echo '{
-  "tool_name":"Edit",
-  "tool_input":{"file_path":"packages/backend/utils.test.ts"},
-  "session_id":"abc123"
-}' | docs-tracker --mode=enforce
-
-# Exit code: 0 (allowed - test files skip documentation requirement)
-```
+Because the hook is a no-op without `.claude/docs-tracker.json` at the project root, the global registration is safe — it only activates inside projects that explicitly opt in.
 
 ## Building
-
-Build the binary:
 
 ```bash
 just docs-tracker
 ```
 
-This produces `bin/docs-tracker` from the repo root.
+Produces `bin/docs-tracker`.
 
 ## Testing
 
-Run the comprehensive test suite:
-
 ```bash
-go test -v
+go test ./cmd/docs-tracker/...
 ```
 
-Test coverage includes:
+Tests cover:
 
-- **Enforce mode tests**: Verifying blocking and allowing operations
-- **Track mode tests**: Verifying session persistence and doc tracking
-- **Utility function tests**: Testing helper functions
-- **File pattern tests**: Testing skip patterns and directory matching
-- **Session persistence tests**: Testing file storage and loading
+- Opt-in gating (no config → no-op for both modes).
+- Auto-discovery (skipped dirs, longest-pattern-first ordering, root `CLAUDE.md` ignored).
+- Enforce blocking/allowing behavior with skip patterns.
+- Track recording, dedup, and ignore for non-Read tools / unregistered docs.
+- Session persistence round-trip.
 
-## Migration from Python
+## Example walkthrough
 
-This binary replaces two Python hooks:
+Project layout:
 
-- `enforce-docs-read.py` → `docs-tracker --mode=enforce`
-- `track-docs-read.py` → `docs-tracker --mode=track`
+```text
+my-project/
+├── .claude/
+│   └── docs-tracker.json         # opt-in marker (may be "{}")
+├── packages/backend/
+│   ├── CLAUDE.md                 # required for edits under packages/backend/
+│   └── utils.ts
+└── apps/mobile/components/
+    ├── CLAUDE.md                 # required for edits under apps/mobile/components/
+    └── Button.tsx
+```
 
-Session files are compatible with the Python versions (same JSON format), so no migration is needed.
-
-## Error Handling
-
-### Graceful Degradation
-
-The tool is designed to fail open (allow operations) when errors occur:
-
-- Invalid JSON input: operation is allowed (assumed external system error)
-- Missing session file: operation is allowed (first session, no docs tracked yet)
-- Session file I/O errors: operation is allowed (assumes system issue, not user issue)
-
-### Reported Errors
-
-System errors (exit code 1) are reported to stderr:
-
-- Invalid JSON format
-- Filesystem errors (directory creation, file writing)
-- JSON marshal/unmarshal errors
-
-## Implementation Details
-
-The tool is implemented in Go with the following key components:
-
-- **Mode handling**: Separate code paths for enforce and track modes
-- **Session persistence**: JSON-based storage in user home directory
-- **File pattern matching**: Simple string contains matching for directory patterns
-- **Exit code signaling**: Using custom ExitError type for proper exit code propagation
-
-See `/Volumes/Developer/code/shared/claude-hooks/docs-tracker/main.go` for implementation.
+1. Editing `packages/backend/utils.ts` first ⇒ blocked with a prompt to read `packages/backend/CLAUDE.md`.
+2. Reading `packages/backend/CLAUDE.md` ⇒ track mode records it.
+3. Editing `packages/backend/utils.ts` again ⇒ allowed.
+4. Editing `apps/mobile/components/Button.tsx` ⇒ still blocked until `apps/mobile/components/CLAUDE.md` is read.

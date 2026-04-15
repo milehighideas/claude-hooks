@@ -5,8 +5,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -17,6 +19,10 @@ const (
 	ModeEnforce Mode = "enforce"
 	ModeTrack   Mode = "track"
 )
+
+// configFileName is the opt-in marker file. Its presence at a project root
+// enables the docs-tracker hook for that project.
+const configFileName = "docs-tracker.json"
 
 // DocMapping represents a directory pattern to required doc mapping
 type DocMapping struct {
@@ -37,44 +43,35 @@ type SessionData struct {
 	DocsRead []string `json:"docs_read"`
 }
 
-var (
-	// Directory → Required doc mappings
-	docMappings = []DocMapping{
-		{
-			Pattern: "packages/backend/",
-			Doc:     "packages/backend/CLAUDE.md",
-			Name:    "Convex backend",
-		},
-		{
-			Pattern: "apps/mobile/components/",
-			Doc:     "apps/mobile/components/CLAUDE.md",
-			Name:    "Mobile components",
-		},
-		{
-			Pattern: "apps/mobile/app/",
-			Doc:     "apps/mobile/app/CLAUDE.md",
-			Name:    "Mobile app routing",
-		},
-	}
+// Project represents a docs-tracker-enabled project with discovered mappings
+type Project struct {
+	Root     string
+	Mappings []DocMapping
+}
 
-	// Skip these files (don't require docs for them)
-	skipPatterns = []string{
-		"CLAUDE.md",
-		"__tests__/",
-		".test.ts",
-		".test.tsx",
-		"_generated/",
-		"node_modules/",
-		".d.ts",
-	}
+// skipPatterns are path fragments that bypass the docs-read requirement.
+// Applies to tests, generated code, declaration files, etc.
+var skipPatterns = []string{
+	"CLAUDE.md",
+	"__tests__/",
+	".test.ts",
+	".test.tsx",
+	"_generated/",
+	"node_modules/",
+	".d.ts",
+}
 
-	// Docs we track
-	trackedDocs = []string{
-		"packages/backend/CLAUDE.md",
-		"apps/mobile/components/CLAUDE.md",
-		"apps/mobile/app/CLAUDE.md",
-	}
-)
+// skipDirs are directory names skipped during CLAUDE.md discovery.
+var skipDirs = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	"dist":         true,
+	"build":        true,
+	".next":        true,
+	".turbo":       true,
+	".vercel":      true,
+	"_generated":   true,
+}
 
 // sessionFileProvider is a function that returns the session file path
 type sessionFileProvider func(sessionID string) string
@@ -149,13 +146,25 @@ func enforceWithProvider(input io.Reader, stderr io.Writer, provider sessionFile
 		return nil
 	}
 
-	// Skip certain files
+	// Skip certain files (tests, generated, etc.)
 	if !shouldCheckFile(filePath) {
 		return nil
 	}
 
+	// Find the opt-in project root; without one the hook is a no-op
+	project := findProject(filePath)
+	if project == nil || len(project.Mappings) == 0 {
+		return nil
+	}
+
+	// Compute the file's path relative to the project root
+	relPath, ok := relativeToProject(project.Root, filePath)
+	if !ok {
+		return nil
+	}
+
 	// Check if this file requires a doc to be read
-	required := getRequiredDoc(filePath)
+	required := getRequiredDoc(relPath, project.Mappings)
 	if required == nil {
 		return nil
 	}
@@ -207,15 +216,25 @@ func trackWithProvider(input io.Reader, provider sessionFileProvider) error {
 		return nil
 	}
 
-	// Check if this is a tracked CLAUDE.md file
+	// Find the opt-in project; without one, nothing to track
+	project := findProject(filePath)
+	if project == nil || len(project.Mappings) == 0 {
+		return nil
+	}
+
+	relPath, ok := relativeToProject(project.Root, filePath)
+	if !ok {
+		return nil
+	}
+
+	// Only track CLAUDE.md files this project has registered as mappings
 	matchedDoc := ""
-	for _, doc := range trackedDocs {
-		if strings.Contains(filePath, doc) || strings.HasSuffix(filePath, doc) {
-			matchedDoc = doc
+	for _, m := range project.Mappings {
+		if relPath == m.Doc {
+			matchedDoc = m.Doc
 			break
 		}
 	}
-
 	if matchedDoc == "" {
 		return nil
 	}
@@ -254,14 +273,110 @@ func shouldCheckFile(filePath string) bool {
 	return true
 }
 
-// getRequiredDoc gets the required doc for a file path, if any
-func getRequiredDoc(filePath string) *DocMapping {
-	for _, mapping := range docMappings {
-		if strings.Contains(filePath, mapping.Pattern) {
-			return &mapping
+// getRequiredDoc returns the most-specific mapping (longest pattern) that covers relPath.
+// Mappings are pre-sorted longest-first by discoverMappings.
+func getRequiredDoc(relPath string, mappings []DocMapping) *DocMapping {
+	for i := range mappings {
+		if strings.HasPrefix(relPath, mappings[i].Pattern) {
+			return &mappings[i]
 		}
 	}
 	return nil
+}
+
+// findProject walks up from filePath looking for the opt-in marker
+// (`.claude/docs-tracker.json`). Returns nil when no project is found.
+func findProject(filePath string) *Project {
+	root := findProjectRoot(filePath)
+	if root == "" {
+		return nil
+	}
+	return &Project{
+		Root:     root,
+		Mappings: discoverMappings(root),
+	}
+}
+
+// findProjectRoot walks up from filePath's directory until it finds a
+// `.claude/docs-tracker.json` marker. Returns "" if none is found.
+func findProjectRoot(filePath string) string {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(abs)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".claude", configFileName)); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// discoverMappings walks projectRoot for CLAUDE.md files and builds one mapping
+// per discovered doc. The root-level CLAUDE.md is skipped (Claude Code already
+// loads it as project context). Results are sorted longest-pattern-first so
+// nested docs take precedence over parents.
+func discoverMappings(projectRoot string) []DocMapping {
+	var mappings []DocMapping
+	_ = filepath.WalkDir(projectRoot, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			if path == projectRoot {
+				return nil
+			}
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() != "CLAUDE.md" {
+			return nil
+		}
+		rel, err := filepath.Rel(projectRoot, path)
+		if err != nil {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if rel == "CLAUDE.md" {
+			return nil // skip root doc
+		}
+		subdir := filepath.ToSlash(filepath.Dir(rel))
+		mappings = append(mappings, DocMapping{
+			Pattern: subdir + "/",
+			Doc:     rel,
+			Name:    subdir,
+		})
+		return nil
+	})
+	sort.Slice(mappings, func(i, j int) bool {
+		return len(mappings[i].Pattern) > len(mappings[j].Pattern)
+	})
+	return mappings
+}
+
+// relativeToProject converts filePath to a forward-slash path relative to
+// projectRoot. Returns false when the file lives outside the project.
+func relativeToProject(projectRoot, filePath string) (string, bool) {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(projectRoot, abs)
+	if err != nil {
+		return "", false
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", false
+	}
+	return rel, true
 }
 
 // loadDocsReadWithProvider loads the set of docs read this session using a custom provider
