@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -74,7 +75,23 @@ func (c *MockChecker) Check(files []string, config MockCheckConfig) error {
 
 	if compactMode() {
 		if len(violations) > 0 {
-			printStatus("Mock check", false, fmt.Sprintf("%d violations", len(violations)))
+			// Group by app so the compact line matches stub/missing tests —
+			// "chat-mobile 1 violation(s), mobile 48 violation(s), …"
+			// tells the user where to look without opening reports.
+			appCounts := make(map[string]int)
+			for _, v := range violations {
+				appCounts[getAppNameFromPath(v.File)]++
+			}
+			apps := make([]string, 0, len(appCounts))
+			for app := range appCounts {
+				apps = append(apps, app)
+			}
+			sort.Strings(apps)
+			parts := make([]string, len(apps))
+			for i, app := range apps {
+				parts[i] = fmt.Sprintf("%s %d violation(s)", app, appCounts[app])
+			}
+			printStatus("Mock check", false, strings.Join(parts, ", "))
 			printReportHint("mock-check/")
 			return fmt.Errorf("forbidden inline mocks found")
 		}

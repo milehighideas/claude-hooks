@@ -39,10 +39,64 @@ func compactMode() bool {
 	return reportDir != ""
 }
 
+// checkKeyToDisplay maps the config key used in features / warningChecks
+// to the display name each check passes to printStatus. Keeping the mapping
+// central lets printStatus detect "this failing check is configured as a
+// warning" by display name without threading the key through every caller.
+var checkKeyToDisplay = map[string]string{
+	"lintTypecheck":           "Lint & typecheck",
+	"lintStaged":              "Formatting",
+	"consoleCheck":            "Console check",
+	"dataLayerCheck":          "Data layer check",
+	"changelog":               "Changelog",
+	"goLint":                  "Go linting",
+	"nativeBuild":             "Native build",
+	"convexValidation":        "Convex validation",
+	"buildCheck":              "Build check",
+	"maestroValidation":       "Maestro validation",
+	"frontendStructure":       "Frontend structure",
+	"srp":                     "SRP compliance",
+	"testFiles":               "Test files",
+	"mockCheck":               "Mock check",
+	"vitestAssertions":        "Vitest assertions",
+	"testCoverage":            "Test coverage",
+	"testQuality":             "Test quality",
+	"stubTestCheck":           "Stub tests",
+	"missingTestsCheck":       "Missing tests",
+	"redundantCreatedAtCheck": "Redundant createdAt",
+	"tests":                   "Tests",
+}
+
+// warningDisplayNames holds the set of display names whose failures should
+// render as ⚠️ (warning) rather than ❌. Populated from config.WarningChecks
+// at the start of each run() via registerWarningChecks.
+var warningDisplayNames = map[string]bool{}
+
+// registerWarningChecks translates config.WarningChecks (a list of config
+// keys like "maestroValidation") into the display-name set consulted by
+// printStatus. Call once per run after config is loaded.
+func registerWarningChecks(keys []string) {
+	warningDisplayNames = map[string]bool{}
+	for _, k := range keys {
+		if name, ok := checkKeyToDisplay[k]; ok {
+			warningDisplayNames[name] = true
+		}
+	}
+}
+
 // printStatus prints a compact pass/fail status line for a check.
 // name is the check name, passed indicates success, detail is optional context (e.g., error count).
+//
+// If the check is registered as a warning-only check via registerWarningChecks,
+// a failing result is rendered with the ⚠️ (warning) marker instead of ❌
+// so the visual signal matches the non-blocking routing that collectResult
+// applies to the same check.
 func printStatus(name string, passed bool, detail string) {
 	if !compactMode() {
+		return
+	}
+	if !passed && warningDisplayNames[name] {
+		printWarningStatus(name, detail)
 		return
 	}
 	icon := "✅"
@@ -199,6 +253,10 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// Register warning-only checks so printStatus downgrades their failures
+	// from ❌ to ⚠️ and matches the routing collectResult applies.
+	registerWarningChecks(config.WarningChecks)
 
 	// Set up report directory from config if not provided via flag
 	if reportDir == "" && config.ReportDir != "" {
@@ -521,7 +579,15 @@ func run() error {
 		fmt.Println("================================")
 		fmt.Println()
 		if compactMode() {
-			fmt.Printf("%d check(s) failed — see reports: %s\n", len(allErrors), reportDir)
+			suffix := ""
+			if len(allWarnings) > 0 {
+				noun := "warning"
+				if len(allWarnings) != 1 {
+					noun = "warnings"
+				}
+				suffix = fmt.Sprintf(", %d %s", len(allWarnings), noun)
+			}
+			fmt.Printf("%d check(s) failed%s — see reports: %s\n", len(allErrors), suffix, reportDir)
 		} else {
 			fmt.Println("Fix the errors above and try again")
 		}
@@ -597,6 +663,10 @@ func runStandalone() error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+
+	// Register warning-only checks so printStatus downgrades their failures
+	// from ❌ to ⚠️ and matches the routing collectResult applies.
+	registerWarningChecks(config.WarningChecks)
 
 	// Set up report directory from config if not provided via flag
 	if reportDir == "" && config.ReportDir != "" {
