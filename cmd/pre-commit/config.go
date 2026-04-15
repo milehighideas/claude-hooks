@@ -37,7 +37,33 @@ type Config struct {
 	MaestroValidation  MaestroValidationConfig `json:"maestroValidation"`
 	StubTestCheckConfig StubTestCheckConfig    `json:"stubTestCheckConfig"`
 	MissingTestsCheckConfig MissingTestsCheckConfig `json:"missingTestsCheckConfig"`
+	RedundantCreatedAtCheckConfig RedundantCreatedAtCheckConfig `json:"redundantCreatedAtCheckConfig"`
 	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
+}
+
+// RedundantCreatedAtCheckConfig configures the Convex schema `createdAt`
+// detector. Convex automatically maintains `_creationTime: number` on every
+// row and exposes a `by_creation_time` index for free, so a custom
+// `createdAt` column inside `defineTable({...})` duplicates data and risks
+// drift when callers pass a different value.
+type RedundantCreatedAtCheckConfig struct {
+	// Mode controls what's scanned.
+	// "all" (default) — walks AppPaths (or project root if empty) and
+	// reports every Convex schema file currently containing a redundant
+	// createdAt. Use this as a ratchet: once a package is clean, locking
+	// it in prevents regression.
+	// "staged" — only checks schema files currently staged for commit.
+	// Lighter; lets you adopt incrementally without failing on legacy
+	// schemas.
+	Mode string `json:"mode"`
+	// AppPaths restricts scanning to files whose project-relative path
+	// contains at least one of these substrings. Empty = scan the whole
+	// project. For this check the useful value is typically
+	// `["packages/backend"]` or similar.
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose project-relative path contains any of
+	// these substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths"`
 }
 
 // MissingTestsCheckConfig configures the missing-tests detector. Same shape
@@ -111,6 +137,7 @@ type Features struct {
 	MaestroValidation  bool `json:"maestroValidation"`
 	StubTestCheck      bool `json:"stubTestCheck"`
 	MissingTestsCheck  bool `json:"missingTestsCheck"`
+	RedundantCreatedAtCheck bool `json:"redundantCreatedAtCheck"`
 }
 
 // AppConfig represents configuration for a single app

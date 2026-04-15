@@ -180,6 +180,7 @@ func printAvailableChecks() {
 	fmt.Println("  testQuality        - Ban export-only stub tests (toBeDefined/typeof checks)")
 	fmt.Println("  stubTestCheck      - Ban placeholder expect(true).toBe(true) stub tests")
 	fmt.Println("  missingTestsCheck  - Ban source files without co-located .test.ts(x) (per-app scoped)")
+	fmt.Println("  redundantCreatedAtCheck - Ban createdAt fields inside Convex defineTable (use _creationTime)")
 	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
 	fmt.Println("  maestroValidation  - Validate Maestro flow id: selectors resolve to source testIDs")
 }
@@ -437,6 +438,21 @@ func run() error {
 			}
 		}
 		collectResult("missingTestsCheck", runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs))
+	}
+
+	// Redundant createdAt check — bans `createdAt:` inside Convex
+	// defineTable({...}) because Convex provides `_creationTime` for free.
+	if config.Features.RedundantCreatedAtCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(stagedFiles))
+		for _, f := range stagedFiles {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("redundantCreatedAtCheck", runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Build check
@@ -820,6 +836,17 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			}
 		}
 		return runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs)
+	case "redundantCreatedAtCheck":
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		return runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs)
 	case "dataLayerCheck":
 		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
 	case "maestroValidation":
@@ -922,6 +949,21 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 			}
 		}
 		collectResult("missingTestsCheck", runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs))
+	}
+
+	// Redundant createdAt check — bans `createdAt:` inside Convex
+	// defineTable({...}) because Convex provides `_creationTime` for free.
+	if config.Features.RedundantCreatedAtCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("redundantCreatedAtCheck", runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Lint and typecheck
