@@ -499,10 +499,11 @@ func isFileInScope(cfg *Config, relPath string) bool {
 	return false
 }
 
-// buildMappings combines preset, custom, and auto-discovered mappings. Preset
-// and custom mappings on the same pattern are merged (union of docs);
-// auto-discovered mappings are dropped when they collide with an explicit
-// pattern so the preset stays authoritative for its subtree.
+// buildMappings combines preset, custom, and auto-discovered mappings. All
+// three sources merge docs for the same pattern (union), so a Convex-backed
+// directory with a CLAUDE.md on disk requires both the preset docs and the
+// auto-discovered doc. If you want the preset to be authoritative and
+// suppress auto-discovery in its subtree, set autoDiscover: false.
 func buildMappings(root string, cfg *Config) []DocMapping {
 	byPattern := map[string]*DocMapping{}
 	var order []string
@@ -540,12 +541,11 @@ func buildMappings(root string, cfg *Config) []DocMapping {
 		}
 	}
 
-	// 3. Auto-discovery fills gaps — skip patterns already claimed above.
+	// 3. Auto-discovery merges with anything claimed above. The user dropping
+	// a CLAUDE.md inside a preset's subtree is strong signal that both
+	// should be required — not silently suppressed.
 	if cfg.isAutoDiscover() {
 		for _, m := range discoverMappings(root, cfg.effectiveDocFileNames()) {
-			if _, claimed := byPattern[m.Pattern]; claimed {
-				continue
-			}
 			merge(m)
 		}
 	}

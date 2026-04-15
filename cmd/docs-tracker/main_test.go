@@ -675,33 +675,56 @@ func TestEnforce_ConvexPreset_NoBackendDir_IsNoOp(t *testing.T) {
 // Preset + auto-discovery coexistence
 // ---------------------------------------------------------------------------
 
-func TestEnforce_ConvexPreset_OverridesClaudeMdForBackend(t *testing.T) {
+func TestEnforce_ConvexPreset_MergesWithClaudeMdAutoDiscovery(t *testing.T) {
+	// When the convex preset and auto-discovered CLAUDE.md share the backend
+	// pattern, required docs are the union of both sources.
 	root := setupProject(t, projectFixture{
 		config: `{"convex": true}`,
 		docs: []string{
-			"packages/backend/CLAUDE.md",                                   // would auto-discover but convex claims the pattern
-			"packages/backend/convex/_generated/ai/guidelines.md",          // convex doc
-			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",   // convex doc
-			"packages/ui/CLAUDE.md",                                        // auto-discover handles ui
+			"packages/backend/CLAUDE.md",                                 // auto-discovered
+			"packages/backend/convex/_generated/ai/guidelines.md",        // preset
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md", // preset
+			"packages/ui/CLAUDE.md",                                      // auto-discover handles ui
 		},
 	})
 	provider := sessionProvider(t.TempDir())
-	// Reading CLAUDE.md should NOT satisfy the convex requirement.
-	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
 
+	// Reading only CLAUDE.md should NOT satisfy — preset docs still missing.
+	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
 	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if _, ok := err.(*ExitError); !ok {
-		t.Fatalf("expected block (convex docs still unread), got %v", err)
-	}
-	if strings.Contains(stderr, "packages/backend/CLAUDE.md") {
-		t.Errorf("CLAUDE.md should not be the required doc under convex preset: %s", stderr)
+		t.Fatalf("expected block (preset docs still unread), got %v", err)
 	}
 	if !strings.Contains(stderr, "guidelines.md") {
 		t.Errorf("expected guidelines.md in message: %s", stderr)
 	}
 
+	// Reading only preset docs should NOT satisfy — CLAUDE.md still missing.
+	seedSession(t, provider, "s2", []string{
+		"packages/backend/convex/_generated/ai/guidelines.md",
+		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+	})
+	err, stderr = runEnforce(t, provider, "s2", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if _, ok := err.(*ExitError); !ok {
+		t.Fatalf("expected block (CLAUDE.md still unread), got %v", err)
+	}
+	if !strings.Contains(stderr, "packages/backend/CLAUDE.md") {
+		t.Errorf("expected CLAUDE.md in message: %s", stderr)
+	}
+
+	// Reading all of them → allow.
+	seedSession(t, provider, "s3", []string{
+		"packages/backend/CLAUDE.md",
+		"packages/backend/convex/_generated/ai/guidelines.md",
+		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+	})
+	err, _ = runEnforce(t, provider, "s3", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Fatalf("expected allow with full union read, got %v", err)
+	}
+
 	// Editing a ui file should still be gated by CLAUDE.md auto-discovery.
-	err, stderr = runEnforce(t, provider, "s2", filepath.Join(root, "packages", "ui", "Button.tsx"))
+	err, stderr = runEnforce(t, provider, "s4", filepath.Join(root, "packages", "ui", "Button.tsx"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected ui block, got %v", err)
 	}

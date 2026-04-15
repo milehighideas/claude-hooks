@@ -140,10 +140,12 @@ For each Edit/Write the binary:
 2. Bails out unless `features.docsTracker` is true.
 3. Applies any **skip patterns** to short-circuit for tests/generated files.
 4. Applies the **per-app scope** (`appPaths` / `excludePaths`); out-of-scope files are silent no-ops.
-5. Builds a list of mappings, merging docs per pattern:
+5. Builds a list of mappings, merging docs per pattern from all three sources:
    - If the **Convex preset** is enabled, adds a mapping for the backend dir.
-   - Adds any **custom `mappings`** from the config (docs merge with preset on the same pattern).
-   - If **`autoDiscover`** is true, walks the project for `docFileNames` and adds a mapping per directory. Auto-discovered mappings are dropped when they collide with an already-claimed pattern (preset or custom).
+   - Adds any **custom `mappings`** from the config.
+   - If **`autoDiscover`** is true, walks the project for `docFileNames` and adds a mapping per directory.
+
+   When multiple sources produce a mapping for the same pattern, their docs are combined (union, deduplicated). To have the preset authoritatively replace auto-discovery in its subtree, set `autoDiscover: false`.
 6. Sorts longest-pattern-first so the most specific mapping wins.
 7. Checks whether every doc in the matched mapping has been read this session.
 
@@ -193,7 +195,7 @@ With the preset enabled:
   - `<backendDir>/.agents/skills/*/SKILL.md` (glob-expanded at invocation time)
 - **Name** in blocked-message: `Convex backend (<backendDir>)`.
 - **Scope**: only edits under `<backendDir>/` are gated. Files elsewhere are unaffected by the preset.
-- **Coexistence**: the preset claims its pattern exclusively. If `autoDiscover` is on, other directories (e.g. `packages/ui/`) can still be gated by their own `CLAUDE.md`.
+- **Coexistence**: the preset merges with auto-discovery and custom mappings for the same pattern. If Convex installed a `CLAUDE.md` alongside the skills (via `npx convex ai-files install`), it is required in addition to the preset's guidelines + SKILL.md files. Set `autoDiscover: false` to have the preset be authoritative and suppress the CLAUDE.md requirement.
 
 If `<backendDir>` doesn't exist or has no resolvable docs, the preset is silent (no mapping created).
 
