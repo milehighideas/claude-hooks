@@ -121,29 +121,109 @@ func expectedTestPath(sourcePath string) string {
 }
 
 // collectMissingTestsReport runs the missing-tests scan against projectRoot
-// using cfg. When cfg.Mode is "staged", stagedFiles is the scan population;
-// otherwise the walker descends from projectRoot (or each AppPath if set).
-// Returned source/expected paths are absolute.
+// using cfg. Paths in AppPaths inherit the global cfg.Mode; paths in
+// AppModes override that with their own per-path mode. "all" paths are
+// walked recursively; "staged" paths only consider currently-staged files.
+// When neither AppPaths nor AppModes is set the global Mode is applied to
+// the whole project. Returned source/expected paths are absolute.
 func collectMissingTestsReport(cfg MissingTestsCheckConfig, projectRoot string, stagedFiles []string) (*missingTestsReport, error) {
+	globalMode := cfg.Mode
+	if globalMode == "" {
+		globalMode = missingModeAll
+	}
+	if err := validateMissingMode(globalMode, "missingTestsCheckConfig.mode"); err != nil {
+		return nil, err
+	}
+	for path, m := range cfg.AppModes {
+		ctx := fmt.Sprintf("missingTestsCheckConfig.appModes[%q]", path)
+		if err := validateMissingMode(m, ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// No per-path scoping: fall back to global-mode behavior.
+	if len(cfg.AppPaths) == 0 && len(cfg.AppModes) == 0 {
+		return collectMissingTestsReportGlobal(cfg, projectRoot, stagedFiles, globalMode)
+	}
+
+	allPaths, stagedPaths := bucketMissingPaths(cfg, globalMode)
 	report := &missingTestsReport{}
-	mode := cfg.Mode
-	if mode == "" {
-		mode = missingModeAll
-	}
+	seen := map[string]bool{}
 
-	inScope := func(path string) bool {
-		return missingPathInScope(cfg, projectRoot, path)
-	}
-
-	checkFile := func(path string) {
+	recordIfMissing := func(path string) {
+		if seen[path] {
+			return
+		}
 		if !needsTest(path) {
 			return
 		}
 		expected := expectedTestPath(path)
 		if _, err := os.Stat(expected); err == nil {
-			return // test exists, fine
+			return
 		}
-		// Also accept .spec variant
+		specAlt := strings.Replace(expected, ".test.", ".spec.", 1)
+		if specAlt != expected {
+			if _, err := os.Stat(specAlt); err == nil {
+				return
+			}
+		}
+		seen[path] = true
+		report.Missing = append(report.Missing, missingTest{Source: path, Expected: expected})
+	}
+
+	// "all" paths: walk each recursively.
+	for _, p := range allPaths {
+		root := filepath.Join(projectRoot, p)
+		if _, err := os.Stat(root); err != nil {
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+			if werr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if path != root && missingTestsSkipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if missingPathExcluded(cfg, projectRoot, path) {
+				return nil
+			}
+			recordIfMissing(path)
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", root, err)
+		}
+	}
+
+	// "staged" paths: only consider staged source files living under them.
+	for _, f := range stagedFiles {
+		if missingPathExcluded(cfg, projectRoot, f) {
+			continue
+		}
+		if !missingPathMatchesAny(projectRoot, f, stagedPaths) {
+			continue
+		}
+		recordIfMissing(f)
+	}
+
+	return report, nil
+}
+
+// collectMissingTestsReportGlobal preserves the pre-AppModes fallback path.
+func collectMissingTestsReportGlobal(cfg MissingTestsCheckConfig, projectRoot string, stagedFiles []string, mode string) (*missingTestsReport, error) {
+	report := &missingTestsReport{}
+
+	recordIfMissing := func(path string) {
+		if !needsTest(path) {
+			return
+		}
+		expected := expectedTestPath(path)
+		if _, err := os.Stat(expected); err == nil {
+			return
+		}
 		specAlt := strings.Replace(expected, ".test.", ".spec.", 1)
 		if specAlt != expected {
 			if _, err := os.Stat(specAlt); err == nil {
@@ -156,81 +236,95 @@ func collectMissingTestsReport(cfg MissingTestsCheckConfig, projectRoot string, 
 	switch mode {
 	case missingModeStaged:
 		for _, f := range stagedFiles {
-			if !inScope(f) {
+			if missingPathExcluded(cfg, projectRoot, f) {
 				continue
 			}
-			checkFile(f)
+			recordIfMissing(f)
 		}
-
 	case missingModeAll:
-		roots := missingScanRoots(cfg, projectRoot)
-		for _, r := range roots {
-			if _, err := os.Stat(r); err != nil {
-				// Missing AppPath: skip rather than fail — lets partial repos
-				// (e.g. packages/backend cloned without apps/web) work.
-				continue
-			}
-			err := filepath.WalkDir(r, func(path string, d fs.DirEntry, werr error) error {
-				if werr != nil {
-					return nil
-				}
-				if d.IsDir() {
-					if path != r && missingTestsSkipDirs[d.Name()] {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				if !inScope(path) {
-					return nil
-				}
-				checkFile(path)
+		err := filepath.WalkDir(projectRoot, func(path string, d fs.DirEntry, werr error) error {
+			if werr != nil {
 				return nil
-			})
-			if err != nil {
-				return nil, fmt.Errorf("scanning %s: %w", r, err)
 			}
+			if d.IsDir() {
+				if path != projectRoot && missingTestsSkipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if missingPathExcluded(cfg, projectRoot, path) {
+				return nil
+			}
+			recordIfMissing(path)
+			return nil
+		})
+		if err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", projectRoot, err)
 		}
-
-	default:
-		return nil, fmt.Errorf("missingTestsCheckConfig.mode: unknown value %q (want %q or %q)",
-			mode, missingModeAll, missingModeStaged)
 	}
-
 	return report, nil
 }
 
-// missingScanRoots returns the absolute directories the walker should
-// descend from. When AppPaths is set, each becomes a root; otherwise the
-// whole project root.
-func missingScanRoots(cfg MissingTestsCheckConfig, projectRoot string) []string {
-	if len(cfg.AppPaths) == 0 {
-		return []string{projectRoot}
-	}
-	roots := make([]string, 0, len(cfg.AppPaths))
+// bucketMissingPaths splits every configured path into "all" vs "staged"
+// buckets based on its effective mode. AppModes overrides the global Mode
+// when a path appears in both. Returned slices are sorted.
+func bucketMissingPaths(cfg MissingTestsCheckConfig, globalMode string) (allPaths, stagedPaths []string) {
+	effective := map[string]string{}
 	for _, p := range cfg.AppPaths {
-		roots = append(roots, filepath.Join(projectRoot, p))
+		effective[p] = globalMode
 	}
-	return roots
+	for p, m := range cfg.AppModes {
+		effective[p] = m
+	}
+	for p, m := range effective {
+		if m == missingModeAll {
+			allPaths = append(allPaths, p)
+		} else {
+			stagedPaths = append(stagedPaths, p)
+		}
+	}
+	sort.Strings(allPaths)
+	sort.Strings(stagedPaths)
+	return
 }
 
-// missingPathInScope applies AppPaths / ExcludePaths as substring matches
-// over the project-relative path, exclusions winning.
-func missingPathInScope(cfg MissingTestsCheckConfig, projectRoot, path string) bool {
+// validateMissingMode returns nil if m is a known missing-tests mode.
+func validateMissingMode(m, context string) error {
+	if m == missingModeAll || m == missingModeStaged {
+		return nil
+	}
+	return fmt.Errorf("%s: unknown value %q (want %q or %q)",
+		context, m, missingModeAll, missingModeStaged)
+}
+
+// missingPathExcluded reports whether path should be skipped based on
+// ExcludePaths substring matches against the project-relative path.
+func missingPathExcluded(cfg MissingTestsCheckConfig, projectRoot, path string) bool {
 	rel, err := filepath.Rel(projectRoot, path)
 	if err != nil {
 		rel = path
 	}
 	rel = filepath.ToSlash(rel)
-
 	for _, p := range cfg.ExcludePaths {
 		if strings.Contains(rel, p) {
-			return false
+			return true
 		}
 	}
-	if len(cfg.AppPaths) == 0 {
-		return true
+	return false
+}
+
+// missingPathMatchesAny reports whether path's project-relative form
+// contains any entry in paths (substring match).
+func missingPathMatchesAny(projectRoot, path string, paths []string) bool {
+	if len(paths) == 0 {
+		return false
 	}
-	for _, p := range cfg.AppPaths {
+	rel, err := filepath.Rel(projectRoot, path)
+	if err != nil {
+		rel = path
+	}
+	rel = filepath.ToSlash(rel)
+	for _, p := range paths {
 		if strings.Contains(rel, p) {
 			return true
 		}
@@ -268,7 +362,24 @@ func runMissingTestsCheck(cfg MissingTestsCheckConfig, projectRoot string, stage
 
 	if compactMode() {
 		if count > 0 {
-			printStatus("Missing tests", false, fmt.Sprintf("%d missing", count))
+			appCounts := make(map[string]int)
+			for _, m := range report.Missing {
+				relSrc, err := filepath.Rel(projectRoot, m.Source)
+				if err != nil {
+					relSrc = m.Source
+				}
+				appCounts[appNameFromRel(filepath.ToSlash(relSrc))]++
+			}
+			apps := make([]string, 0, len(appCounts))
+			for app := range appCounts {
+				apps = append(apps, app)
+			}
+			sort.Strings(apps)
+			parts := make([]string, len(apps))
+			for i, app := range apps {
+				parts[i] = fmt.Sprintf("%s %d missing", app, appCounts[app])
+			}
+			printStatus("Missing tests", false, strings.Join(parts, ", "))
 			printReportHint("missing-tests/")
 			return fmt.Errorf("found %d source file(s) without tests", count)
 		}

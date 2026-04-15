@@ -27,28 +27,93 @@ type stubReport struct {
 	Stubs []string
 }
 
-// collectStubReport runs the stub scan against projectRoot using cfg. When
-// cfg.Mode is "staged", stagedFiles scopes the search to those paths only;
-// otherwise the walker descends from projectRoot (or each AppPath if set).
-// Returned paths are absolute. The caller decides how to format / print.
+// collectStubReport runs the stub scan against projectRoot using cfg. Paths
+// in AppPaths inherit the global cfg.Mode; paths in AppModes override that
+// with their own per-path mode. "all" paths are walked recursively; "staged"
+// paths only flag currently-staged files. When neither AppPaths nor AppModes
+// is set the global Mode is applied to the whole project. Returned paths are
+// absolute.
 func collectStubReport(cfg StubTestCheckConfig, projectRoot string, stagedFiles []string) (*stubReport, error) {
+	globalMode := cfg.Mode
+	if globalMode == "" {
+		globalMode = stubModeAll
+	}
+	if err := validateStubMode(globalMode, "stubTestCheckConfig.mode"); err != nil {
+		return nil, err
+	}
+	for path, m := range cfg.AppModes {
+		ctx := fmt.Sprintf("stubTestCheckConfig.appModes[%q]", path)
+		if err := validateStubMode(m, ctx); err != nil {
+			return nil, err
+		}
+	}
+
+	// No per-path scoping: fall back to global-mode behavior.
+	if len(cfg.AppPaths) == 0 && len(cfg.AppModes) == 0 {
+		return collectStubReportGlobal(cfg, projectRoot, stagedFiles, globalMode)
+	}
+
+	allPaths, stagedPaths := bucketStubPaths(cfg, globalMode)
 	report := &stubReport{}
-	mode := cfg.Mode
-	if mode == "" {
-		mode = stubModeAll
+	seen := map[string]bool{}
+
+	// "all" paths: walk each recursively and flag every stub under them.
+	for _, p := range allPaths {
+		root := filepath.Join(projectRoot, p)
+		if _, err := os.Stat(root); err != nil {
+			// Missing app path — skip instead of failing so partial
+			// checkouts / renamed apps don't break pre-commit.
+			continue
+		}
+		found, err := stubs.Find(root)
+		if err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", root, err)
+		}
+		for _, s := range found {
+			if stubPathExcluded(cfg, projectRoot, s) {
+				continue
+			}
+			if !seen[s] {
+				seen[s] = true
+				report.Stubs = append(report.Stubs, s)
+			}
+		}
 	}
 
-	inScope := func(path string) bool {
-		return stubPathInScope(cfg, projectRoot, path)
+	// "staged" paths: only flag staged test files that live under them.
+	for _, f := range stagedFiles {
+		if !stubs.IsTestFile(f) {
+			continue
+		}
+		if stubPathExcluded(cfg, projectRoot, f) {
+			continue
+		}
+		if !stubPathMatchesAny(projectRoot, f, stagedPaths) {
+			continue
+		}
+		if seen[f] {
+			continue
+		}
+		if stubs.CheckFile(f) {
+			seen[f] = true
+			report.Stubs = append(report.Stubs, f)
+		}
 	}
 
+	return report, nil
+}
+
+// collectStubReportGlobal handles the legacy no-AppPaths / no-AppModes case.
+// Preserves the pre-AppModes behavior so existing configs keep working.
+func collectStubReportGlobal(cfg StubTestCheckConfig, projectRoot string, stagedFiles []string, mode string) (*stubReport, error) {
+	report := &stubReport{}
 	switch mode {
 	case stubModeStaged:
 		for _, f := range stagedFiles {
 			if !stubs.IsTestFile(f) {
 				continue
 			}
-			if !inScope(f) {
+			if stubPathExcluded(cfg, projectRoot, f) {
 				continue
 			}
 			if stubs.CheckFile(f) {
@@ -56,60 +121,81 @@ func collectStubReport(cfg StubTestCheckConfig, projectRoot string, stagedFiles 
 			}
 		}
 	case stubModeAll:
-		roots := stubScanRoots(cfg, projectRoot)
-		for _, r := range roots {
-			found, err := stubs.Find(r)
-			if err != nil {
-				return nil, fmt.Errorf("scanning %s: %w", r, err)
-			}
-			for _, s := range found {
-				if !inScope(s) {
-					continue
-				}
-				report.Stubs = append(report.Stubs, s)
-			}
+		found, err := stubs.Find(projectRoot)
+		if err != nil {
+			return nil, fmt.Errorf("scanning %s: %w", projectRoot, err)
 		}
-	default:
-		return nil, fmt.Errorf("stubTestCheckConfig.mode: unknown value %q (want %q or %q)",
-			mode, stubModeAll, stubModeStaged)
+		for _, s := range found {
+			if stubPathExcluded(cfg, projectRoot, s) {
+				continue
+			}
+			report.Stubs = append(report.Stubs, s)
+		}
 	}
-
 	return report, nil
 }
 
-// stubScanRoots returns the absolute directories the walker should descend
-// from. When AppPaths is set, each (valid) app path becomes a root so the
-// walker doesn't traverse the whole repo; otherwise projectRoot itself.
-func stubScanRoots(cfg StubTestCheckConfig, projectRoot string) []string {
-	if len(cfg.AppPaths) == 0 {
-		return []string{projectRoot}
-	}
-	var roots []string
+// bucketStubPaths splits every configured path into "all" vs "staged" buckets
+// based on its effective mode. AppModes overrides the global Mode when a
+// path appears in both. Returned slices are sorted for deterministic output.
+func bucketStubPaths(cfg StubTestCheckConfig, globalMode string) (allPaths, stagedPaths []string) {
+	effective := map[string]string{}
 	for _, p := range cfg.AppPaths {
-		roots = append(roots, filepath.Join(projectRoot, p))
+		effective[p] = globalMode
 	}
-	return roots
+	for p, m := range cfg.AppModes {
+		effective[p] = m
+	}
+	for p, m := range effective {
+		if m == stubModeAll {
+			allPaths = append(allPaths, p)
+		} else {
+			stagedPaths = append(stagedPaths, p)
+		}
+	}
+	sort.Strings(allPaths)
+	sort.Strings(stagedPaths)
+	return
 }
 
-// stubPathInScope applies AppPaths / ExcludePaths as substring matches over
-// the project-relative path — same semantics srpConfig / testCoverageConfig
-// already use. Exclusions always win.
-func stubPathInScope(cfg StubTestCheckConfig, projectRoot, path string) bool {
+// validateStubMode returns nil if m is a known stub mode, otherwise an error
+// tagged with the given context string for call-site clarity.
+func validateStubMode(m, context string) error {
+	if m == stubModeAll || m == stubModeStaged {
+		return nil
+	}
+	return fmt.Errorf("%s: unknown value %q (want %q or %q)",
+		context, m, stubModeAll, stubModeStaged)
+}
+
+// stubPathExcluded reports whether path should be skipped based on
+// ExcludePaths substring matches against the project-relative path.
+func stubPathExcluded(cfg StubTestCheckConfig, projectRoot, path string) bool {
 	rel, err := filepath.Rel(projectRoot, path)
 	if err != nil {
 		rel = path
 	}
 	rel = filepath.ToSlash(rel)
-
 	for _, p := range cfg.ExcludePaths {
 		if strings.Contains(rel, p) {
-			return false
+			return true
 		}
 	}
-	if len(cfg.AppPaths) == 0 {
-		return true
+	return false
+}
+
+// stubPathMatchesAny reports whether path's project-relative form contains
+// any entry in paths (substring match, same semantics as srp/testCoverage).
+func stubPathMatchesAny(projectRoot, path string, paths []string) bool {
+	if len(paths) == 0 {
+		return false
 	}
-	for _, p := range cfg.AppPaths {
+	rel, err := filepath.Rel(projectRoot, path)
+	if err != nil {
+		rel = path
+	}
+	rel = filepath.ToSlash(rel)
+	for _, p := range paths {
 		if strings.Contains(rel, p) {
 			return true
 		}
@@ -149,7 +235,24 @@ func runStubTestCheck(cfg StubTestCheckConfig, projectRoot string, stagedFiles [
 
 	if compactMode() {
 		if count > 0 {
-			printStatus("Stub tests", false, fmt.Sprintf("%d stub(s)", count))
+			appCounts := make(map[string]int)
+			for _, s := range report.Stubs {
+				rel, err := filepath.Rel(projectRoot, s)
+				if err != nil {
+					rel = s
+				}
+				appCounts[appNameFromRel(filepath.ToSlash(rel))]++
+			}
+			apps := make([]string, 0, len(appCounts))
+			for app := range appCounts {
+				apps = append(apps, app)
+			}
+			sort.Strings(apps)
+			parts := make([]string, len(apps))
+			for i, app := range apps {
+				parts[i] = fmt.Sprintf("%s %d stub(s)", app, appCounts[app])
+			}
+			printStatus("Stub tests", false, strings.Join(parts, ", "))
 			printReportHint("stub-tests/")
 			return fmt.Errorf("found %d stub test file(s)", count)
 		}

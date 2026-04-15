@@ -67,38 +67,50 @@ type RedundantCreatedAtCheckConfig struct {
 }
 
 // MissingTestsCheckConfig configures the missing-tests detector. Same shape
-// as stubTestCheckConfig for symmetry: a mode field plus per-app scope.
+// as stubTestCheckConfig for symmetry: a mode field plus per-app scope,
+// with optional per-app overrides.
 type MissingTestsCheckConfig struct {
-	// Mode controls what's scanned.
-	// "all" (default) — walks AppPaths (or project root if empty) and reports
-	// every source file without a co-located .test.ts(x). Use this as a
-	// ratchet: once a package is test-covered, locking it in keeps it so.
-	// "staged" — only checks staged source files. Lighter; redundant with
-	// the separate enforce-tests-on-commit binary but useful as a
-	// consistent pre-commit gate without a second hook installation.
+	// Mode is the default mode applied to every entry in AppPaths that
+	// doesn't have a per-app override in AppModes. "all" (default) walks
+	// the path recursively and reports every source file without a
+	// co-located .test.ts(x). "staged" only checks staged source files.
+	// Use "all" as a ratchet once a package is test-covered.
 	Mode string `json:"mode"`
 	// AppPaths restricts scanning to files whose project-relative path
-	// contains at least one of these substrings. Empty = project root.
+	// contains at least one of these substrings. Empty = scan the whole
+	// project under the global Mode.
 	AppPaths []string `json:"appPaths"`
+	// AppModes is a per-path mode override map. Paths listed here are
+	// automatically in scope. When a path appears in both AppModes and
+	// AppPaths, AppModes wins. Use this to ratchet specific packages on
+	// "all" while keeping the rest on "staged".
+	AppModes map[string]string `json:"appModes"`
 	// ExcludePaths skips files whose project-relative path contains any of
-	// these substrings. Exclusions always win over AppPaths.
+	// these substrings. Exclusions always win over AppPaths/AppModes.
 	ExcludePaths []string `json:"excludePaths"`
 }
 
 // StubTestCheckConfig configures the stub-test detector. Mirrors the shape of
 // other scoped configs (srpConfig, testCoverageConfig, etc).
 type StubTestCheckConfig struct {
-	// Mode controls what's scanned. Default "all" — walks AppPaths (or the
-	// whole project if empty) and reports every stub file. "staged" — only
-	// checks staged test files that are also in session's edited list.
-	// "all" is the right default when you want a ratchet: once an app is
-	// stub-free, enabling it locks in that state.
+	// Mode is the default mode applied to every entry in AppPaths that
+	// doesn't have a per-app override in AppModes. Default "all" — walks the
+	// path recursively and reports every stub file. "staged" — only checks
+	// staged test files living under that path. Use "all" when you want a
+	// ratchet: once an app is stub-free, locking it in prevents regression.
 	Mode string `json:"mode"`
 	// AppPaths restricts scanning to files whose project-relative path
-	// contains at least one of these substrings. Empty = scan the whole project.
+	// contains at least one of these substrings. Empty = scan the whole
+	// project under the global Mode.
 	AppPaths []string `json:"appPaths"`
+	// AppModes is a per-path mode override map, e.g.
+	// {"apps/admin": "all", "apps/mobile": "staged"}. Paths listed here are
+	// automatically in scope (no need to also list in AppPaths). When a path
+	// appears in both AppModes and AppPaths, AppModes wins. Use this to
+	// ratchet specific apps (mode "all") while keeping the rest on "staged".
+	AppModes map[string]string `json:"appModes"`
 	// ExcludePaths skips files whose project-relative path contains any of
-	// these substrings. Exclusions always win over AppPaths.
+	// these substrings. Exclusions always win over AppPaths/AppModes.
 	ExcludePaths []string `json:"excludePaths"`
 }
 

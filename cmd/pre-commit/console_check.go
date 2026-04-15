@@ -6,6 +6,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
@@ -140,7 +141,20 @@ func runConsoleCheck(appFiles map[string][]string, allowedFiles []string) error 
 
 	if compactMode() {
 		if len(allViolations) > 0 {
-			printStatus("Console check", false, fmt.Sprintf("%d files", len(allViolations)))
+			appCounts := make(map[string]int)
+			for _, v := range allViolations {
+				appCounts[v.AppName]++
+			}
+			apps := make([]string, 0, len(appCounts))
+			for app := range appCounts {
+				apps = append(apps, app)
+			}
+			sort.Strings(apps)
+			parts := make([]string, len(apps))
+			for i, app := range apps {
+				parts[i] = fmt.Sprintf("%s %d files", app, appCounts[app])
+			}
+			printStatus("Console check", false, strings.Join(parts, ", "))
 			printReportHint("console-check/")
 			return fmt.Errorf("console statement violations found")
 		}
