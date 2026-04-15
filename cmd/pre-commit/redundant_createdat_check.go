@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/milehighideas/claude-hooks/internal/schemachecks"
 )
@@ -153,9 +156,19 @@ func runRedundantCreatedAtCheck(
 	}
 
 	count := len(report.Violations)
+
+	// Write report file if reportDir is set and there are violations so
+	// callers can inspect findings without rerunning the check.
+	if reportDir != "" && count > 0 {
+		if err := writeRedundantCreatedAtReport(report.Violations, projectRoot, reportDir); err != nil {
+			fmt.Printf("   Warning: failed to write redundant createdAt report: %v\n", err)
+		}
+	}
+
 	if compactMode() {
 		if count > 0 {
 			printStatus("Redundant createdAt", false, fmt.Sprintf("%d schema file(s)", count))
+			printReportHint("redundant-createdat/")
 			return fmt.Errorf("found %d schema file(s) with redundant createdAt", count)
 		}
 		printStatus("Redundant createdAt", true, "")
@@ -186,4 +199,79 @@ func runRedundantCreatedAtCheck(
 	fmt.Println("timestamp, rename to reflect its meaning: activatedAt, publishedAt, etc.")
 	fmt.Println()
 	return fmt.Errorf("found %d schema file(s) with redundant createdAt", count)
+}
+
+// writeRedundantCreatedAtReport writes one
+// <baseDir>/redundant-createdat/<app>.txt file per app/package with schema
+// violations, matching the srp/<app>.txt and typecheck/<app>.txt
+// conventions. Each entry includes the per-file createdAt count so heavy
+// offenders stand out within an app.
+func writeRedundantCreatedAtReport(violations []string, projectRoot, baseDir string) error {
+	outDir := filepath.Join(baseDir, "redundant-createdat")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+
+	type entry struct {
+		path  string
+		count int
+	}
+	byApp := make(map[string][]entry)
+	for _, p := range violations {
+		rel, err := filepath.Rel(projectRoot, p)
+		if err != nil {
+			rel = p
+		}
+		rel = filepath.ToSlash(rel)
+		// Count occurrences — best-effort; on read error we report the
+		// violation with count 0 rather than skip it entirely.
+		count := 0
+		if src, err := os.ReadFile(p); err == nil {
+			count = schemachecks.CountCreatedAt(string(src))
+		}
+		byApp[appNameFromRel(rel)] = append(byApp[appNameFromRel(rel)], entry{path: rel, count: count})
+	}
+
+	generated := time.Now().Format("2006-01-02 15:04:05")
+	for app, entries := range byApp {
+		// Sort by count desc so heavy offenders bubble to the top.
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].count != entries[j].count {
+				return entries[i].count > entries[j].count
+			}
+			return entries[i].path < entries[j].path
+		})
+
+		appTotal := 0
+		for _, e := range entries {
+			appTotal += e.count
+		}
+
+		var sb strings.Builder
+		sb.WriteString(strings.Repeat("=", 80) + "\n")
+		sb.WriteString(fmt.Sprintf("REDUNDANT createdAt - %s\n", strings.ToUpper(app)))
+		sb.WriteString(fmt.Sprintf("Generated: %s\n", generated))
+		sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+		sb.WriteString(fmt.Sprintf("Schema files with createdAt in defineTable: %d\n", len(entries)))
+		sb.WriteString(fmt.Sprintf("Total createdAt occurrences: %d\n\n", appTotal))
+		sb.WriteString("Convex automatically maintains `_creationTime: number` on every row.\n")
+		sb.WriteString("A custom `createdAt` column inside defineTable({...}) duplicates that\n")
+		sb.WriteString("data and risks drift when callers pass a different value.\n\n")
+		sb.WriteString("Remediation: use `row._creationTime` in queries and sort via the\n")
+		sb.WriteString("`by_creation_time` index. If you need a semantically different\n")
+		sb.WriteString("timestamp, rename the field: activatedAt, publishedAt, verifiedAt.\n\n")
+		sb.WriteString(strings.Repeat("-", 40) + "\n")
+		sb.WriteString("VIOLATIONS (count = occurrences in that file)\n")
+		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		for _, e := range entries {
+			sb.WriteString(fmt.Sprintf("  [%3d]  %s\n", e.count, e.path))
+		}
+
+		reportPath := filepath.Join(outDir, app+".txt")
+		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

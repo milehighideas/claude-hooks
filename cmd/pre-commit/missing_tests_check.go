@@ -5,7 +5,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 )
 
 const (
@@ -255,9 +257,19 @@ func runMissingTestsCheck(cfg MissingTestsCheckConfig, projectRoot string, stage
 	}
 
 	count := len(report.Missing)
+
+	// Write report file if reportDir is set and there are violations so
+	// callers can inspect findings without rerunning the check.
+	if reportDir != "" && count > 0 {
+		if err := writeMissingTestsReport(report.Missing, projectRoot, reportDir); err != nil {
+			fmt.Printf("   Warning: failed to write missing tests report: %v\n", err)
+		}
+	}
+
 	if compactMode() {
 		if count > 0 {
 			printStatus("Missing tests", false, fmt.Sprintf("%d missing", count))
+			printReportHint("missing-tests/")
 			return fmt.Errorf("found %d source file(s) without tests", count)
 		}
 		printStatus("Missing tests", true, "")
@@ -286,4 +298,62 @@ func runMissingTestsCheck(cfg MissingTestsCheckConfig, projectRoot string, stage
 	fmt.Println("missingTestsCheckConfig.excludePaths.")
 	fmt.Println()
 	return fmt.Errorf("found %d source file(s) without tests", count)
+}
+
+// writeMissingTestsReport writes one <baseDir>/missing-tests/<app>.txt file
+// per app that has source files without co-located tests, matching the
+// srp/<app>.txt and typecheck/<app>.txt conventions. Paths are made
+// project-relative for readability.
+func writeMissingTestsReport(missing []missingTest, projectRoot, baseDir string) error {
+	outDir := filepath.Join(baseDir, "missing-tests")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+
+	type entry struct {
+		source, expected string
+	}
+	byApp := make(map[string][]entry)
+	for _, m := range missing {
+		relSrc, err := filepath.Rel(projectRoot, m.Source)
+		if err != nil {
+			relSrc = m.Source
+		}
+		relSrc = filepath.ToSlash(relSrc)
+		relExp, err := filepath.Rel(projectRoot, m.Expected)
+		if err != nil {
+			relExp = m.Expected
+		}
+		relExp = filepath.ToSlash(relExp)
+		byApp[appNameFromRel(relSrc)] = append(byApp[appNameFromRel(relSrc)], entry{source: relSrc, expected: relExp})
+	}
+
+	generated := time.Now().Format("2006-01-02 15:04:05")
+	for app, entries := range byApp {
+		sort.Slice(entries, func(i, j int) bool { return entries[i].source < entries[j].source })
+
+		var sb strings.Builder
+		sb.WriteString(strings.Repeat("=", 80) + "\n")
+		sb.WriteString(fmt.Sprintf("MISSING TESTS - %s\n", strings.ToUpper(app)))
+		sb.WriteString(fmt.Sprintf("Generated: %s\n", generated))
+		sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+		sb.WriteString(fmt.Sprintf("Total source files without co-located tests: %d\n\n", len(entries)))
+		sb.WriteString("Each source file below is expected to have a .test.ts(x) or .spec.ts(x)\n")
+		sb.WriteString("sibling. Create the test file or add the path to\n")
+		sb.WriteString("missingTestsCheckConfig.excludePaths.\n\n")
+		sb.WriteString(strings.Repeat("-", 40) + "\n")
+		sb.WriteString("MISSING TESTS\n")
+		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		for _, e := range entries {
+			sb.WriteString(fmt.Sprintf("  %s\n", e.source))
+			sb.WriteString(fmt.Sprintf("    → expected: %s\n", e.expected))
+		}
+
+		reportPath := filepath.Join(outDir, app+".txt")
+		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

@@ -2,8 +2,11 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/milehighideas/claude-hooks/internal/stubs"
 )
@@ -135,9 +138,19 @@ func runStubTestCheck(cfg StubTestCheckConfig, projectRoot string, stagedFiles [
 	}
 
 	count := len(report.Stubs)
+
+	// Write report file if reportDir is set and there are violations so
+	// callers can inspect findings without rerunning the check.
+	if reportDir != "" && count > 0 {
+		if err := writeStubTestReport(report.Stubs, projectRoot, reportDir); err != nil {
+			fmt.Printf("   Warning: failed to write stub tests report: %v\n", err)
+		}
+	}
+
 	if compactMode() {
 		if count > 0 {
 			printStatus("Stub tests", false, fmt.Sprintf("%d stub(s)", count))
+			printReportHint("stub-tests/")
 			return fmt.Errorf("found %d stub test file(s)", count)
 		}
 		printStatus("Stub tests", true, "")
@@ -163,4 +176,65 @@ func runStubTestCheck(cfg StubTestCheckConfig, projectRoot string, stagedFiles [
 	fmt.Println("that verify nothing. Write real assertions or delete the file.")
 	fmt.Println()
 	return fmt.Errorf("found %d stub test file(s)", count)
+}
+
+// writeStubTestReport writes one <baseDir>/stub-tests/<app>.txt file per app
+// that has stub tests, matching the srp/<app>.txt and typecheck/<app>.txt
+// conventions used by sibling checks. Paths are made project-relative.
+func writeStubTestReport(stubs []string, projectRoot, baseDir string) error {
+	outDir := filepath.Join(baseDir, "stub-tests")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+
+	byApp := make(map[string][]string)
+	for _, s := range stubs {
+		rel, err := filepath.Rel(projectRoot, s)
+		if err != nil {
+			rel = s
+		}
+		rel = filepath.ToSlash(rel)
+		byApp[appNameFromRel(rel)] = append(byApp[appNameFromRel(rel)], rel)
+	}
+
+	generated := time.Now().Format("2006-01-02 15:04:05")
+	for app, files := range byApp {
+		sort.Strings(files)
+
+		var sb strings.Builder
+		sb.WriteString(strings.Repeat("=", 80) + "\n")
+		sb.WriteString(fmt.Sprintf("STUB TESTS - %s\n", strings.ToUpper(app)))
+		sb.WriteString(fmt.Sprintf("Generated: %s\n", generated))
+		sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+		sb.WriteString(fmt.Sprintf("Total stub test files: %d\n\n", len(files)))
+		sb.WriteString("A stub test is a file where every expect() call is a weak-only\n")
+		sb.WriteString("assertion (expect(true).toBe(true), .toBeDefined(), .toBeTruthy(),\n")
+		sb.WriteString(".toBeFalsy(), .not.toBeNull(), .not.toBeUndefined()) or a self-mock\n")
+		sb.WriteString("that replaces the subject under test.\n\n")
+		sb.WriteString(strings.Repeat("-", 40) + "\n")
+		sb.WriteString("STUB FILES\n")
+		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		for _, f := range files {
+			sb.WriteString(fmt.Sprintf("  %s\n", f))
+		}
+
+		reportPath := filepath.Join(outDir, app+".txt")
+		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// appNameFromRel extracts an app/package name from a project-relative path.
+// apps/mobile/foo/bar.ts  -> mobile
+// packages/backend/x.ts   -> backend
+// something/else.ts       -> other
+func appNameFromRel(rel string) string {
+	parts := strings.Split(rel, "/")
+	if len(parts) >= 2 && (parts[0] == "apps" || parts[0] == "packages") {
+		return parts[1]
+	}
+	return "other"
 }
