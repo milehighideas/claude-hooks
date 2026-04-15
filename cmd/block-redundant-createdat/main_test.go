@@ -14,14 +14,24 @@ func TestIsSchemaFile(t *testing.T) {
 		path string
 		want bool
 	}{
+		// dashtag layout
 		{"convex schema dir", "/repo/packages/backend/convex/schema/users.ts", true},
 		{"convex schema dir nested", "/repo/packages/backend/convex/schema/events/core.ts", true},
 		{"single-file schema.ts", "/repo/packages/backend/convex/schema.ts", true},
 		{"single-file schema.tsx", "/repo/packages/backend/convex/schema.tsx", true},
+		// upc-me layout: /schema/ at an arbitrary depth
+		{"backend/schema dir", "/repo/packages/backend/schema/apiUsageLogs.ts", true},
+		// camcoapp layout: /schemas/<domain>/<name>.schema.ts
+		{"schemas plural dir", "/repo/packages/convex/convex/schemas/customers/customers.schema.ts", true},
+		{"per-entity schema suffix", "/repo/packages/foo/customers.schema.ts", true},
+		{"per-entity schema suffix tsx", "/repo/packages/foo/customers.schema.tsx", true},
+		// Negatives
 		{"unrelated convex file", "/repo/packages/backend/convex/users/usersQueries.ts", false},
 		{"components dir", "/repo/apps/story/components/Foo.tsx", false},
 		{"empty", "", false},
+		// Windows separators
 		{"windows schema dir", `C:\repo\packages\backend\convex\schema\users.ts`, true},
+		{"windows per-entity schema", `C:\repo\pkg\foo.schema.ts`, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

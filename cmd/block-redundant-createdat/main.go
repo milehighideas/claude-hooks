@@ -47,18 +47,35 @@ type HookData struct {
 }
 
 // isSchemaFile returns true when the path looks like a Convex schema file.
-// We match both `.../convex/schema/...` (the directory convention) and
-// basenames `schema.ts`/`schema.tsx` so a single-file schema still triggers.
+// Supports the multiple layouts we've seen in practice:
+//
+//   - `.../convex/schema/<name>.ts`        (dashtag convention)
+//   - `.../backend/schema/<name>.ts`       (upc-me / mhi convention)
+//   - `.../schemas/<domain>/<name>.ts`     (camcoapp convention — plural)
+//   - basename `schema.ts` / `schema.tsx`  (single-file schema)
+//   - basename `*.schema.ts` / `*.schema.tsx`  (per-entity schema module)
+//
+// The match is intentionally broad — false positives end up with a zero
+// count (no `defineTable({...})` block, nothing to block) so the worst
+// case is wasted regex work on a handful of unrelated files.
 func isSchemaFile(filePath string) bool {
 	if filePath == "" {
 		return false
 	}
-	if strings.Contains(filePath, "/convex/schema/") ||
-		strings.Contains(filePath, `\convex\schema\`) {
+	// Normalize Windows separators so the substring checks below work
+	// regardless of platform.
+	p := strings.ReplaceAll(filePath, `\`, "/")
+	if strings.Contains(p, "/schema/") || strings.Contains(p, "/schemas/") {
 		return true
 	}
 	base := filepath.Base(filePath)
-	return base == "schema.ts" || base == "schema.tsx"
+	if base == "schema.ts" || base == "schema.tsx" {
+		return true
+	}
+	if strings.HasSuffix(base, ".schema.ts") || strings.HasSuffix(base, ".schema.tsx") {
+		return true
+	}
+	return false
 }
 
 // defineTableBlockPattern matches `defineTable({` through the matching `})`.
