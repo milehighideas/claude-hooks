@@ -93,6 +93,7 @@ Run `pre-commit --list` to see all available checks. Currently supported:
 | `testFiles`         | Ensure test files exist for source files              |
 | `vitestAssertions`  | Ensure vitest configs have `requireAssertions: true`  |
 | `testCoverage`      | Check source files have corresponding test files      |
+| `stubTestCheck`     | Ban `expect(true).toBe(true)` stub tests (per-app scoped) |
 | `goLint`            | Go linting (when enabled)                             |
 | `convexValidation`  | Convex schema validation (when enabled)               |
 | `buildCheck`        | Build verification (when enabled)                     |
@@ -140,7 +141,8 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
     "testFiles": true,
     "mockCheck": true,
     "vitestAssertions": true,
-    "testCoverage": true
+    "testCoverage": true,
+    "stubTestCheck": true
   },
   "protectedBranches": ["main", "production"],
   "changelogExclude": ["^docs/", "^README"],
@@ -211,9 +213,39 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
     "appPaths": ["apps/portal", "apps/mobile"],
     "excludePaths": ["data-layer/", "providers/"],
     "hideWarnings": false
+  },
+  "stubTestCheckConfig": {
+    "mode": "all",
+    "appPaths": ["apps/portal", "packages/ui"],
+    "excludePaths": ["apps/portal/legacy"]
   }
 }
 ```
+
+#### Stub Test Check (`stubTestCheck`)
+
+Detects test files whose every `expect()` call is the `expect(true).toBe(true)` placeholder — tests that look like tests but verify nothing. Shares its detector with `validate-test-files`, so the hook that prevents new stubs at Write/Edit time and this commit-time gate can never drift.
+
+```jsonc
+"stubTestCheckConfig": {
+  // "all" (default) — walk appPaths and fail on ANY stub, including files
+  // this commit didn't touch. Use this as a "ratchet": once an app is
+  // stub-free, enabling it locks in that state forever.
+  //
+  // "staged" — only flag test files currently staged. Lighter-weight;
+  // redundant with the validate-test-files PreToolUse hook but useful
+  // as a belt-and-suspenders commit gate.
+  "mode": "all",
+
+  // Substring match on project-relative path. Empty = scan entire project.
+  "appPaths": ["apps/portal", "packages/ui"],
+
+  // Always wins over appPaths. Substring match.
+  "excludePaths": ["apps/portal/legacy"]
+}
+```
+
+Progressive cleanup: start with `appPaths: []` (nothing enforced), clean one app, add it to `appPaths`. Repeat until every app is in the list. Same idiom the `-list-stubs` flag on `validate-test-files` supports for auditing.
 
 ### Key Configuration Options
 

@@ -35,7 +35,25 @@ type Config struct {
 	SRPConfig          SRPConfig             `json:"srpConfig"`
 	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
 	MaestroValidation  MaestroValidationConfig `json:"maestroValidation"`
+	StubTestCheckConfig StubTestCheckConfig    `json:"stubTestCheckConfig"`
 	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
+}
+
+// StubTestCheckConfig configures the stub-test detector. Mirrors the shape of
+// other scoped configs (srpConfig, testCoverageConfig, etc).
+type StubTestCheckConfig struct {
+	// Mode controls what's scanned. Default "all" — walks AppPaths (or the
+	// whole project if empty) and reports every stub file. "staged" — only
+	// checks staged test files that are also in session's edited list.
+	// "all" is the right default when you want a ratchet: once an app is
+	// stub-free, enabling it locks in that state.
+	Mode string `json:"mode"`
+	// AppPaths restricts scanning to files whose project-relative path
+	// contains at least one of these substrings. Empty = scan the whole project.
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose project-relative path contains any of
+	// these substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths"`
 }
 
 // IsWarningCheck returns true if the named check should warn instead of block.
@@ -71,6 +89,7 @@ type Features struct {
 	NativeBuild        bool `json:"nativeBuild"`
 	DataLayerCheck     bool `json:"dataLayerCheck"`
 	MaestroValidation  bool `json:"maestroValidation"`
+	StubTestCheck      bool `json:"stubTestCheck"`
 }
 
 // AppConfig represents configuration for a single app

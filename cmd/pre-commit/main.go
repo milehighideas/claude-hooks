@@ -178,6 +178,7 @@ func printAvailableChecks() {
 	fmt.Println("  vitestAssertions   - Ensure vitest configs have requireAssertions: true")
 	fmt.Println("  testCoverage       - Ensure source files have corresponding test files")
 	fmt.Println("  testQuality        - Ban export-only stub tests (toBeDefined/typeof checks)")
+	fmt.Println("  stubTestCheck      - Ban placeholder expect(true).toBe(true) stub tests")
 	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
 	fmt.Println("  maestroValidation  - Validate Maestro flow id: selectors resolve to source testIDs")
 }
@@ -407,6 +408,20 @@ func run() error {
 	// Test quality check - bans export-only stub tests
 	if config.Features.TestQuality {
 		collectResult("testQuality", runTestQualityCheck(config.TestQualityConfig))
+	}
+
+	// Stub test check - bans expect(true).toBe(true) placeholder assertions
+	if config.Features.StubTestCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(stagedFiles))
+		for _, f := range stagedFiles {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("stubTestCheck", runStubTestCheck(config.StubTestCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Build check
@@ -768,6 +783,17 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runTestCoverageCheck(config.TestCoverageConfig)
 	case "testQuality":
 		return runTestQualityCheck(config.TestQualityConfig)
+	case "stubTestCheck":
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		return runStubTestCheck(config.StubTestCheckConfig, projectRoot, stagedAbs)
 	case "dataLayerCheck":
 		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
 	case "maestroValidation":
@@ -842,6 +868,20 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	// Test quality check
 	if config.Features.TestQuality {
 		collectResult("testQuality", runTestQualityCheck(config.TestQualityConfig))
+	}
+
+	// Stub test check
+	if config.Features.StubTestCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("stubTestCheck", runStubTestCheck(config.StubTestCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Lint and typecheck
