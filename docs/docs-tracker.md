@@ -4,47 +4,94 @@
 
 A Go binary that gates Edit/Write operations on reading required documentation, and tracks documentation reads so the gate clears once a doc has been read.
 
-## Overview
+## Operational modes
 
-`docs-tracker` is a Claude Code hook with two operational modes:
-
-1. **Enforce Mode** (PreToolUse hook): Blocks Edit/Write operations if required documentation hasn't been read during the current session.
-2. **Track Mode** (PostToolUse hook): Records when documentation files are read during a session.
+1. **Enforce Mode** (PreToolUse hook): Blocks Edit/Write if any required doc for the target path hasn't been read this session.
+2. **Track Mode** (PostToolUse hook): Records when a registered doc is read so enforce mode will allow subsequent edits.
 
 ## Opt-in per project
 
-The hook is **opt-in per project**. It only does anything when a project contains:
+The hook only activates for projects that contain:
 
 ```text
 <project-root>/.claude/docs-tracker.json
 ```
 
-The file's presence is what enables the hook. The contents may be `{}` for the default behavior (future fields can extend config). Projects without this file see no-op behavior, which makes the hook safe to wire up globally in `~/.claude/settings.json`.
+Absent that file the hook is a no-op — safe to wire into `~/.claude/settings.json` globally. The file's contents configure behavior (see [Config](#config)); `{}` is valid and selects the defaults.
 
-### Project root discovery
+At invocation the binary walks up from the tool's `file_path` to find the nearest directory containing `.claude/docs-tracker.json`, treating that as the project root.
 
-At invocation the binary walks up from the tool's `file_path` looking for a directory that contains `.claude/docs-tracker.json`. That directory is treated as the project root. If none is found anywhere on the path, the hook exits 0 and does nothing.
+## Config
 
-## Auto-discovered mappings
+```json
+{
+  "autoDiscover": true,
+  "docFileNames": ["CLAUDE.md"],
+  "convex": false
+}
+```
 
-Once a project is opted in, the binary walks the project root looking for `CLAUDE.md` files. Each `<subdir>/CLAUDE.md` becomes a mapping: any Edit/Write of a file under `<subdir>/` requires reading that `CLAUDE.md` first.
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `autoDiscover` | bool | `true` | Walk the project for files named in `docFileNames` and build one mapping per directory. |
+| `docFileNames` | string[] | `["CLAUDE.md"]` | File names that auto-discovery treats as required docs for their containing directory. |
+| `convex` | bool \| object | `false` | Enables the Convex preset. See [Convex preset](#convex-preset). |
 
-- The **root-level** `CLAUDE.md` is ignored (Claude Code already loads it as project context).
-- These directories are **skipped** during discovery: `node_modules`, `.git`, `dist`, `build`, `.next`, `.turbo`, `.vercel`, `_generated`.
-- When multiple `CLAUDE.md` files apply to a path, the **most specific** (longest pattern) wins. E.g. `apps/mobile/components/CLAUDE.md` takes precedence over `apps/mobile/CLAUDE.md` for files under `components/`.
+Unknown fields are ignored.
 
-No hardcoded paths: add, move, or rename `CLAUDE.md` files freely and the mapping updates on the next invocation.
+## How mappings are built
 
-## Skip patterns
+For each Edit/Write the binary:
 
-The following files are always allowed without reading documentation, even inside a mapped directory:
+1. Finds the project root via the opt-in marker.
+2. Builds a list of mappings:
+   - If the **Convex preset** is enabled, adds a mapping for the backend dir.
+   - If **`autoDiscover`** is true, walks the project for `docFileNames` and adds a mapping per directory (the preset's pattern is preserved; auto-discovered mappings that collide are dropped).
+3. Sorts longest-pattern-first so the most specific mapping wins.
+4. Applies any **skip patterns** to short-circuit for tests/generated files.
+5. Checks whether every doc in the matched mapping has been read this session.
 
-- `CLAUDE.md` itself
-- `__tests__/` directories
-- `.test.ts`, `.test.tsx` files
-- `_generated/` directories
-- `.d.ts` TypeScript declaration files
+### Auto-discovery rules
+
+- The **root-level doc file** is ignored (Claude Code already loads a root CLAUDE.md as context).
+- These directories are **never walked**: `node_modules`, `.git`, `dist`, `build`, `.next`, `.turbo`, `.vercel`, `_generated`.
+- When multiple matching doc file names are present in a single directory, **all** are required reading.
+
+### Skip patterns
+
+These path fragments bypass enforcement entirely (no doc required to edit them):
+
+- `__tests__/`, `.test.ts`, `.test.tsx`
+- `_generated/`, `.d.ts`
 - `node_modules/`
+
+Additionally, the binary will not block editing of a file that is itself one of the required docs for its matched mapping — you can update the doc you'd otherwise be gated on.
+
+## Convex preset
+
+Convex projects share a consistent generated layout; the preset encodes it.
+
+```json
+{ "convex": true }
+```
+
+Or with a custom backend location:
+
+```json
+{ "convex": { "backendDir": "apps/backend" } }
+```
+
+With the preset enabled:
+
+- **Pattern**: `<backendDir>/` (default `packages/backend/`).
+- **Required docs**:
+  - `<backendDir>/convex/_generated/ai/guidelines.md` (if it exists)
+  - `<backendDir>/.agents/skills/*/SKILL.md` (glob-expanded at invocation time)
+- **Name** in blocked-message: `Convex backend (<backendDir>)`.
+- **Scope**: only edits under `<backendDir>/` are gated. Files elsewhere are unaffected by the preset.
+- **Coexistence**: the preset claims its pattern exclusively. If `autoDiscover` is on, other directories (e.g. `packages/ui/`) can still be gated by their own `CLAUDE.md`.
+
+If `<backendDir>` doesn't exist or has no resolvable docs, the preset is silent (no mapping created).
 
 ## Command-line usage
 
@@ -53,14 +100,7 @@ docs-tracker -mode enforce < hook_input.json
 docs-tracker -mode track   < hook_input.json
 ```
 
-### `-mode` (required)
-
-- `enforce`: PreToolUse mode — blocks edits if required docs haven't been read.
-- `track`: PostToolUse mode — tracks documentation reads.
-
-## Input format
-
-Both modes read the standard Claude Code hook JSON on stdin:
+### Input format
 
 ```json
 {
@@ -70,65 +110,56 @@ Both modes read the standard Claude Code hook JSON on stdin:
 }
 ```
 
-`file_path` may be absolute or relative; relative paths are resolved against the current working directory before walking up for the project root.
+`file_path` may be absolute or relative; relative paths are resolved against cwd.
 
-## Exit codes
+### Exit codes
 
-### Enforce mode
-
-- `0`: Operation allowed (no config, no mapping, file skipped, or doc already read).
-- `1`: System error (I/O, marshal failure).
-- `2`: Operation blocked — required doc not read yet.
-
-### Track mode
-
-- `0`: Success (including no-op cases).
-- `1`: System error.
+| Mode | Code | Meaning |
+| --- | --- | --- |
+| enforce | `0` | Allowed (no config, no mapping, skip pattern, or all docs read). |
+| enforce | `1` | System error. |
+| enforce | `2` | Blocked — at least one required doc unread. |
+| track   | `0` | Success (including no-op cases). |
+| track   | `1` | System error (couldn't write session state). |
 
 ## Blocked output
-
-When an Edit/Write is blocked, a message is written to stderr:
 
 ```text
 ⚠️  PLEASE READ DOCUMENTATION FIRST
 
-Before editing files in packages/backend, please read:
-  packages/backend/CLAUDE.md
+Before editing files in Convex backend (packages/backend), please read the following:
+  packages/backend/convex/_generated/ai/guidelines.md
+  packages/backend/.agents/skills/convex-quickstart/SKILL.md
+  packages/backend/.agents/skills/convex-setup-auth/SKILL.md
 
 This ensures you follow project conventions and patterns.
 
-Run: Read packages/backend/CLAUDE.md
-Then retry your edit.
+Retry your edit once the documentation has been read.
 ```
 
-`Name` is derived from the mapped subdirectory's relative path.
+Only **unread** docs are listed. Once every doc in the mapping has been read in the session, subsequent edits are allowed.
 
 ## Session storage
-
-Session data is persisted to:
 
 ```text
 ~/.claude/sessions/{session_id}-docs.json
 ```
 
-Format:
-
 ```json
-{ "docs_read": ["packages/backend/CLAUDE.md"] }
+{ "docs_read": ["packages/backend/convex/_generated/ai/guidelines.md"] }
 ```
 
-Doc paths are stored **relative to the project root** so enforce/track share the same keys.
+Paths are stored **relative to the project root** so enforce and track share the same keys regardless of how Claude Code expresses the file path.
 
 ## Graceful degradation
 
-The tool fails open (allow operations) on unrecoverable issues:
+The tool fails open on unrecoverable issues:
 
 - Invalid JSON input → allow.
+- Unreadable or malformed `.claude/docs-tracker.json` → allow.
 - Missing session file → allow (first session, nothing tracked yet).
 - Session file I/O error → allow.
-- No project root (no `.claude/docs-tracker.json`) → allow.
-
-System errors (exit code 1) only happen when track mode cannot write its session state.
+- No project root → allow.
 
 ## Wiring into Claude Code
 
@@ -140,30 +171,67 @@ Register the binary globally in `~/.claude/settings.json`:
     "PreToolUse": [
       {
         "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/path/to/bin/docs-tracker -mode enforce"
-          }
-        ]
+        "hooks": [{ "type": "command", "command": "/path/to/bin/docs-tracker -mode enforce" }]
       }
     ],
     "PostToolUse": [
       {
         "matcher": "Read",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/path/to/bin/docs-tracker -mode track"
-          }
-        ]
+        "hooks": [{ "type": "command", "command": "/path/to/bin/docs-tracker -mode track" }]
       }
     ]
   }
 }
 ```
 
-Because the hook is a no-op without `.claude/docs-tracker.json` at the project root, the global registration is safe — it only activates inside projects that explicitly opt in.
+## Recipes
+
+### Monorepo with per-package CLAUDE.md
+
+```json
+{}
+```
+
+Walks the project and requires reading the corresponding `CLAUDE.md` before editing inside each package/app directory.
+
+### Convex backend only, no CLAUDE.md elsewhere
+
+```json
+{
+  "autoDiscover": false,
+  "convex": true
+}
+```
+
+Gates edits under `packages/backend/` on the generated guidelines and installed SKILL.md files. Everywhere else: no gating.
+
+### Convex backend + CLAUDE.md for everything else
+
+```json
+{
+  "convex": true
+}
+```
+
+The preset claims `packages/backend/`; auto-discovery handles every other directory that has a `CLAUDE.md`.
+
+### Use AGENTS.md instead of CLAUDE.md
+
+```json
+{
+  "docFileNames": ["AGENTS.md"]
+}
+```
+
+### Both AGENTS.md and CLAUDE.md required
+
+```json
+{
+  "docFileNames": ["CLAUDE.md", "AGENTS.md"]
+}
+```
+
+When a directory has both, both must be read.
 
 ## Building
 
@@ -182,28 +250,10 @@ go test ./cmd/docs-tracker/...
 Tests cover:
 
 - Opt-in gating (no config → no-op for both modes).
-- Auto-discovery (skipped dirs, longest-pattern-first ordering, root `CLAUDE.md` ignored).
-- Enforce blocking/allowing behavior with skip patterns.
-- Track recording, dedup, and ignore for non-Read tools / unregistered docs.
+- Auto-discovery (ordering, ignored dirs, custom `docFileNames`).
+- Convex preset (block/allow, missing-only messaging, custom `backendDir`, scope, editing own docs).
+- Preset + auto-discovery coexistence.
+- Skip patterns and non-Edit tool bypass.
+- Track registration, deduplication, and unregistered-doc rejection.
 - Session persistence round-trip.
-
-## Example walkthrough
-
-Project layout:
-
-```text
-my-project/
-├── .claude/
-│   └── docs-tracker.json         # opt-in marker (may be "{}")
-├── packages/backend/
-│   ├── CLAUDE.md                 # required for edits under packages/backend/
-│   └── utils.ts
-└── apps/mobile/components/
-    ├── CLAUDE.md                 # required for edits under apps/mobile/components/
-    └── Button.tsx
-```
-
-1. Editing `packages/backend/utils.ts` first ⇒ blocked with a prompt to read `packages/backend/CLAUDE.md`.
-2. Reading `packages/backend/CLAUDE.md` ⇒ track mode records it.
-3. Editing `packages/backend/utils.ts` again ⇒ allowed.
-4. Editing `apps/mobile/components/Button.tsx` ⇒ still blocked until `apps/mobile/components/CLAUDE.md` is read.
+- Config unmarshaling (bare `true/false` and object forms for `convex`).

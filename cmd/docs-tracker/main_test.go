@@ -11,13 +11,12 @@ import (
 
 // projectFixture describes a temp project layout for tests.
 type projectFixture struct {
-	// enabled creates the opt-in marker .claude/docs-tracker.json
-	enabled bool
-	// docs is the list of CLAUDE.md files to create (relative to project root),
-	// e.g. []string{"packages/backend/CLAUDE.md", "apps/mobile/app/CLAUDE.md"}.
+	// config is the literal contents of `.claude/docs-tracker.json`. If empty,
+	// no config file is created (project is not opted in).
+	config string
+	// docs creates files (by relative path) with placeholder content.
 	docs []string
-	// extraFiles lists additional empty files to create (relative paths), useful
-	// for ensuring intermediate directories exist.
+	// extraFiles creates empty files (by relative path) for layout purposes.
 	extraFiles []string
 }
 
@@ -25,12 +24,12 @@ type projectFixture struct {
 func setupProject(t *testing.T, fx projectFixture) string {
 	t.Helper()
 	root := t.TempDir()
-	if fx.enabled {
+	if fx.config != "" {
 		claudeDir := filepath.Join(root, ".claude")
 		if err := os.MkdirAll(claudeDir, 0755); err != nil {
 			t.Fatalf("mkdir .claude: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(claudeDir, "docs-tracker.json"), []byte("{}"), 0644); err != nil {
+		if err := os.WriteFile(filepath.Join(claudeDir, "docs-tracker.json"), []byte(fx.config), 0644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 	}
@@ -75,351 +74,470 @@ func seedSession(t *testing.T, provider sessionFileProvider, sessionID string, d
 	}
 }
 
-func TestEnforce_NoConfig_IsNoOp(t *testing.T) {
-	// No .claude/docs-tracker.json anywhere, even with a CLAUDE.md present.
-	root := setupProject(t, projectFixture{
-		enabled: false,
-		docs:    []string{"packages/backend/CLAUDE.md"},
-	})
-	provider := sessionProvider(t.TempDir())
-
+// runEnforce runs enforceWithProvider for a given file_path/session.
+func runEnforce(t *testing.T, provider sessionFileProvider, sessionID, filePath string) (error, string) {
+	t.Helper()
 	input := HookInput{
 		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "foo.ts")},
-		SessionID: "no-config",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-	if stderr.Len() != 0 {
-		t.Errorf("expected no stderr, got: %s", stderr.String())
-	}
-}
-
-func TestEnforce_ConfigButNoDocs_IsNoOp(t *testing.T) {
-	root := setupProject(t, projectFixture{enabled: true})
-	provider := sessionProvider(t.TempDir())
-
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "src", "foo.ts")},
-		SessionID: "config-no-docs",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-}
-
-func TestEnforce_BlocksWhenDocNotRead(t *testing.T) {
-	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
-	})
-	provider := sessionProvider(t.TempDir())
-
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "foo.ts")},
-		SessionID: "block",
+		ToolInput: map[string]interface{}{"file_path": filePath},
+		SessionID: sessionID,
 	}
 	data, _ := json.Marshal(input)
 	var stderr bytes.Buffer
 	err := enforceWithProvider(bytes.NewReader(data), &stderr, provider)
+	return err, stderr.String()
+}
+
+// ---------------------------------------------------------------------------
+// Opt-in gate
+// ---------------------------------------------------------------------------
+
+func TestEnforce_NoConfig_IsNoOp(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		// no config = not opted in
+		docs: []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CLAUDE.md auto-discovery (default behavior with empty config)
+// ---------------------------------------------------------------------------
+
+func TestEnforce_AutoDiscover_BlocksWhenDocUnread(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	exitErr, ok := err.(*ExitError)
-	if !ok {
-		t.Fatalf("expected ExitError, got %T: %v", err, err)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block (exit 2), got %v", err)
 	}
-	if exitErr.Code != 2 {
-		t.Errorf("expected exit code 2, got %d", exitErr.Code)
-	}
-	if !strings.Contains(stderr.String(), "PLEASE READ DOCUMENTATION FIRST") {
-		t.Errorf("expected blocking message, got: %s", stderr.String())
-	}
-	if !strings.Contains(stderr.String(), "packages/backend/CLAUDE.md") {
-		t.Errorf("expected doc path in message, got: %s", stderr.String())
+	if !strings.Contains(stderr, "packages/backend/CLAUDE.md") {
+		t.Errorf("expected CLAUDE.md in message: %s", stderr)
 	}
 }
 
-func TestEnforce_AllowsWhenDocRead(t *testing.T) {
+func TestEnforce_AutoDiscover_AllowsWhenDocRead(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
 	})
 	provider := sessionProvider(t.TempDir())
-	seedSession(t, provider, "allow", []string{"packages/backend/CLAUDE.md"})
+	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
 
-	input := HookInput{
-		ToolName:  "Write",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "foo.ts")},
-		SessionID: "allow",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-		t.Fatalf("expected allow, got: %v", err)
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Errorf("expected allow, got %v", err)
 	}
 }
 
-func TestEnforce_NonEditToolsAllowed(t *testing.T) {
+func TestEnforce_AutoDiscoverOff_IgnoresClaudeMd(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{"autoDiscover": false}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
 	})
 	provider := sessionProvider(t.TempDir())
 
-	input := HookInput{
-		ToolName:  "Read",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "foo.ts")},
-		SessionID: "read-allow",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-		t.Fatalf("expected no error, got %v", err)
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Errorf("expected allow with autoDiscover false, got %v", err)
 	}
 }
+
+func TestEnforce_CustomDocFileNames(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"docFileNames":["AGENTS.md"]}`,
+		docs:   []string{"packages/backend/AGENTS.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block, got %v", err)
+	}
+	if !strings.Contains(stderr, "packages/backend/AGENTS.md") {
+		t.Errorf("expected AGENTS.md in message: %s", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Convex preset
+// ---------------------------------------------------------------------------
+
+const convexSkillContent = "# skill\n"
+
+func TestEnforce_ConvexPreset_Blocks(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+			"packages/backend/.agents/skills/convex-auth/SKILL.md",
+		},
+		extraFiles: []string{"packages/backend/foo.ts"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if _, ok := err.(*ExitError); !ok {
+		t.Fatalf("expected block, got %v", err)
+	}
+	// All three docs should be listed as missing.
+	for _, must := range []string{
+		"packages/backend/convex/_generated/ai/guidelines.md",
+		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+		"packages/backend/.agents/skills/convex-auth/SKILL.md",
+	} {
+		if !strings.Contains(stderr, must) {
+			t.Errorf("expected %q in message, got:\n%s", must, stderr)
+		}
+	}
+	if !strings.Contains(stderr, "Convex backend") {
+		t.Errorf("expected Convex backend label: %s", stderr)
+	}
+}
+
+func TestEnforce_ConvexPreset_ListsOnlyMissing(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+			"packages/backend/.agents/skills/convex-auth/SKILL.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+	// Guidelines and one skill have been read.
+	seedSession(t, provider, "s", []string{
+		"packages/backend/convex/_generated/ai/guidelines.md",
+		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+	})
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if _, ok := err.(*ExitError); !ok {
+		t.Fatalf("expected block (one skill still missing), got %v", err)
+	}
+	// Should ONLY list the unread skill.
+	if !strings.Contains(stderr, "convex-auth/SKILL.md") {
+		t.Errorf("expected missing skill listed: %s", stderr)
+	}
+	if strings.Contains(stderr, "convex-quickstart/SKILL.md") {
+		t.Errorf("should not list already-read skill: %s", stderr)
+	}
+	if strings.Contains(stderr, "guidelines.md") {
+		t.Errorf("should not list already-read guidelines: %s", stderr)
+	}
+}
+
+func TestEnforce_ConvexPreset_AllowsWhenAllDocsRead(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+	seedSession(t, provider, "s", []string{
+		"packages/backend/convex/_generated/ai/guidelines.md",
+		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+	})
+
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Errorf("expected allow, got %v", err)
+	}
+}
+
+func TestEnforce_ConvexPreset_CustomBackendDir(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": {"backendDir": "apps/backend"}}`,
+		docs: []string{
+			"apps/backend/convex/_generated/ai/guidelines.md",
+			"apps/backend/.agents/skills/convex-quickstart/SKILL.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "backend", "foo.ts"))
+	if _, ok := err.(*ExitError); !ok {
+		t.Fatalf("expected block, got %v", err)
+	}
+	if !strings.Contains(stderr, "apps/backend/convex/_generated/ai/guidelines.md") {
+		t.Errorf("expected apps/backend guidelines in message: %s", stderr)
+	}
+	if !strings.Contains(stderr, "apps/backend/.agents/skills/convex-quickstart/SKILL.md") {
+		t.Errorf("expected apps/backend skill in message: %s", stderr)
+	}
+}
+
+func TestEnforce_ConvexPreset_OnlyAffectsBackendDir(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"autoDiscover": false, "convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// Editing a frontend file should NOT be blocked.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "page.tsx"))
+	if err != nil {
+		t.Errorf("expected allow for apps/web/page.tsx, got %v", err)
+	}
+}
+
+func TestEnforce_ConvexPreset_SkipsEditingOwnDocs(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// Editing the guidelines.md itself should be allowed.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "convex", "_generated", "ai", "guidelines.md"))
+	if err != nil {
+		t.Errorf("expected allow for editing own required doc, got %v", err)
+	}
+	// Editing a SKILL.md should be allowed.
+	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", ".agents", "skills", "convex-quickstart", "SKILL.md"))
+	if err != nil {
+		t.Errorf("expected allow for editing own SKILL.md, got %v", err)
+	}
+}
+
+func TestEnforce_ConvexPreset_NoBackendDir_IsNoOp(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": true}`,
+		// No packages/backend exists — preset can't resolve docs.
+		docs: []string{"packages/ui/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// Random file edit with no backend dir: preset is silent, auto-discovery handles ui.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "page.tsx"))
+	if err != nil {
+		t.Errorf("expected allow (no backend, no matching doc), got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Preset + auto-discovery coexistence
+// ---------------------------------------------------------------------------
+
+func TestEnforce_ConvexPreset_OverridesClaudeMdForBackend(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/CLAUDE.md",                                   // would auto-discover but convex claims the pattern
+			"packages/backend/convex/_generated/ai/guidelines.md",          // convex doc
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",   // convex doc
+			"packages/ui/CLAUDE.md",                                        // auto-discover handles ui
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+	// Reading CLAUDE.md should NOT satisfy the convex requirement.
+	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if _, ok := err.(*ExitError); !ok {
+		t.Fatalf("expected block (convex docs still unread), got %v", err)
+	}
+	if strings.Contains(stderr, "packages/backend/CLAUDE.md") {
+		t.Errorf("CLAUDE.md should not be the required doc under convex preset: %s", stderr)
+	}
+	if !strings.Contains(stderr, "guidelines.md") {
+		t.Errorf("expected guidelines.md in message: %s", stderr)
+	}
+
+	// Editing a ui file should still be gated by CLAUDE.md auto-discovery.
+	err, stderr = runEnforce(t, provider, "s2", filepath.Join(root, "packages", "ui", "Button.tsx"))
+	if _, ok := err.(*ExitError); !ok {
+		t.Fatalf("expected ui block, got %v", err)
+	}
+	if !strings.Contains(stderr, "packages/ui/CLAUDE.md") {
+		t.Errorf("expected ui CLAUDE.md: %s", stderr)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Skip patterns and edge cases
+// ---------------------------------------------------------------------------
 
 func TestEnforce_SkipPatterns(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
 	})
 	provider := sessionProvider(t.TempDir())
-
 	cases := []string{
 		filepath.Join(root, "packages", "backend", "foo.test.ts"),
 		filepath.Join(root, "packages", "backend", "__tests__", "foo.ts"),
 		filepath.Join(root, "packages", "backend", "_generated", "api.d.ts"),
 		filepath.Join(root, "packages", "backend", "types.d.ts"),
-		filepath.Join(root, "packages", "backend", "CLAUDE.md"),
 	}
 	for _, path := range cases {
 		t.Run(path, func(t *testing.T) {
-			input := HookInput{
-				ToolName:  "Edit",
-				ToolInput: map[string]interface{}{"file_path": path},
-				SessionID: "skip",
-			}
-			data, _ := json.Marshal(input)
-			var stderr bytes.Buffer
-			if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-				t.Errorf("expected allow for %s, got %v", path, err)
+			err, _ := runEnforce(t, provider, "s", path)
+			if err != nil {
+				t.Errorf("expected allow, got %v", err)
 			}
 		})
 	}
 }
 
+func TestEnforce_NonEditToolsAllowed(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		config: `{}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+	input := HookInput{
+		ToolName:  "Read",
+		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "foo.ts")},
+		SessionID: "s",
+	}
+	data, _ := json.Marshal(input)
+	var stderr bytes.Buffer
+	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
+		t.Errorf("expected allow for Read tool, got %v", err)
+	}
+}
+
 func TestEnforce_UnmappedFilesAllowed(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
 	})
 	provider := sessionProvider(t.TempDir())
-
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "src", "utils", "helper.ts")},
-		SessionID: "unmapped",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-		t.Errorf("expected allow for unmapped file, got %v", err)
-	}
-}
-
-func TestEnforce_NestedDocTakesPrecedence(t *testing.T) {
-	// apps/mobile/CLAUDE.md and apps/mobile/components/CLAUDE.md both exist.
-	// Edits under components/ must require the more specific doc.
-	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs: []string{
-			"apps/mobile/CLAUDE.md",
-			"apps/mobile/components/CLAUDE.md",
-		},
-	})
-	provider := sessionProvider(t.TempDir())
-	// Session has parent doc read but not nested.
-	seedSession(t, provider, "nested", []string{"apps/mobile/CLAUDE.md"})
-
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "apps", "mobile", "components", "Button.tsx")},
-		SessionID: "nested",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	err := enforceWithProvider(bytes.NewReader(data), &stderr, provider)
-	if _, ok := err.(*ExitError); !ok {
-		t.Fatalf("expected block because nested doc not read, got %v", err)
-	}
-	if !strings.Contains(stderr.String(), "apps/mobile/components/CLAUDE.md") {
-		t.Errorf("expected message to reference nested doc, got: %s", stderr.String())
-	}
-}
-
-func TestEnforce_IgnoresRootClaudeMd(t *testing.T) {
-	// A root-level CLAUDE.md should not itself cover every file in the project.
-	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs: []string{
-			"CLAUDE.md",
-			"packages/backend/CLAUDE.md",
-		},
-	})
-	provider := sessionProvider(t.TempDir())
-	// Only the scoped doc is needed; a file outside any mapping is allowed.
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "scripts", "build.ts")},
-		SessionID: "root-ignored",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
-		t.Errorf("expected allow (root CLAUDE.md does not gate project-wide), got %v", err)
-	}
-}
-
-func TestEnforce_SkipsDiscoveryInIgnoredDirs(t *testing.T) {
-	// A CLAUDE.md under node_modules must not create a mapping.
-	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"node_modules/somepkg/CLAUDE.md"},
-	})
-	provider := sessionProvider(t.TempDir())
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "src", "foo.ts")},
-		SessionID: "ignored-dir",
-	}
-	data, _ := json.Marshal(input)
-	var stderr bytes.Buffer
-	if err := enforceWithProvider(bytes.NewReader(data), &stderr, provider); err != nil {
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "src", "utils", "helper.ts"))
+	if err != nil {
 		t.Errorf("expected allow, got %v", err)
 	}
 }
 
-func TestTrack_RecordsKnownDoc(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Track mode
+// ---------------------------------------------------------------------------
+
+func TestTrack_RegistersKnownDoc(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+			"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
+		},
 	})
-	sessionDir := t.TempDir()
-	provider := sessionProvider(sessionDir)
+	provider := sessionProvider(t.TempDir())
 
-	input := HookInput{
-		ToolName:  "Read",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "CLAUDE.md")},
-		SessionID: "track-basic",
-	}
-	data, _ := json.Marshal(input)
-	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
-		t.Fatalf("track error: %v", err)
+	for _, read := range []string{
+		filepath.Join(root, "packages", "backend", "convex", "_generated", "ai", "guidelines.md"),
+		filepath.Join(root, "packages", "backend", ".agents", "skills", "convex-quickstart", "SKILL.md"),
+	} {
+		input := HookInput{
+			ToolName:  "Read",
+			ToolInput: map[string]interface{}{"file_path": read},
+			SessionID: "s",
+		}
+		data, _ := json.Marshal(input)
+		if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
+			t.Fatalf("track %s: %v", read, err)
+		}
 	}
 
-	loaded, err := loadDocsReadWithProvider("track-basic", provider)
+	// Edit should now be allowed.
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
-		t.Fatalf("load error: %v", err)
-	}
-	if !contains(loaded, "packages/backend/CLAUDE.md") {
-		t.Errorf("expected tracked doc, got %v", loaded)
-	}
-}
-
-func TestTrack_IgnoresNonReadTools(t *testing.T) {
-	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
-	})
-	sessionDir := t.TempDir()
-	provider := sessionProvider(sessionDir)
-
-	input := HookInput{
-		ToolName:  "Edit",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "CLAUDE.md")},
-		SessionID: "track-edit",
-	}
-	data, _ := json.Marshal(input)
-	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
-		t.Fatalf("track error: %v", err)
-	}
-	if _, err := os.Stat(provider("track-edit")); err == nil {
-		t.Error("expected no session file because Edit is not a Read")
+		t.Errorf("expected allow after reading both docs, got %v, stderr: %s", err, stderr)
 	}
 }
 
 func TestTrack_IgnoresUnregisteredDocs(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{"convex": true}`,
+		docs: []string{
+			"packages/backend/convex/_generated/ai/guidelines.md",
+		},
 	})
-	sessionDir := t.TempDir()
-	provider := sessionProvider(sessionDir)
+	provider := sessionProvider(t.TempDir())
 
 	input := HookInput{
 		ToolName:  "Read",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "src", "utils", "helper.ts")},
-		SessionID: "track-unreg",
+		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "README.md")},
+		SessionID: "s",
 	}
 	data, _ := json.Marshal(input)
 	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
-		t.Fatalf("track error: %v", err)
+		t.Fatalf("track: %v", err)
 	}
-	if _, err := os.Stat(provider("track-unreg")); err == nil {
+	if _, err := os.Stat(provider("s")); err == nil {
 		t.Error("expected no session file for unregistered doc")
+	}
+}
+
+func TestTrack_NoConfig_IsNoOp(t *testing.T) {
+	root := setupProject(t, projectFixture{
+		docs: []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	input := HookInput{
+		ToolName:  "Read",
+		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "CLAUDE.md")},
+		SessionID: "s",
+	}
+	data, _ := json.Marshal(input)
+	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+	if _, err := os.Stat(provider("s")); err == nil {
+		t.Error("expected no session file without opt-in marker")
 	}
 }
 
 func TestTrack_DoesNotDuplicate(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
-		docs:    []string{"packages/backend/CLAUDE.md"},
+		config: `{}`,
+		docs:   []string{"packages/backend/CLAUDE.md"},
 	})
-	sessionDir := t.TempDir()
-	provider := sessionProvider(sessionDir)
-	seedSession(t, provider, "track-dup", []string{"packages/backend/CLAUDE.md"})
+	provider := sessionProvider(t.TempDir())
+	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
 
 	input := HookInput{
 		ToolName:  "Read",
 		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "CLAUDE.md")},
-		SessionID: "track-dup",
+		SessionID: "s",
 	}
 	data, _ := json.Marshal(input)
 	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
-		t.Fatalf("track error: %v", err)
+		t.Fatalf("track: %v", err)
 	}
-	loaded, _ := loadDocsReadWithProvider("track-dup", provider)
+	loaded, _ := loadDocsReadWithProvider("s", provider)
 	if len(loaded) != 1 {
 		t.Errorf("expected 1 entry, got %d: %v", len(loaded), loaded)
 	}
 }
 
-func TestTrack_NoConfigIsNoOp(t *testing.T) {
-	root := setupProject(t, projectFixture{
-		enabled: false,
-		docs:    []string{"packages/backend/CLAUDE.md"},
-	})
-	sessionDir := t.TempDir()
-	provider := sessionProvider(sessionDir)
-
-	input := HookInput{
-		ToolName:  "Read",
-		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "packages", "backend", "CLAUDE.md")},
-		SessionID: "track-no-config",
-	}
-	data, _ := json.Marshal(input)
-	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
-		t.Fatalf("track error: %v", err)
-	}
-	if _, err := os.Stat(provider("track-no-config")); err == nil {
-		t.Error("expected no session file when no config exists")
-	}
-}
+// ---------------------------------------------------------------------------
+// Unit tests for internal helpers
+// ---------------------------------------------------------------------------
 
 func TestShouldCheckFile(t *testing.T) {
 	tests := []struct {
@@ -433,7 +551,8 @@ func TestShouldCheckFile(t *testing.T) {
 		{"generated file", "packages/backend/_generated/api.d.ts", false},
 		{"type definition", "packages/backend/types.d.ts", false},
 		{"node modules", "node_modules/package/index.js", false},
-		{"CLAUDE.md", "packages/backend/CLAUDE.md", false},
+		// CLAUDE.md is no longer in static skip; handled dynamically.
+		{"CLAUDE.md", "packages/backend/CLAUDE.md", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -444,52 +563,77 @@ func TestShouldCheckFile(t *testing.T) {
 	}
 }
 
-func TestGetRequiredDoc(t *testing.T) {
+func TestGetRequiredDoc_LongestPatternWins(t *testing.T) {
+	// pre-sorted longest-first, mirroring buildMappings output
 	mappings := []DocMapping{
-		// Longest-first ordering (what discoverMappings produces).
-		{Pattern: "apps/mobile/components/", Doc: "apps/mobile/components/CLAUDE.md", Name: "apps/mobile/components"},
-		{Pattern: "apps/mobile/app/", Doc: "apps/mobile/app/CLAUDE.md", Name: "apps/mobile/app"},
-		{Pattern: "packages/backend/", Doc: "packages/backend/CLAUDE.md", Name: "packages/backend"},
+		{Pattern: "apps/mobile/components/", Docs: []string{"apps/mobile/components/CLAUDE.md"}, Name: "apps/mobile/components"},
+		{Pattern: "apps/mobile/", Docs: []string{"apps/mobile/CLAUDE.md"}, Name: "apps/mobile"},
 	}
+	got := getRequiredDoc("apps/mobile/components/Button.tsx", mappings)
+	if got == nil || got.Docs[0] != "apps/mobile/components/CLAUDE.md" {
+		t.Errorf("expected nested mapping to win, got %+v", got)
+	}
+	got = getRequiredDoc("apps/mobile/screen.tsx", mappings)
+	if got == nil || got.Docs[0] != "apps/mobile/CLAUDE.md" {
+		t.Errorf("expected parent mapping for non-nested path, got %+v", got)
+	}
+}
+
+func TestConfig_ConvexUnmarshal(t *testing.T) {
 	tests := []struct {
-		name      string
-		path      string
-		expectDoc string
+		name    string
+		raw     string
+		enabled bool
+		backend string
 	}{
-		{"backend file", "packages/backend/foo.ts", "packages/backend/CLAUDE.md"},
-		{"components file", "apps/mobile/components/Button.tsx", "apps/mobile/components/CLAUDE.md"},
-		{"app file", "apps/mobile/app/index.tsx", "apps/mobile/app/CLAUDE.md"},
-		{"unmapped file", "src/utils/helper.ts", ""},
+		{"bare true", `{"convex": true}`, true, ""},
+		{"bare false", `{"convex": false}`, false, ""},
+		{"empty object", `{"convex": {}}`, true, ""},
+		{"with backendDir", `{"convex": {"backendDir": "apps/backend"}}`, true, "apps/backend"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getRequiredDoc(tt.path, mappings)
-			if tt.expectDoc == "" {
-				if got != nil {
-					t.Errorf("expected nil, got %+v", got)
-				}
-				return
+			var c Config
+			if err := json.Unmarshal([]byte(tt.raw), &c); err != nil {
+				t.Fatalf("unmarshal: %v", err)
 			}
-			if got == nil {
-				t.Fatalf("expected doc %q, got nil", tt.expectDoc)
+			if c.Convex == nil {
+				t.Fatalf("expected Convex to be populated, got nil")
 			}
-			if got.Doc != tt.expectDoc {
-				t.Errorf("expected doc %q, got %q", tt.expectDoc, got.Doc)
+			if c.Convex.Enabled != tt.enabled {
+				t.Errorf("Enabled = %v, want %v", c.Convex.Enabled, tt.enabled)
+			}
+			if c.Convex.BackendDir != tt.backend {
+				t.Errorf("BackendDir = %q, want %q", c.Convex.BackendDir, tt.backend)
 			}
 		})
+	}
+
+	// `null` leaves Convex as nil (standard Go JSON pointer semantics);
+	// the hook treats nil as disabled.
+	var c Config
+	if err := json.Unmarshal([]byte(`{"convex": null}`), &c); err != nil {
+		t.Fatalf("unmarshal null: %v", err)
+	}
+	if c.Convex != nil {
+		t.Errorf("expected nil Convex for null, got %+v", c.Convex)
 	}
 }
 
 func TestDiscoverMappings_SortedByLengthDesc(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
+		config: `{}`,
 		docs: []string{
 			"apps/CLAUDE.md",
 			"apps/mobile/CLAUDE.md",
 			"apps/mobile/components/CLAUDE.md",
 		},
 	})
-	got := discoverMappings(root)
+	cfg, err := loadConfig(root)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	got := buildMappings(root, cfg)
 	if len(got) != 3 {
 		t.Fatalf("expected 3 mappings, got %d: %+v", len(got), got)
 	}
@@ -503,34 +647,29 @@ func TestDiscoverMappings_SortedByLengthDesc(t *testing.T) {
 
 func TestDiscoverMappings_SkipsIgnoredDirs(t *testing.T) {
 	root := setupProject(t, projectFixture{
-		enabled: true,
+		config: `{}`,
 		docs: []string{
 			"node_modules/lib/CLAUDE.md",
 			".git/CLAUDE.md",
 			"packages/backend/CLAUDE.md",
 		},
 	})
-	got := discoverMappings(root)
-	if len(got) != 1 {
-		t.Fatalf("expected only 1 mapping (packages/backend), got %d: %+v", len(got), got)
-	}
-	if got[0].Doc != "packages/backend/CLAUDE.md" {
-		t.Errorf("unexpected doc: %q", got[0].Doc)
+	cfg, _ := loadConfig(root)
+	got := buildMappings(root, cfg)
+	if len(got) != 1 || got[0].Docs[0] != "packages/backend/CLAUDE.md" {
+		t.Errorf("expected only packages/backend mapping, got %+v", got)
 	}
 }
 
 func TestFindProjectRoot(t *testing.T) {
-	root := setupProject(t, projectFixture{enabled: true})
+	root := setupProject(t, projectFixture{config: `{}`})
 	deep := filepath.Join(root, "a", "b", "c")
 	if err := os.MkdirAll(deep, 0755); err != nil {
 		t.Fatalf("mkdir deep: %v", err)
 	}
-	got := findProjectRoot(filepath.Join(deep, "file.ts"))
-	if got != root {
+	if got := findProjectRoot(filepath.Join(deep, "file.ts")); got != root {
 		t.Errorf("expected root %q, got %q", root, got)
 	}
-
-	// Negative: no config in parents.
 	elsewhere := t.TempDir()
 	if got := findProjectRoot(filepath.Join(elsewhere, "file.ts")); got != "" {
 		t.Errorf("expected empty (no config), got %q", got)
@@ -602,3 +741,6 @@ func TestSessionPersistence(t *testing.T) {
 		}
 	}
 }
+
+// suppress unused-const lint if fixture helpers ever drop the reference
+var _ = convexSkillContent

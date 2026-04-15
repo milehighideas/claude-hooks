@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -24,11 +25,17 @@ const (
 // enables the docs-tracker hook for that project.
 const configFileName = "docs-tracker.json"
 
-// DocMapping represents a directory pattern to required doc mapping
+// defaultConvexBackendDir is the conventional Convex backend path used when
+// `convex` is enabled and no explicit `backendDir` is provided.
+const defaultConvexBackendDir = "packages/backend"
+
+// DocMapping represents a directory pattern to required docs mapping.
+// A mapping can require multiple documents; edits under Pattern are blocked
+// until every doc in Docs has been read in the session.
 type DocMapping struct {
-	Pattern string `json:"pattern"`
-	Doc     string `json:"doc"`
-	Name    string `json:"name"`
+	Pattern string
+	Docs    []string
+	Name    string
 }
 
 // HookInput represents the JSON input from Claude Code
@@ -43,16 +50,79 @@ type SessionData struct {
 	DocsRead []string `json:"docs_read"`
 }
 
-// Project represents a docs-tracker-enabled project with discovered mappings
+// Project represents a docs-tracker-enabled project with resolved mappings.
 type Project struct {
 	Root     string
 	Mappings []DocMapping
 }
 
+// Config is the parsed `.claude/docs-tracker.json`.
+type Config struct {
+	// AutoDiscover enables walking the project for files named in DocFileNames.
+	// Default true.
+	AutoDiscover *bool `json:"autoDiscover,omitempty"`
+
+	// DocFileNames lists file names that auto-discovery treats as required docs
+	// for their containing directory. Default ["CLAUDE.md"].
+	DocFileNames []string `json:"docFileNames,omitempty"`
+
+	// Convex enables the Convex preset: gating edits under the backend dir on
+	// reading the generated guidelines plus every installed SKILL.md.
+	Convex *ConvexConfig `json:"convex,omitempty"`
+}
+
+// ConvexConfig configures the Convex preset. It accepts either a bare boolean
+// (`"convex": true`) or an object (`"convex": {"backendDir": "..."}`).
+type ConvexConfig struct {
+	// Enabled is set by UnmarshalJSON when the key is present and truthy.
+	Enabled bool `json:"-"`
+	// BackendDir overrides the default `packages/backend` location.
+	BackendDir string `json:"backendDir,omitempty"`
+}
+
+// UnmarshalJSON accepts both `true`/`false` literals and an object form.
+func (c *ConvexConfig) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	switch {
+	case bytes.Equal(trimmed, []byte("true")):
+		c.Enabled = true
+		return nil
+	case bytes.Equal(trimmed, []byte("false")), bytes.Equal(trimmed, []byte("null")):
+		c.Enabled = false
+		return nil
+	}
+	type raw struct {
+		BackendDir string `json:"backendDir"`
+	}
+	var r raw
+	if err := json.Unmarshal(data, &r); err != nil {
+		return fmt.Errorf("convex config: %w", err)
+	}
+	c.Enabled = true
+	c.BackendDir = r.BackendDir
+	return nil
+}
+
+// isAutoDiscover returns the effective AutoDiscover value, defaulting to true.
+func (c *Config) isAutoDiscover() bool {
+	if c == nil || c.AutoDiscover == nil {
+		return true
+	}
+	return *c.AutoDiscover
+}
+
+// effectiveDocFileNames returns DocFileNames with a CLAUDE.md default.
+func (c *Config) effectiveDocFileNames() []string {
+	if c == nil || len(c.DocFileNames) == 0 {
+		return []string{"CLAUDE.md"}
+	}
+	return c.DocFileNames
+}
+
 // skipPatterns are path fragments that bypass the docs-read requirement.
-// Applies to tests, generated code, declaration files, etc.
+// Applies to tests, generated code, declaration files, etc. Docs themselves
+// are skipped dynamically per-project in enforce.
 var skipPatterns = []string{
-	"CLAUDE.md",
 	"__tests__/",
 	".test.ts",
 	".test.tsx",
@@ -128,7 +198,7 @@ func (e *ExitError) Error() string {
 	return e.Message
 }
 
-// enforceWithProvider implements the PreToolUse hook logic with a custom session file provider
+// enforceWithProvider implements the PreToolUse hook logic.
 func enforceWithProvider(input io.Reader, stderr io.Writer, provider sessionFileProvider) error {
 	hookInput, err := parseInput(input)
 	if err != nil {
@@ -163,50 +233,63 @@ func enforceWithProvider(input io.Reader, stderr io.Writer, provider sessionFile
 		return nil
 	}
 
-	// Check if this file requires a doc to be read
+	// Check if this file requires docs to be read
 	required := getRequiredDoc(relPath, project.Mappings)
 	if required == nil {
 		return nil
 	}
 
-	// Check if the doc has been read this session
+	// Editing a file that is itself a required doc for this mapping is allowed
+	// (you can't read something you're creating, and doc maintenance is fine).
+	for _, doc := range required.Docs {
+		if relPath == doc {
+			return nil
+		}
+	}
+
+	// Figure out which docs have been read this session.
 	docsRead, err := loadDocsReadWithProvider(hookInput.SessionID, provider)
 	if err != nil {
 		// If we can't load session data, allow operation
 		return nil
 	}
 
-	if contains(docsRead, required.Doc) {
-		// Doc already read, allow edit
+	var missing []string
+	for _, doc := range required.Docs {
+		if !contains(docsRead, doc) {
+			missing = append(missing, doc)
+		}
+	}
+	if len(missing) == 0 {
 		return nil
 	}
 
-	// Doc not read - block with helpful message
+	var list strings.Builder
+	for _, d := range missing {
+		fmt.Fprintf(&list, "  %s\n", d)
+	}
+
 	msg := fmt.Sprintf(`
 ⚠️  PLEASE READ DOCUMENTATION FIRST
 
-Before editing files in %s, please read:
-  %s
-
+Before editing files in %s, please read the following:
+%s
 This ensures you follow project conventions and patterns.
 
-Run: Read %s
-Then retry your edit.
-`, required.Name, required.Doc, required.Doc)
+Retry your edit once the documentation has been read.
+`, required.Name, list.String())
 
 	_, _ = fmt.Fprint(stderr, msg)
 	return &ExitError{Code: 2, Message: "Documentation not read"}
 }
 
-// trackWithProvider implements the PostToolUse hook logic with a custom session file provider
+// trackWithProvider implements the PostToolUse hook logic.
 func trackWithProvider(input io.Reader, provider sessionFileProvider) error {
 	hookInput, err := parseInput(input)
 	if err != nil {
-		// Invalid JSON, allow operation
 		return nil
 	}
 
-	// Only track Read tool
 	if hookInput.ToolName != "Read" {
 		return nil
 	}
@@ -216,7 +299,6 @@ func trackWithProvider(input io.Reader, provider sessionFileProvider) error {
 		return nil
 	}
 
-	// Find the opt-in project; without one, nothing to track
 	project := findProject(filePath)
 	if project == nil || len(project.Mappings) == 0 {
 		return nil
@@ -227,29 +309,17 @@ func trackWithProvider(input io.Reader, provider sessionFileProvider) error {
 		return nil
 	}
 
-	// Only track CLAUDE.md files this project has registered as mappings
-	matchedDoc := ""
-	for _, m := range project.Mappings {
-		if relPath == m.Doc {
-			matchedDoc = m.Doc
-			break
-		}
-	}
-	if matchedDoc == "" {
+	if !isRegisteredDoc(relPath, project.Mappings) {
 		return nil
 	}
 
-	// Track that this doc was read
 	docsRead, err := loadDocsReadWithProvider(hookInput.SessionID, provider)
 	if err != nil {
 		docsRead = []string{}
 	}
-
-	// Add doc if not already present
-	if !contains(docsRead, matchedDoc) {
-		docsRead = append(docsRead, matchedDoc)
+	if !contains(docsRead, relPath) {
+		docsRead = append(docsRead, relPath)
 	}
-
 	return saveDocsReadWithProvider(hookInput.SessionID, docsRead, provider)
 }
 
@@ -263,7 +333,7 @@ func parseInput(input io.Reader) (*HookInput, error) {
 	return &hookInput, nil
 }
 
-// shouldCheckFile determines if this file should require doc reading
+// shouldCheckFile determines if this file should require doc reading.
 func shouldCheckFile(filePath string) bool {
 	for _, pattern := range skipPatterns {
 		if strings.Contains(filePath, pattern) {
@@ -274,7 +344,7 @@ func shouldCheckFile(filePath string) bool {
 }
 
 // getRequiredDoc returns the most-specific mapping (longest pattern) that covers relPath.
-// Mappings are pre-sorted longest-first by discoverMappings.
+// Mappings are pre-sorted longest-first by buildMappings.
 func getRequiredDoc(relPath string, mappings []DocMapping) *DocMapping {
 	for i := range mappings {
 		if strings.HasPrefix(relPath, mappings[i].Pattern) {
@@ -284,16 +354,34 @@ func getRequiredDoc(relPath string, mappings []DocMapping) *DocMapping {
 	return nil
 }
 
+// isRegisteredDoc reports whether relPath matches a required doc in any mapping.
+func isRegisteredDoc(relPath string, mappings []DocMapping) bool {
+	for _, m := range mappings {
+		for _, doc := range m.Docs {
+			if doc == relPath {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // findProject walks up from filePath looking for the opt-in marker
-// (`.claude/docs-tracker.json`). Returns nil when no project is found.
+// (`.claude/docs-tracker.json`) and resolves its mappings. Returns nil when
+// no project is found or the config is unreadable.
 func findProject(filePath string) *Project {
 	root := findProjectRoot(filePath)
 	if root == "" {
 		return nil
 	}
+	cfg, err := loadConfig(root)
+	if err != nil {
+		// Fail open: unreadable config means the hook does nothing.
+		return nil
+	}
 	return &Project{
 		Root:     root,
-		Mappings: discoverMappings(root),
+		Mappings: buildMappings(root, cfg),
 	}
 }
 
@@ -317,12 +405,114 @@ func findProjectRoot(filePath string) string {
 	}
 }
 
-// discoverMappings walks projectRoot for CLAUDE.md files and builds one mapping
-// per discovered doc. The root-level CLAUDE.md is skipped (Claude Code already
-// loads it as project context). Results are sorted longest-pattern-first so
-// nested docs take precedence over parents.
-func discoverMappings(projectRoot string) []DocMapping {
-	var mappings []DocMapping
+// loadConfig reads and parses the `.claude/docs-tracker.json` file at root.
+// An empty file produces a zero-valued Config (default behavior).
+func loadConfig(root string) (*Config, error) {
+	path := filepath.Join(root, ".claude", configFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	cfg := &Config{}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return cfg, nil
+	}
+	if err := json.Unmarshal(data, cfg); err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// buildMappings combines preset and auto-discovered mappings. Preset mappings
+// (e.g. convex) take priority over auto-discovery for the same pattern.
+func buildMappings(root string, cfg *Config) []DocMapping {
+	var result []DocMapping
+
+	if cfg.Convex != nil && cfg.Convex.Enabled {
+		if m := convexPresetMapping(root, cfg.Convex); m != nil {
+			result = append(result, *m)
+		}
+	}
+
+	claimed := map[string]bool{}
+	for _, m := range result {
+		claimed[m.Pattern] = true
+	}
+
+	if cfg.isAutoDiscover() {
+		for _, m := range discoverMappings(root, cfg.effectiveDocFileNames()) {
+			if !claimed[m.Pattern] {
+				result = append(result, m)
+			}
+		}
+	}
+
+	sort.SliceStable(result, func(i, j int) bool {
+		return len(result[i].Pattern) > len(result[j].Pattern)
+	})
+	return result
+}
+
+// convexPresetMapping builds the mapping for the Convex preset, pointing at
+// the generated guidelines and every installed SKILL.md under .agents/skills.
+// Returns nil when the backend dir does not exist or has no resolvable docs.
+func convexPresetMapping(root string, cfg *ConvexConfig) *DocMapping {
+	backendDir := cfg.BackendDir
+	if backendDir == "" {
+		backendDir = defaultConvexBackendDir
+	}
+	backendDir = filepath.ToSlash(strings.TrimSuffix(backendDir, "/"))
+	if backendDir == "" {
+		return nil
+	}
+	backendAbs := filepath.Join(root, filepath.FromSlash(backendDir))
+	if info, err := os.Stat(backendAbs); err != nil || !info.IsDir() {
+		return nil
+	}
+
+	var docs []string
+
+	guidelines := backendDir + "/convex/_generated/ai/guidelines.md"
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(guidelines))); err == nil {
+		docs = append(docs, guidelines)
+	}
+
+	skillGlob := filepath.Join(backendAbs, ".agents", "skills", "*", "SKILL.md")
+	matches, _ := filepath.Glob(skillGlob)
+	sort.Strings(matches)
+	for _, m := range matches {
+		rel, err := filepath.Rel(root, m)
+		if err != nil {
+			continue
+		}
+		docs = append(docs, filepath.ToSlash(rel))
+	}
+
+	if len(docs) == 0 {
+		return nil
+	}
+
+	return &DocMapping{
+		Pattern: backendDir + "/",
+		Docs:    docs,
+		Name:    "Convex backend (" + backendDir + ")",
+	}
+}
+
+// discoverMappings walks projectRoot for files whose base name matches one of
+// docFileNames and builds one mapping per containing directory. The project
+// root is skipped (Claude Code already loads a root-level doc as context).
+// When a directory contains multiple matching files, all are required.
+func discoverMappings(projectRoot string, docFileNames []string) []DocMapping {
+	if len(docFileNames) == 0 {
+		return nil
+	}
+	nameSet := make(map[string]bool, len(docFileNames))
+	for _, n := range docFileNames {
+		nameSet[n] = true
+	}
+
+	byDir := map[string][]string{}
 	_ = filepath.WalkDir(projectRoot, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -336,7 +526,7 @@ func discoverMappings(projectRoot string) []DocMapping {
 			}
 			return nil
 		}
-		if d.Name() != "CLAUDE.md" {
+		if !nameSet[d.Name()] {
 			return nil
 		}
 		rel, err := filepath.Rel(projectRoot, path)
@@ -344,20 +534,23 @@ func discoverMappings(projectRoot string) []DocMapping {
 			return nil
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == "CLAUDE.md" {
-			return nil // skip root doc
-		}
 		subdir := filepath.ToSlash(filepath.Dir(rel))
-		mappings = append(mappings, DocMapping{
-			Pattern: subdir + "/",
-			Doc:     rel,
-			Name:    subdir,
-		})
+		if subdir == "." {
+			return nil // skip project-root-level doc
+		}
+		byDir[subdir] = append(byDir[subdir], rel)
 		return nil
 	})
-	sort.Slice(mappings, func(i, j int) bool {
-		return len(mappings[i].Pattern) > len(mappings[j].Pattern)
-	})
+
+	mappings := make([]DocMapping, 0, len(byDir))
+	for subdir, docs := range byDir {
+		sort.Strings(docs)
+		mappings = append(mappings, DocMapping{
+			Pattern: subdir + "/",
+			Docs:    docs,
+			Name:    subdir,
+		})
+	}
 	return mappings
 }
 
