@@ -37,6 +37,7 @@ Settings live under `docsTrackerConfig`:
     "autoDiscover": true,
     "docFileNames": ["CLAUDE.md"],
     "convex": false,
+    "mappings": [],
     "appPaths": [],
     "excludePaths": []
   }
@@ -48,10 +49,53 @@ Settings live under `docsTrackerConfig`:
 | `autoDiscover` | bool | `true` | Walk the project for files named in `docFileNames` and build one mapping per directory. |
 | `docFileNames` | string[] | `["CLAUDE.md"]` | File names that auto-discovery treats as required docs for their containing directory. |
 | `convex` | bool \| object | `false` | Enables the Convex preset. See [Convex preset](#convex-preset). |
+| `mappings` | object[] | `[]` | Explicit directory-to-docs rules. See [Custom mappings](#custom-mappings). |
 | `appPaths` | string[] | `[]` | Restricts enforcement to files whose project-relative path contains at least one of these substrings. Empty = everything in scope. |
 | `excludePaths` | string[] | `[]` | Skips enforcement on files whose project-relative path contains any of these substrings. Exclusions always win over `appPaths`. |
 
 Unknown fields are ignored. `appPaths` / `excludePaths` mirror the shape of `srpConfig`, `testCoverageConfig`, and `testFilesConfig` elsewhere in `.pre-commit.json`.
+
+## Custom mappings
+
+Escape hatch for cases where the required doc lives outside the gated directory, or where you want a fixed path regardless of file name. Each mapping declares a directory `pattern` and the `docs` that must be read before editing inside it.
+
+```jsonc
+{
+  "features": { "docsTracker": true },
+  "docsTrackerConfig": {
+    "mappings": [
+      {
+        "pattern": "apps/web/",
+        "docs": ["docs/frontend-architecture.md", "CONTRIBUTING.md"]
+      },
+      {
+        "pattern": "packages/backend/",
+        "docs": ["docs/api.md"],
+        "name": "Backend API"
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `pattern` | string | yes | Project-relative directory prefix that triggers the gate. Leading `/` is stripped; trailing `/` is added if absent. |
+| `docs` | string[] | yes | Project-relative paths to required docs. All must be read before edits in `pattern` are allowed. |
+| `name` | string | no | Friendly label used in the block message. Defaults to `pattern` without the trailing slash. |
+
+### Precedence with other mapping sources
+
+Custom mappings coexist with the Convex preset and auto-discovery:
+
+- **Preset + custom on the same pattern** → docs are merged (union). Editing inside the preset's backend dir requires both the preset docs and any custom docs you added.
+- **Custom + auto-discovery on the same pattern** → docs are merged. Dropping `apps/web/CLAUDE.md` while also declaring a custom mapping for `apps/web/` means both must be read.
+- **Most-specific pattern wins** when multiple patterns match a file: `apps/web/components/` takes precedence over `apps/web/`, regardless of source.
+
+### When to use custom mappings vs. `docFileNames`
+
+- **Use `docFileNames`** when the doc lives *inside* the directory it describes (e.g., `apps/web/CLAUDE.md`). Auto-discovery handles it automatically.
+- **Use `mappings`** when the doc lives *elsewhere* (root-level `docs/`, a sibling directory), or when you want a specific file regardless of its name.
 
 ### Per-app scope example
 
@@ -96,9 +140,10 @@ For each Edit/Write the binary:
 2. Bails out unless `features.docsTracker` is true.
 3. Applies any **skip patterns** to short-circuit for tests/generated files.
 4. Applies the **per-app scope** (`appPaths` / `excludePaths`); out-of-scope files are silent no-ops.
-5. Builds a list of mappings:
+5. Builds a list of mappings, merging docs per pattern:
    - If the **Convex preset** is enabled, adds a mapping for the backend dir.
-   - If **`autoDiscover`** is true, walks the project for `docFileNames` and adds a mapping per directory (the preset's pattern is preserved; auto-discovered mappings that collide are dropped).
+   - Adds any **custom `mappings`** from the config (docs merge with preset on the same pattern).
+   - If **`autoDiscover`** is true, walks the project for `docFileNames` and adds a mapping per directory. Auto-discovered mappings are dropped when they collide with an already-claimed pattern (preset or custom).
 6. Sorts longest-pattern-first so the most specific mapping wins.
 7. Checks whether every doc in the matched mapping has been read this session.
 

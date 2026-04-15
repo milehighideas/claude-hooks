@@ -75,6 +75,12 @@ type Config struct {
 	// reading the generated guidelines plus every installed SKILL.md.
 	Convex *ConvexConfig `json:"convex,omitempty"`
 
+	// Mappings declares explicit directory-to-docs rules. Escape hatch for
+	// cases where the required doc lives outside the gated directory, or
+	// where you want a fixed path regardless of file name. Merges with
+	// preset + auto-discovery on the same pattern (union of required docs).
+	Mappings []CustomMapping `json:"mappings,omitempty"`
+
 	// AppPaths restricts enforcement to files whose project-relative path
 	// contains at least one of these substrings. Empty means "everything".
 	// Mirrors the shape of srpConfig / testCoverageConfig / testFilesConfig.
@@ -83,6 +89,17 @@ type Config struct {
 	// ExcludePaths skips enforcement on files whose project-relative path
 	// contains any of these substrings. Exclusions always win over AppPaths.
 	ExcludePaths []string `json:"excludePaths,omitempty"`
+}
+
+// CustomMapping is an explicit directory-to-docs rule. Pattern is the
+// project-relative directory prefix that triggers the gate; Docs are the
+// project-relative doc paths that must be read before editing inside Pattern.
+// Name is optional and used in the block message; derived from Pattern if
+// unset.
+type CustomMapping struct {
+	Pattern string   `json:"pattern"`
+	Docs    []string `json:"docs"`
+	Name    string   `json:"name,omitempty"`
 }
 
 // rootConfig is the minimal view of .pre-commit.json we decode — just the
@@ -482,34 +499,96 @@ func isFileInScope(cfg *Config, relPath string) bool {
 	return false
 }
 
-// buildMappings combines preset and auto-discovered mappings. Preset mappings
-// (e.g. convex) take priority over auto-discovery for the same pattern.
+// buildMappings combines preset, custom, and auto-discovered mappings. Preset
+// and custom mappings on the same pattern are merged (union of docs);
+// auto-discovered mappings are dropped when they collide with an explicit
+// pattern so the preset stays authoritative for its subtree.
 func buildMappings(root string, cfg *Config) []DocMapping {
-	var result []DocMapping
+	byPattern := map[string]*DocMapping{}
+	var order []string
 
-	if cfg.Convex != nil && cfg.Convex.Enabled {
-		if m := convexPresetMapping(root, cfg.Convex); m != nil {
-			result = append(result, *m)
+	merge := func(src DocMapping) {
+		if src.Pattern == "" || len(src.Docs) == 0 {
+			return
 		}
-	}
-
-	claimed := map[string]bool{}
-	for _, m := range result {
-		claimed[m.Pattern] = true
-	}
-
-	if cfg.isAutoDiscover() {
-		for _, m := range discoverMappings(root, cfg.effectiveDocFileNames()) {
-			if !claimed[m.Pattern] {
-				result = append(result, m)
+		existing, ok := byPattern[src.Pattern]
+		if !ok {
+			dup := src
+			dup.Docs = append([]string(nil), src.Docs...)
+			byPattern[src.Pattern] = &dup
+			order = append(order, src.Pattern)
+			return
+		}
+		for _, d := range src.Docs {
+			if !contains(existing.Docs, d) {
+				existing.Docs = append(existing.Docs, d)
 			}
 		}
 	}
 
+	// 1. Convex preset
+	if cfg.Convex != nil && cfg.Convex.Enabled {
+		if m := convexPresetMapping(root, cfg.Convex); m != nil {
+			merge(*m)
+		}
+	}
+
+	// 2. Explicit custom mappings
+	for _, cm := range cfg.Mappings {
+		if m := normalizeCustomMapping(cm); m != nil {
+			merge(*m)
+		}
+	}
+
+	// 3. Auto-discovery fills gaps — skip patterns already claimed above.
+	if cfg.isAutoDiscover() {
+		for _, m := range discoverMappings(root, cfg.effectiveDocFileNames()) {
+			if _, claimed := byPattern[m.Pattern]; claimed {
+				continue
+			}
+			merge(m)
+		}
+	}
+
+	result := make([]DocMapping, 0, len(order))
+	for _, p := range order {
+		result = append(result, *byPattern[p])
+	}
 	sort.SliceStable(result, func(i, j int) bool {
 		return len(result[i].Pattern) > len(result[j].Pattern)
 	})
 	return result
+}
+
+// normalizeCustomMapping cleans up user input: strip whitespace, normalize to
+// forward slashes, trim leading "/", require a trailing "/" on patterns, drop
+// empty docs. Returns nil when the mapping has no pattern or no docs.
+func normalizeCustomMapping(cm CustomMapping) *DocMapping {
+	pattern := filepath.ToSlash(strings.TrimSpace(cm.Pattern))
+	pattern = strings.TrimLeft(pattern, "/")
+	if pattern == "" {
+		return nil
+	}
+	if !strings.HasSuffix(pattern, "/") {
+		pattern += "/"
+	}
+	docs := make([]string, 0, len(cm.Docs))
+	for _, d := range cm.Docs {
+		d = filepath.ToSlash(strings.TrimSpace(d))
+		d = strings.TrimLeft(d, "/")
+		if d == "" {
+			continue
+		}
+		docs = append(docs, d)
+	}
+	if len(docs) == 0 {
+		return nil
+	}
+	name := strings.TrimSpace(cm.Name)
+	if name == "" {
+		name = strings.TrimSuffix(pattern, "/")
+	}
+	return &DocMapping{Pattern: pattern, Docs: docs, Name: name}
 }
 
 // convexPresetMapping builds the mapping for the Convex preset, pointing at

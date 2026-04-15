@@ -262,6 +262,186 @@ func TestEnforce_ExcludePaths_BeatsAppPaths(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// Custom mappings
+// ---------------------------------------------------------------------------
+
+func TestEnforce_CustomMapping_GatesOnExternalDoc(t *testing.T) {
+	// A doc living outside the gated directory (at repo root) can still be
+	// required via an explicit mapping.
+	root := setupProject(t, projectFixture{
+		config: `{
+			"autoDiscover": false,
+			"mappings": [
+				{ "pattern": "apps/web/", "docs": ["docs/frontend.md"] }
+			]
+		}`,
+		docs: []string{"docs/frontend.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block, got %v", err)
+	}
+	if !strings.Contains(stderr, "docs/frontend.md") {
+		t.Errorf("expected stderr to mention docs/frontend.md, got %q", stderr)
+	}
+
+	// After reading the doc, edits should be allowed.
+	seedSession(t, provider, "s", []string{"docs/frontend.md"})
+	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	if err != nil {
+		t.Fatalf("expected allow after reading, got %v", err)
+	}
+}
+
+func TestEnforce_CustomMapping_MergesWithAutoDiscovery(t *testing.T) {
+	// When a custom mapping and an auto-discovered CLAUDE.md share a pattern,
+	// both docs must be read.
+	root := setupProject(t, projectFixture{
+		config: `{
+			"mappings": [
+				{ "pattern": "apps/web/", "docs": ["docs/frontend.md"] }
+			]
+		}`,
+		docs: []string{
+			"apps/web/CLAUDE.md",
+			"docs/frontend.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// Reading only one → still blocked.
+	seedSession(t, provider, "s", []string{"apps/web/CLAUDE.md"})
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block until both read, got %v", err)
+	}
+	if !strings.Contains(stderr, "docs/frontend.md") {
+		t.Errorf("expected unread doc in stderr, got %q", stderr)
+	}
+
+	// Reading both → allowed.
+	seedSession(t, provider, "s", []string{"apps/web/CLAUDE.md", "docs/frontend.md"})
+	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	if err != nil {
+		t.Fatalf("expected allow with both read, got %v", err)
+	}
+}
+
+func TestEnforce_CustomMapping_MostSpecificWins(t *testing.T) {
+	// Deeper custom mapping beats a broader one.
+	root := setupProject(t, projectFixture{
+		config: `{
+			"autoDiscover": false,
+			"mappings": [
+				{ "pattern": "apps/",       "docs": ["docs/general.md"] },
+				{ "pattern": "apps/web/",   "docs": ["docs/web.md"] }
+			]
+		}`,
+		docs: []string{"docs/general.md", "docs/web.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block, got %v", err)
+	}
+	if !strings.Contains(stderr, "docs/web.md") {
+		t.Errorf("expected web.md mapping to win, got %q", stderr)
+	}
+	if strings.Contains(stderr, "docs/general.md") {
+		t.Errorf("broader apps/ mapping should not apply to apps/web/, got %q", stderr)
+	}
+}
+
+func TestEnforce_CustomMapping_NormalizesSlashes(t *testing.T) {
+	// Accept patterns with or without trailing slash, and docs with leading slash.
+	root := setupProject(t, projectFixture{
+		config: `{
+			"autoDiscover": false,
+			"mappings": [
+				{ "pattern": "/apps/web", "docs": ["/docs/frontend.md"] }
+			]
+		}`,
+		docs: []string{"docs/frontend.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block, got %v", err)
+	}
+	if !strings.Contains(stderr, "docs/frontend.md") {
+		t.Errorf("expected normalized doc path in stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_CustomMapping_SkipsEmptyEntries(t *testing.T) {
+	// A mapping with no pattern or no docs is silently dropped.
+	root := setupProject(t, projectFixture{
+		config: `{
+			"autoDiscover": false,
+			"mappings": [
+				{ "pattern": "",           "docs": ["docs/frontend.md"] },
+				{ "pattern": "apps/web/",  "docs": [] },
+				{ "pattern": "apps/mobile/", "docs": ["docs/mobile.md"] }
+			]
+		}`,
+		docs: []string{"docs/frontend.md", "docs/mobile.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// apps/web/ had empty docs → not gated.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	if err != nil {
+		t.Fatalf("expected allow (dropped mapping), got %v", err)
+	}
+
+	// apps/mobile/ is valid → gated.
+	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "apps", "mobile", "foo.tsx"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block on apps/mobile, got %v", err)
+	}
+}
+
+func TestTrack_RecordsCustomDocRead(t *testing.T) {
+	// Reading a doc declared only via a custom mapping must be tracked.
+	root := setupProject(t, projectFixture{
+		config: `{
+			"autoDiscover": false,
+			"mappings": [
+				{ "pattern": "apps/web/", "docs": ["docs/frontend.md"] }
+			]
+		}`,
+		docs: []string{"docs/frontend.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// Simulate Claude reading docs/frontend.md.
+	input := HookInput{
+		ToolName:  "Read",
+		ToolInput: map[string]interface{}{"file_path": filepath.Join(root, "docs", "frontend.md")},
+		SessionID: "s",
+	}
+	data, _ := json.Marshal(input)
+	if err := trackWithProvider(bytes.NewReader(data), provider); err != nil {
+		t.Fatalf("track: %v", err)
+	}
+
+	// Subsequent edit should be allowed.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	if err != nil {
+		t.Fatalf("expected allow after track, got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // CLAUDE.md auto-discovery (default behavior with empty config)
 // ---------------------------------------------------------------------------
 
