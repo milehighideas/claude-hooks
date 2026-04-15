@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
 // Mode represents the operation mode of the hook
@@ -21,9 +23,11 @@ const (
 	ModeTrack   Mode = "track"
 )
 
-// configFileName is the opt-in marker file. Its presence at a project root
-// enables the docs-tracker hook for that project.
-const configFileName = "docs-tracker.json"
+// preCommitConfigFile is the shared project config. Its presence at a project
+// root combined with features.docsTracker=true enables the hook. Shared with
+// the pre-commit and validate-test-files binaries so there is one config file
+// per project.
+const preCommitConfigFile = ".pre-commit.json"
 
 // defaultConvexBackendDir is the conventional Convex backend path used when
 // `convex` is enabled and no explicit `backendDir` is provided.
@@ -54,9 +58,10 @@ type SessionData struct {
 type Project struct {
 	Root     string
 	Mappings []DocMapping
+	Config   *Config
 }
 
-// Config is the parsed `.claude/docs-tracker.json`.
+// Config is the parsed `docsTrackerConfig` block from `.pre-commit.json`.
 type Config struct {
 	// AutoDiscover enables walking the project for files named in DocFileNames.
 	// Default true.
@@ -69,6 +74,25 @@ type Config struct {
 	// Convex enables the Convex preset: gating edits under the backend dir on
 	// reading the generated guidelines plus every installed SKILL.md.
 	Convex *ConvexConfig `json:"convex,omitempty"`
+
+	// AppPaths restricts enforcement to files whose project-relative path
+	// contains at least one of these substrings. Empty means "everything".
+	// Mirrors the shape of srpConfig / testCoverageConfig / testFilesConfig.
+	AppPaths []string `json:"appPaths,omitempty"`
+
+	// ExcludePaths skips enforcement on files whose project-relative path
+	// contains any of these substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths,omitempty"`
+}
+
+// rootConfig is the minimal view of .pre-commit.json we decode — just the
+// feature gate and the nested docsTrackerConfig block. The full schema lives
+// in cmd/pre-commit/config.go; we deliberately avoid coupling to it.
+type rootConfig struct {
+	Features struct {
+		DocsTracker bool `json:"docsTracker"`
+	} `json:"features"`
+	DocsTrackerConfig Config `json:"docsTrackerConfig"`
 }
 
 // ConvexConfig configures the Convex preset. It accepts either a bare boolean
@@ -233,6 +257,12 @@ func enforceWithProvider(input io.Reader, stderr io.Writer, provider sessionFile
 		return nil
 	}
 
+	// Per-app scope filter: skip files outside docsTrackerConfig.appPaths or
+	// inside excludePaths. Both matchers apply to the project-relative path.
+	if !isFileInScope(project.Config, relPath) {
+		return nil
+	}
+
 	// Check if this file requires docs to be read
 	required := getRequiredDoc(relPath, project.Mappings)
 	if required == nil {
@@ -367,26 +397,27 @@ func isRegisteredDoc(relPath string, mappings []DocMapping) bool {
 }
 
 // findProject walks up from filePath looking for the opt-in marker
-// (`.claude/docs-tracker.json`) and resolves its mappings. Returns nil when
-// no project is found or the config is unreadable.
+// (`.pre-commit.json`) and resolves its mappings. Returns nil when no project
+// is found, the config is unreadable, or features.docsTracker is off.
 func findProject(filePath string) *Project {
 	root := findProjectRoot(filePath)
 	if root == "" {
 		return nil
 	}
-	cfg, err := loadConfig(root)
-	if err != nil {
-		// Fail open: unreadable config means the hook does nothing.
+	cfg, enabled, err := loadConfig(root)
+	if err != nil || !enabled {
+		// Fail closed on the enable flag: only opted-in projects do any work.
 		return nil
 	}
 	return &Project{
 		Root:     root,
 		Mappings: buildMappings(root, cfg),
+		Config:   cfg,
 	}
 }
 
 // findProjectRoot walks up from filePath's directory until it finds a
-// `.claude/docs-tracker.json` marker. Returns "" if none is found.
+// `.pre-commit.json` marker. Returns "" if none is found.
 func findProjectRoot(filePath string) string {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
@@ -394,7 +425,7 @@ func findProjectRoot(filePath string) string {
 	}
 	dir := filepath.Dir(abs)
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".claude", configFileName)); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, preCommitConfigFile)); err == nil {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -405,22 +436,50 @@ func findProjectRoot(filePath string) string {
 	}
 }
 
-// loadConfig reads and parses the `.claude/docs-tracker.json` file at root.
-// An empty file produces a zero-valued Config (default behavior).
-func loadConfig(root string) (*Config, error) {
-	path := filepath.Join(root, ".claude", configFileName)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
+// loadConfig reads and parses the `.pre-commit.json` file at root, returning
+// the docsTrackerConfig block and whether features.docsTracker is enabled.
+// The returned *Config is always non-nil so callers can chain into
+// buildMappings without a nil check; errors flow through the third return.
+// JSONC comments are stripped before parsing so the file can be annotated.
+func loadConfig(root string) (*Config, bool, error) {
+	path := filepath.Join(root, preCommitConfigFile)
 	cfg := &Config{}
+	data, err := jsonc.ReadFile(path)
+	if err != nil {
+		return cfg, false, err
+	}
 	if len(bytes.TrimSpace(data)) == 0 {
-		return cfg, nil
+		return cfg, false, nil
 	}
-	if err := json.Unmarshal(data, cfg); err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", path, err)
+	var rc rootConfig
+	if err := json.Unmarshal(data, &rc); err != nil {
+		return cfg, false, fmt.Errorf("parsing %s: %w", path, err)
 	}
-	return cfg, nil
+	inner := rc.DocsTrackerConfig
+	return &inner, rc.Features.DocsTracker, nil
+}
+
+// isFileInScope applies the per-app include/exclude filter. Paths are compared
+// as substrings of the file's project-relative path. Exclusions always win.
+// A nil config means "everything in scope."
+func isFileInScope(cfg *Config, relPath string) bool {
+	if cfg == nil {
+		return true
+	}
+	for _, p := range cfg.ExcludePaths {
+		if strings.Contains(relPath, p) {
+			return false
+		}
+	}
+	if len(cfg.AppPaths) == 0 {
+		return true
+	}
+	for _, p := range cfg.AppPaths {
+		if strings.Contains(relPath, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // buildMappings combines preset and auto-discovered mappings. Preset mappings

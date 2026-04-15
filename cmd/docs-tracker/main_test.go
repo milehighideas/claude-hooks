@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,9 +12,15 @@ import (
 
 // projectFixture describes a temp project layout for tests.
 type projectFixture struct {
-	// config is the literal contents of `.claude/docs-tracker.json`. If empty,
-	// no config file is created (project is not opted in).
+	// config is the literal contents of the docsTrackerConfig block inside
+	// .pre-commit.json. If empty, no .pre-commit.json is created (project is
+	// not opted in). Non-empty → fixture writes .pre-commit.json with
+	// features.docsTracker=true and docsTrackerConfig set to this literal.
 	config string
+	// rawPreCommit, if non-empty, overrides config and is written verbatim as
+	// .pre-commit.json. Use for tests that need to exercise the top-level
+	// schema (feature flag off, missing features block, malformed JSON).
+	rawPreCommit string
 	// docs creates files (by relative path) with placeholder content.
 	docs []string
 	// extraFiles creates empty files (by relative path) for layout purposes.
@@ -24,12 +31,13 @@ type projectFixture struct {
 func setupProject(t *testing.T, fx projectFixture) string {
 	t.Helper()
 	root := t.TempDir()
-	if fx.config != "" {
-		claudeDir := filepath.Join(root, ".claude")
-		if err := os.MkdirAll(claudeDir, 0755); err != nil {
-			t.Fatalf("mkdir .claude: %v", err)
+	if fx.rawPreCommit != "" {
+		if err := os.WriteFile(filepath.Join(root, ".pre-commit.json"), []byte(fx.rawPreCommit), 0644); err != nil {
+			t.Fatalf("write config: %v", err)
 		}
-		if err := os.WriteFile(filepath.Join(claudeDir, "docs-tracker.json"), []byte(fx.config), 0644); err != nil {
+	} else if fx.config != "" {
+		wrapped := fmt.Sprintf(`{"features":{"docsTracker":true},"docsTrackerConfig":%s}`, fx.config)
+		if err := os.WriteFile(filepath.Join(root, ".pre-commit.json"), []byte(wrapped), 0644); err != nil {
 			t.Fatalf("write config: %v", err)
 		}
 	}
@@ -105,6 +113,151 @@ func TestEnforce_NoConfig_IsNoOp(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_FeatureFlagOff_IsNoOp(t *testing.T) {
+	// .pre-commit.json exists but features.docsTracker is false — must no-op.
+	root := setupProject(t, projectFixture{
+		rawPreCommit: `{"features":{"docsTracker":false}}`,
+		docs:         []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_FeatureFlagMissing_IsNoOp(t *testing.T) {
+	// .pre-commit.json exists but features block is absent — must no-op.
+	root := setupProject(t, projectFixture{
+		rawPreCommit: `{"packageManager":"pnpm"}`,
+		docs:         []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_MalformedConfig_IsNoOp(t *testing.T) {
+	// Broken JSON — fail open.
+	root := setupProject(t, projectFixture{
+		rawPreCommit: `{"features":{`,
+		docs:         []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	if err != nil {
+		t.Fatalf("expected allow, got %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_JSONCCommentsAllowed(t *testing.T) {
+	// .pre-commit.json is JSONC — // comments must be stripped.
+	root := setupProject(t, projectFixture{
+		rawPreCommit: `{
+  // opt into docs-tracker
+  "features": { "docsTracker": true }
+}`,
+		docs: []string{"packages/backend/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("expected block (exit 2), got %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Per-app scope filter
+// ---------------------------------------------------------------------------
+
+func TestEnforce_AppPaths_LimitsScope(t *testing.T) {
+	// Two apps, both with CLAUDE.md. Only apps/web is in appPaths — editing a
+	// file in apps/mobile should no-op even though the doc exists.
+	root := setupProject(t, projectFixture{
+		config: `{"appPaths":["apps/web"]}`,
+		docs: []string{
+			"apps/web/CLAUDE.md",
+			"apps/mobile/CLAUDE.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// In-scope: blocked.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.ts"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("apps/web: expected block, got %v", err)
+	}
+
+	// Out-of-scope: allowed.
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "mobile", "foo.ts"))
+	if err != nil {
+		t.Fatalf("apps/mobile: expected allow, got %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_ExcludePaths_Skips(t *testing.T) {
+	// apps/legacy is in excludePaths — should not be gated even though the
+	// project otherwise enforces docs.
+	root := setupProject(t, projectFixture{
+		config: `{"excludePaths":["apps/legacy"]}`,
+		docs: []string{
+			"apps/web/CLAUDE.md",
+			"apps/legacy/CLAUDE.md",
+		},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	// Non-excluded: still blocked.
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.ts"))
+	exitErr, ok := err.(*ExitError)
+	if !ok || exitErr.Code != 2 {
+		t.Fatalf("apps/web: expected block, got %v", err)
+	}
+
+	// Excluded: allowed.
+	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "legacy", "foo.ts"))
+	if err != nil {
+		t.Fatalf("apps/legacy: expected allow, got %v", err)
+	}
+	if stderr != "" {
+		t.Errorf("expected no stderr, got %q", stderr)
+	}
+}
+
+func TestEnforce_ExcludePaths_BeatsAppPaths(t *testing.T) {
+	// Exclusions must win over inclusions.
+	root := setupProject(t, projectFixture{
+		config: `{"appPaths":["apps/web"],"excludePaths":["apps/web/legacy"]}`,
+		docs:   []string{"apps/web/CLAUDE.md"},
+	})
+	provider := sessionProvider(t.TempDir())
+
+	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "legacy", "foo.ts"))
+	if err != nil {
+		t.Fatalf("expected allow (excluded), got %v", err)
 	}
 }
 
@@ -629,7 +782,7 @@ func TestDiscoverMappings_SortedByLengthDesc(t *testing.T) {
 			"apps/mobile/components/CLAUDE.md",
 		},
 	})
-	cfg, err := loadConfig(root)
+	cfg, _, err := loadConfig(root)
 	if err != nil {
 		t.Fatalf("loadConfig: %v", err)
 	}
@@ -654,7 +807,7 @@ func TestDiscoverMappings_SkipsIgnoredDirs(t *testing.T) {
 			"packages/backend/CLAUDE.md",
 		},
 	})
-	cfg, _ := loadConfig(root)
+	cfg, _, _ := loadConfig(root)
 	got := buildMappings(root, cfg)
 	if len(got) != 1 || got[0].Docs[0] != "packages/backend/CLAUDE.md" {
 		t.Errorf("expected only packages/backend mapping, got %+v", got)

@@ -11,23 +11,35 @@ A Go binary that gates Edit/Write operations on reading required documentation, 
 
 ## Opt-in per project
 
-The hook only activates for projects that contain:
+The hook only activates for projects that contain a `.pre-commit.json` with the `docsTracker` feature enabled:
 
-```text
-<project-root>/.claude/docs-tracker.json
+```jsonc
+// <project-root>/.pre-commit.json
+{
+  "features": {
+    "docsTracker": true
+  }
+}
 ```
 
-Absent that file the hook is a no-op — safe to wire into `~/.claude/settings.json` globally. The file's contents configure behavior (see [Config](#config)); `{}` is valid and selects the defaults.
+Absent `.pre-commit.json`, or with `features.docsTracker` unset / false, the hook is a silent no-op — safe to wire into `~/.claude/settings.json` globally. JSONC (`//` comments) is supported so the file can be annotated alongside the other feature flags consumed by `pre-commit` and `validate-test-files`.
 
-At invocation the binary walks up from the tool's `file_path` to find the nearest directory containing `.claude/docs-tracker.json`, treating that as the project root.
+At invocation the binary walks up from the tool's `file_path` to find the nearest directory containing `.pre-commit.json`, treating that as the project root.
 
 ## Config
 
-```json
+Settings live under `docsTrackerConfig`:
+
+```jsonc
 {
-  "autoDiscover": true,
-  "docFileNames": ["CLAUDE.md"],
-  "convex": false
+  "features": { "docsTracker": true },
+  "docsTrackerConfig": {
+    "autoDiscover": true,
+    "docFileNames": ["CLAUDE.md"],
+    "convex": false,
+    "appPaths": [],
+    "excludePaths": []
+  }
 }
 ```
 
@@ -36,20 +48,59 @@ At invocation the binary walks up from the tool's `file_path` to find the neares
 | `autoDiscover` | bool | `true` | Walk the project for files named in `docFileNames` and build one mapping per directory. |
 | `docFileNames` | string[] | `["CLAUDE.md"]` | File names that auto-discovery treats as required docs for their containing directory. |
 | `convex` | bool \| object | `false` | Enables the Convex preset. See [Convex preset](#convex-preset). |
+| `appPaths` | string[] | `[]` | Restricts enforcement to files whose project-relative path contains at least one of these substrings. Empty = everything in scope. |
+| `excludePaths` | string[] | `[]` | Skips enforcement on files whose project-relative path contains any of these substrings. Exclusions always win over `appPaths`. |
 
-Unknown fields are ignored.
+Unknown fields are ignored. `appPaths` / `excludePaths` mirror the shape of `srpConfig`, `testCoverageConfig`, and `testFilesConfig` elsewhere in `.pre-commit.json`.
+
+### Per-app scope example
+
+Monorepo where only two apps should gate on CLAUDE.md:
+
+```jsonc
+{
+  "features": { "docsTracker": true },
+  "docsTrackerConfig": {
+    "appPaths": ["apps/web", "packages/ui"],
+    "excludePaths": ["apps/web/legacy"]
+  }
+}
+```
+
+Edits inside `apps/mobile/` are never gated. Edits inside `apps/web/legacy/` are never gated even though `apps/web` is in scope.
+
+## Migrating from `.claude/docs-tracker.json`
+
+Earlier versions used a standalone `.claude/docs-tracker.json` marker. Move your settings into `.pre-commit.json`:
+
+```jsonc
+// before — .claude/docs-tracker.json
+{ "convex": true }
+```
+
+```jsonc
+// after — .pre-commit.json
+{
+  "features": { "docsTracker": true },
+  "docsTrackerConfig": { "convex": true }
+}
+```
+
+Delete the old `.claude/docs-tracker.json` once migrated — the binary no longer reads it.
 
 ## How mappings are built
 
 For each Edit/Write the binary:
 
 1. Finds the project root via the opt-in marker.
-2. Builds a list of mappings:
+2. Bails out unless `features.docsTracker` is true.
+3. Applies any **skip patterns** to short-circuit for tests/generated files.
+4. Applies the **per-app scope** (`appPaths` / `excludePaths`); out-of-scope files are silent no-ops.
+5. Builds a list of mappings:
    - If the **Convex preset** is enabled, adds a mapping for the backend dir.
    - If **`autoDiscover`** is true, walks the project for `docFileNames` and adds a mapping per directory (the preset's pattern is preserved; auto-discovered mappings that collide are dropped).
-3. Sorts longest-pattern-first so the most specific mapping wins.
-4. Applies any **skip patterns** to short-circuit for tests/generated files.
-5. Checks whether every doc in the matched mapping has been read this session.
+6. Sorts longest-pattern-first so the most specific mapping wins.
+7. Checks whether every doc in the matched mapping has been read this session.
 
 ### Auto-discovery rules
 
@@ -71,14 +122,22 @@ Additionally, the binary will not block editing of a file that is itself one of 
 
 Convex projects share a consistent generated layout; the preset encodes it.
 
-```json
-{ "convex": true }
+```jsonc
+{
+  "features": { "docsTracker": true },
+  "docsTrackerConfig": { "convex": true }
+}
 ```
 
 Or with a custom backend location:
 
-```json
-{ "convex": { "backendDir": "apps/backend" } }
+```jsonc
+{
+  "features": { "docsTracker": true },
+  "docsTrackerConfig": {
+    "convex": { "backendDir": "apps/backend" }
+  }
+}
 ```
 
 With the preset enabled:
@@ -156,7 +215,7 @@ Paths are stored **relative to the project root** so enforce and track share the
 The tool fails open on unrecoverable issues:
 
 - Invalid JSON input → allow.
-- Unreadable or malformed `.claude/docs-tracker.json` → allow.
+- Unreadable or malformed `.pre-commit.json` → allow.
 - Missing session file → allow (first session, nothing tracked yet).
 - Session file I/O error → allow.
 - No project root → allow.
