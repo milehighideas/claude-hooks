@@ -94,6 +94,7 @@ Run `pre-commit --list` to see all available checks. Currently supported:
 | `vitestAssertions`  | Ensure vitest configs have `requireAssertions: true`  |
 | `testCoverage`      | Check source files have corresponding test files      |
 | `stubTestCheck`     | Ban `expect(true).toBe(true)` stub tests (per-app scoped) |
+| `missingTestsCheck` | Ban source files without co-located `.test.ts(x)` (per-app scoped) |
 | `goLint`            | Go linting (when enabled)                             |
 | `convexValidation`  | Convex schema validation (when enabled)               |
 | `buildCheck`        | Build verification (when enabled)                     |
@@ -142,7 +143,8 @@ The tool uses a `.pre-commit.json` file in the project root. Create this file to
     "mockCheck": true,
     "vitestAssertions": true,
     "testCoverage": true,
-    "stubTestCheck": true
+    "stubTestCheck": true,
+    "missingTestsCheck": true
   },
   "protectedBranches": ["main", "production"],
   "changelogExclude": ["^docs/", "^README"],
@@ -246,6 +248,38 @@ Detects test files whose every `expect()` call is the `expect(true).toBe(true)` 
 ```
 
 Progressive cleanup: start with `appPaths: []` (nothing enforced), clean one app, add it to `appPaths`. Repeat until every app is in the list. Same idiom the `-list-stubs` flag on `validate-test-files` supports for auditing.
+
+#### Missing Tests Check (`missingTestsCheck`)
+
+Detects source files that have no co-located test — the symmetric counterpart to `stubTestCheck`. Same shape, same semantics:
+
+```jsonc
+"missingTestsCheckConfig": {
+  // "all" (default) — walk appPaths and fail on ANY source file that
+  //   lacks a *.test.ts(x). Ratchet: once clean, stays clean.
+  // "staged" — only flag staged source files missing tests. Lighter
+  //   weight; overlaps with enforce-tests-on-commit but keeps all the
+  //   test-related gates in one binary.
+  "mode": "all",
+
+  // Substring match on project-relative path. Empty = scan entire project.
+  "appPaths": ["packages/backend", "apps/web"],
+
+  // Always wins over appPaths.
+  "excludePaths": ["packages/backend/convex/_generated"]
+}
+```
+
+Files that are automatically skipped (never require a test, regardless of scope):
+
+- Test files (`.test.ts[x]`, `.spec.ts[x]`, `.e2e.ts[x]`, `.maestro.yaml`)
+- Barrels (`index.ts`, `index.tsx`)
+- Type definitions (`.d.ts`, `.types.ts[x]`, anything under `/types/`)
+- Layout files (`_layout.ts[x]`)
+- Config files (`*.config.ts[x]`)
+- Anything under `node_modules`, `.git`, `_generated`, `dist`, `build`, `.next`, `.turbo`, `.vercel`, `__mocks__`, `__tests__`
+
+A `.spec.ts(x)` sibling also satisfies the check — a source file with `Foo.spec.tsx` next to it counts as tested even if no `Foo.test.tsx` exists.
 
 ### Key Configuration Options
 

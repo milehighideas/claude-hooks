@@ -36,7 +36,27 @@ type Config struct {
 	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
 	MaestroValidation  MaestroValidationConfig `json:"maestroValidation"`
 	StubTestCheckConfig StubTestCheckConfig    `json:"stubTestCheckConfig"`
+	MissingTestsCheckConfig MissingTestsCheckConfig `json:"missingTestsCheckConfig"`
 	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
+}
+
+// MissingTestsCheckConfig configures the missing-tests detector. Same shape
+// as stubTestCheckConfig for symmetry: a mode field plus per-app scope.
+type MissingTestsCheckConfig struct {
+	// Mode controls what's scanned.
+	// "all" (default) — walks AppPaths (or project root if empty) and reports
+	// every source file without a co-located .test.ts(x). Use this as a
+	// ratchet: once a package is test-covered, locking it in keeps it so.
+	// "staged" — only checks staged source files. Lighter; redundant with
+	// the separate enforce-tests-on-commit binary but useful as a
+	// consistent pre-commit gate without a second hook installation.
+	Mode string `json:"mode"`
+	// AppPaths restricts scanning to files whose project-relative path
+	// contains at least one of these substrings. Empty = project root.
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose project-relative path contains any of
+	// these substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths"`
 }
 
 // StubTestCheckConfig configures the stub-test detector. Mirrors the shape of
@@ -90,6 +110,7 @@ type Features struct {
 	DataLayerCheck     bool `json:"dataLayerCheck"`
 	MaestroValidation  bool `json:"maestroValidation"`
 	StubTestCheck      bool `json:"stubTestCheck"`
+	MissingTestsCheck  bool `json:"missingTestsCheck"`
 }
 
 // AppConfig represents configuration for a single app
