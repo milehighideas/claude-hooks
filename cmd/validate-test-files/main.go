@@ -468,11 +468,13 @@ func run(data HookData, stderr io.Writer) int {
 		return 0
 	}
 
-	// Reject stub test files (expect(true).toBe(true) placeholders).
-	// Runs before the component-write check because test files are skipped there.
+	// Reject stub test files — both regex-level weak-assertion stubs and
+	// AST-level self-mock anti-patterns where a test mocks out its own
+	// subject. Runs before the component-write check because test files
+	// are skipped there.
 	if isTestOp, testPath := isTestFileWriteOperation(data); isTestOp {
 		content, err := getResultingTestContent(data)
-		if err == nil && isStubContent(content) {
+		if err == nil && stubs.IsStubFile(testPath, content) {
 			fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
 
 File: %s

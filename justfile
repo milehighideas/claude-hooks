@@ -115,7 +115,19 @@ install: build
         [ -f "$bin" ] && cp "$bin" /usr/local/bin/
     done
 
-# Cross-compile for all platforms
+# Cross-compile for all platforms.
+#
+# NOTE: validate-test-files and pre-commit depend on tree-sitter (CGO) for
+# AST-based stub detection. Cross-compiling CGO code requires platform-
+# specific C toolchains on the build host:
+#
+#   macOS -> Linux:    brew install FiloSottile/musl-cross/musl-cross
+#   macOS -> Windows:  brew install mingw-w64
+#   macOS -> arm64:    brew install aarch64-unknown-linux-gnu  (or zig cc)
+#
+# If those aren't installed the respective platform build will fail with
+# "cgo: C compiler not available". Native builds (`just <cmdname>`) work
+# out of the box on the host platform.
 build-all: check-workspace build-darwin build-linux build-linux-arm64 build-windows
 
 # Build for macOS (Apple Silicon)
@@ -124,34 +136,37 @@ build-darwin:
     mkdir -p {{bindir}}/darwin-arm64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        GOOS=darwin GOARCH=arm64 go build -o {{bindir}}/darwin-arm64/$name ./cmd/$name
+        CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o {{bindir}}/darwin-arm64/$name ./cmd/$name
     done
 
-# Build for Linux (amd64)
+# Build for Linux (amd64) — requires musl-cross or equivalent for CGO
 build-linux:
     #!/usr/bin/env bash
     mkdir -p {{bindir}}/linux-amd64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        GOOS=linux GOARCH=amd64 go build -o {{bindir}}/linux-amd64/$name ./cmd/$name
+        CGO_ENABLED=1 CC=${CC_LINUX_AMD64:-x86_64-linux-musl-gcc} \
+          GOOS=linux GOARCH=amd64 go build -o {{bindir}}/linux-amd64/$name ./cmd/$name
     done
 
-# Build for Linux (arm64 — Docker on Apple Silicon)
+# Build for Linux (arm64 — Docker on Apple Silicon) — requires aarch64 cross-compiler for CGO
 build-linux-arm64:
     #!/usr/bin/env bash
     mkdir -p {{bindir}}/linux-arm64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        GOOS=linux GOARCH=arm64 go build -o {{bindir}}/linux-arm64/$name ./cmd/$name
+        CGO_ENABLED=1 CC=${CC_LINUX_ARM64:-aarch64-linux-musl-gcc} \
+          GOOS=linux GOARCH=arm64 go build -o {{bindir}}/linux-arm64/$name ./cmd/$name
     done
 
-# Build for Windows (amd64)
+# Build for Windows (amd64) — requires mingw-w64 for CGO
 build-windows:
     #!/usr/bin/env bash
     mkdir -p {{bindir}}/windows-amd64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        GOOS=windows GOARCH=amd64 go build -o {{bindir}}/windows-amd64/$name.exe ./cmd/$name
+        CGO_ENABLED=1 CC=${CC_WINDOWS_AMD64:-x86_64-w64-mingw32-gcc} \
+          GOOS=windows GOARCH=amd64 go build -o {{bindir}}/windows-amd64/$name.exe ./cmd/$name
     done
 
 # Package archives (mirrors release.yml packaging step)

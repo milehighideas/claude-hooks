@@ -87,6 +87,19 @@ func IsTestFile(path string) bool {
 	return strings.HasSuffix(path, ".test.ts") || strings.HasSuffix(path, ".test.tsx")
 }
 
+// IsStubFile combines the regex-based IsStub detector with the AST-based
+// IsSelfMockStub detector. Either signal is enough to flag the file. Use
+// this from callers that have a path — CheckFile, List, Find, and the
+// pre-commit/validate-test-files hooks. IsStub stays a pure-content
+// detector for cases where the path is unavailable (e.g. in-memory
+// previews of an Edit tool call).
+func IsStubFile(path, content string) bool {
+	if IsStub(content) {
+		return true
+	}
+	return IsSelfMockStub(path, content)
+}
+
 // List walks root for test files and prints the path of each stub to out,
 // returning the count of stubs discovered. Unreadable files and subtrees
 // are silently skipped so a permission error deep in the tree can't mask
@@ -113,7 +126,7 @@ func List(root string, out io.Writer) (int, error) {
 		if err != nil {
 			return nil
 		}
-		if IsStub(string(data)) {
+		if IsStubFile(path, string(data)) {
 			fmt.Fprintln(out, path)
 			count++
 		}
@@ -147,7 +160,7 @@ func Find(root string) ([]string, error) {
 		if err != nil {
 			return nil
 		}
-		if IsStub(string(data)) {
+		if IsStubFile(path, string(data)) {
 			found = append(found, path)
 		}
 		return nil
@@ -155,9 +168,9 @@ func Find(root string) ([]string, error) {
 	return found, err
 }
 
-// CheckFile returns true if path points to a test file that is a pure stub.
-// Non-test files and unreadable files return false. Callers use this to
-// check individual staged files without walking the tree.
+// CheckFile returns true if path points to a test file that is a stub. Runs
+// both the regex-based IsStub and AST-based IsSelfMockStub. Non-test files
+// and unreadable files return false.
 func CheckFile(path string) bool {
 	if !IsTestFile(path) {
 		return false
@@ -166,5 +179,5 @@ func CheckFile(path string) bool {
 	if err != nil {
 		return false
 	}
-	return IsStub(string(data))
+	return IsStubFile(path, string(data))
 }
