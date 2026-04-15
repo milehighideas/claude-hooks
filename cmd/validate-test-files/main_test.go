@@ -1305,6 +1305,135 @@ export const X = () => { const [v] = useState(0); return <div>{v}</div>; };`
 	}
 }
 
+func TestRunSplitGating(t *testing.T) {
+	// Stub rejection should be independently gated on features.stubTestCheck,
+	// not conflated with features.testFiles (which governs the "every
+	// component needs a test" check). Each can be enabled on its own.
+	t.Setenv("CLAUDE_HOOKS_AST_VALIDATION", "")
+
+	tmpDir := t.TempDir()
+
+	stubContent := `import { describe, it, expect } from "vitest";
+describe("smoke", () => { it("x", () => { expect(sign).toBeDefined(); }); });`
+
+	interactive := `import { useState } from 'react';
+export const X = () => { const [v] = useState(0); return <div>{v}</div>; };`
+
+	write := func(dir, rel, content string) string {
+		full := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		return full
+	}
+
+	writeConfig := func(dir, content string) {
+		if err := os.WriteFile(filepath.Join(dir, ".pre-commit.json"), []byte(content), 0644); err != nil {
+			t.Fatalf("write cfg: %v", err)
+		}
+	}
+
+	// Project A — stubTestCheck only. Writing a stub test: should block.
+	// Writing a component without test: should NOT block (testFiles off).
+	projStubOnly := filepath.Join(tmpDir, "stub-only")
+	stubOnlyTest := filepath.Join(projStubOnly, "apps/web/components/Foo.test.tsx")
+	stubOnlyComp := filepath.Join(projStubOnly, "apps/web/components/Missing.tsx")
+	if err := os.MkdirAll(filepath.Dir(stubOnlyTest), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeConfig(projStubOnly, `{"features":{"stubTestCheck":true}}`)
+
+	// Project B — testFiles only. Writing a stub test: should NOT block
+	// (backward compat: testFiles alone still enables component-write check).
+	// Writing a component without test: SHOULD block.
+	projTestFilesOnly := filepath.Join(tmpDir, "testfiles-only")
+	tfoTest := filepath.Join(projTestFilesOnly, "apps/web/components/Bar.test.tsx")
+	tfoComp := filepath.Join(projTestFilesOnly, "apps/web/components/MissingTest.tsx")
+	if err := os.MkdirAll(filepath.Dir(tfoTest), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeConfig(projTestFilesOnly, `{"features":{"testFiles":true}}`)
+	write(projTestFilesOnly, "apps/web/components/MissingTest.tsx", interactive)
+
+	// Project C — both enabled. Both paths fire.
+	projBoth := filepath.Join(tmpDir, "both")
+	bothTest := filepath.Join(projBoth, "apps/web/components/Baz.test.tsx")
+	bothComp := filepath.Join(projBoth, "apps/web/components/NoTest.tsx")
+	if err := os.MkdirAll(filepath.Dir(bothTest), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	writeConfig(projBoth, `{"features":{"testFiles":true,"stubTestCheck":true}}`)
+	write(projBoth, "apps/web/components/NoTest.tsx", interactive)
+
+	cases := []struct {
+		name     string
+		data     HookData
+		wantExit int
+	}{
+		{
+			name: "stubTestCheck only + stub write → BLOCK",
+			data: HookData{
+				ToolName: "Write",
+				ToolInput: ToolInput{FilePath: stubOnlyTest, Content: stubContent},
+			},
+			wantExit: 2,
+		},
+		{
+			name: "stubTestCheck only + component missing test → allow",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: stubOnlyComp},
+			},
+			wantExit: 0,
+		},
+		{
+			name: "testFiles only + stub write → BLOCK (stub rejection piggy-backs on testFiles for back-compat)",
+			data: HookData{
+				ToolName: "Write",
+				ToolInput: ToolInput{FilePath: tfoTest, Content: stubContent},
+			},
+			wantExit: 2,
+		},
+		{
+			name: "testFiles only + component missing test → BLOCK",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: tfoComp},
+			},
+			wantExit: 2,
+		},
+		{
+			name: "both flags + stub write → BLOCK",
+			data: HookData{
+				ToolName: "Write",
+				ToolInput: ToolInput{FilePath: bothTest, Content: stubContent},
+			},
+			wantExit: 2,
+		},
+		{
+			name: "both flags + component missing test → BLOCK",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: bothComp},
+			},
+			wantExit: 2,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			got := run(tc.data, &buf)
+			if got != tc.wantExit {
+				t.Errorf("run() = %d, want %d (stderr: %q)", got, tc.wantExit, buf.String())
+			}
+		})
+	}
+}
+
 func TestRunRespectsEnvDisable(t *testing.T) {
 	t.Setenv("CLAUDE_HOOKS_AST_VALIDATION", "false")
 

@@ -368,9 +368,21 @@ func findProjectRoot(filePath string) string {
 // projectConfig is a minimal view of .pre-commit.json. The full schema lives
 // in cmd/pre-commit/config.go; we decode only the fields this hook needs so
 // the two binaries stay loosely coupled.
+//
+// The two feature flags control separate edit-time gates:
+//   - features.testFiles gates the "every component needs a test" existence
+//     check. Turning it on blocks Write/Edit on interactive components
+//     without a sibling .test file.
+//   - features.stubTestCheck gates the stub-test rejection (weak assertions,
+//     self-mocks). Turning it on blocks Write/Edit on test files that are
+//     stubs regardless of whether the component-existence gate is active.
+//
+// Either or both can be enabled. testFiles: true also enables stub
+// rejection for backward compatibility with earlier behavior.
 type projectConfig struct {
 	Features struct {
-		TestFiles bool `json:"testFiles"`
+		TestFiles     bool `json:"testFiles"`
+		StubTestCheck bool `json:"stubTestCheck"`
 	} `json:"features"`
 	TestFilesConfig testFilesConfig `json:"testFilesConfig"`
 }
@@ -389,25 +401,26 @@ type testFilesConfig struct {
 }
 
 // loadProjectConfig walks up from filePath for .pre-commit.json, parses it,
-// and returns the project root, config, and whether features.testFiles is on.
-// root is "" when no marker is found; enabled is false on any failure.
-func loadProjectConfig(filePath string) (root string, cfg projectConfig, enabled bool) {
+// and returns the project root and config. root is "" when no marker is
+// found. Callers inspect cfg.Features.TestFiles / StubTestCheck to decide
+// which gates apply.
+func loadProjectConfig(filePath string) (root string, cfg projectConfig) {
 	root = findProjectRoot(filePath)
 	if root == "" {
-		return "", projectConfig{}, false
+		return "", projectConfig{}
 	}
 	if err := jsonc.Unmarshal(filepath.Join(root, ".pre-commit.json"), &cfg); err != nil {
-		return root, projectConfig{}, false
+		return root, projectConfig{}
 	}
-	return root, cfg, cfg.Features.TestFiles
+	return root, cfg
 }
 
 // isProjectOptedIn returns true when filePath lives inside a project whose
-// .pre-commit.json enables features.testFiles. Missing marker, unreadable or
-// malformed JSON, or the flag being off all result in false.
+// .pre-commit.json enables features.testFiles. Preserved for external
+// callers; internally run() inspects both flags.
 func isProjectOptedIn(filePath string) bool {
-	_, _, enabled := loadProjectConfig(filePath)
-	return enabled
+	_, cfg := loadProjectConfig(filePath)
+	return cfg.Features.TestFiles
 }
 
 // isFileInScope applies the per-app include/exclude filter from testFilesConfig.
@@ -454,11 +467,20 @@ func run(data HookData, stderr io.Writer) int {
 		return 0
 	}
 
-	// Gate everything on project opt-in via .pre-commit.json. Projects that
-	// have not enabled features.testFiles get a silent no-op, which makes the
+	// Load the project's .pre-commit.json. Two gates, each with its own
+	// feature flag:
+	//   features.stubTestCheck → edit-time stub rejection
+	//   features.testFiles     → component-test-existence check (legacy flag
+	//                            also enables stub rejection for back-compat)
+	// Files outside any opted-in project get a silent no-op, which makes the
 	// hook safe to register globally in ~/.claude/settings.json.
-	projectRoot, cfg, enabled := loadProjectConfig(filePath)
-	if !enabled {
+	projectRoot, cfg := loadProjectConfig(filePath)
+	if projectRoot == "" {
+		return 0
+	}
+	stubGateOn := cfg.Features.StubTestCheck || cfg.Features.TestFiles
+	componentGateOn := cfg.Features.TestFiles
+	if !stubGateOn && !componentGateOn {
 		return 0
 	}
 
@@ -472,14 +494,18 @@ func run(data HookData, stderr io.Writer) int {
 	// AST-level self-mock anti-patterns where a test mocks out its own
 	// subject. Runs before the component-write check because test files
 	// are skipped there.
-	if isTestOp, testPath := isTestFileWriteOperation(data); isTestOp {
-		content, err := getResultingTestContent(data)
-		if err == nil && stubs.IsStubFile(testPath, content) {
-			fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
+	if stubGateOn {
+		if isTestOp, testPath := isTestFileWriteOperation(data); isTestOp {
+			content, err := getResultingTestContent(data)
+			if err == nil && stubs.IsStubFile(testPath, content) {
+				fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
 
 File: %s
 
-Test file contains only placeholder assertions (expect(true).toBe(true)).
+Test file contains only weak placeholder assertions
+(expect(true).toBe(true), .toBeDefined(), .toBeTruthy(), .not.toBeNull()),
+OR mocks out its own subject with a null-returning factory.
+
 Write real assertions that verify the component's behavior.
 
 If the component is genuinely hard to test (complex Convex/Clerk context,
@@ -488,11 +514,17 @@ rather than falling back to stubs.
 
 To bypass (not recommended): set CLAUDE_HOOKS_AST_VALIDATION=false
 `, filepath.Base(testPath)))
-			return 2
+				return 2
+			}
 		}
 	}
 
-	// Only validate on component write operations
+	// Only validate on component write operations when features.testFiles
+	// is enabled. Many projects want stub rejection without the stricter
+	// "every component needs a sibling test file" edit-time block.
+	if !componentGateOn {
+		return 0
+	}
 	isComponentOp, componentPath := isComponentWriteOperation(data)
 	if !isComponentOp {
 		return 0
