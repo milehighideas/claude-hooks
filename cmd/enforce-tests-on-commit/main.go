@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
 const (
@@ -739,6 +742,93 @@ func shouldSkipTestRequirement(filePath string) bool {
 	return false
 }
 
+// preCommitConfigFile is the shared project config read by pre-commit,
+// validate-test-files, docs-tracker, and enforce-tests-on-commit.
+const preCommitConfigFile = ".pre-commit.json"
+
+// enforceConfig is the parsed enforceTestsOnCommitConfig block. Matches the
+// shape of srpConfig / testCoverageConfig / testFilesConfig elsewhere in
+// .pre-commit.json.
+type enforceConfig struct {
+	// AppPaths restricts enforcement to staged files whose project-relative
+	// path contains at least one of these substrings. Empty = every file.
+	AppPaths []string `json:"appPaths,omitempty"`
+	// ExcludePaths skips staged files whose project-relative path contains
+	// any of these substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths,omitempty"`
+}
+
+// rootConfig is the minimal view of .pre-commit.json this hook decodes — just
+// the feature gate and the nested config block.
+type rootConfig struct {
+	Features struct {
+		EnforceTestsOnCommit bool `json:"enforceTestsOnCommit"`
+	} `json:"features"`
+	EnforceTestsOnCommitConfig enforceConfig `json:"enforceTestsOnCommitConfig"`
+}
+
+// findPreCommitRoot walks up from cwd looking for a directory that contains
+// .pre-commit.json. Returns "" when no marker is found. Unlike the existing
+// findProjectRoot (which walks up for package.json to locate an app for test
+// runners), this locates the repo-level opt-in marker.
+func findPreCommitRoot(cwd string) string {
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return ""
+	}
+	dir := abs
+	for {
+		if _, err := os.Stat(filepath.Join(dir, preCommitConfigFile)); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// loadProjectConfig parses .pre-commit.json at root and returns the
+// enforceTestsOnCommit config plus whether the feature flag is enabled.
+// Missing file, unreadable file, or malformed JSON all produce
+// (zero-value config, false).
+func loadProjectConfig(root string) (enforceConfig, bool) {
+	path := filepath.Join(root, preCommitConfigFile)
+	data, err := jsonc.ReadFile(path)
+	if err != nil {
+		return enforceConfig{}, false
+	}
+	if len(bytes.TrimSpace(data)) == 0 {
+		return enforceConfig{}, false
+	}
+	var rc rootConfig
+	if err := json.Unmarshal(data, &rc); err != nil {
+		return enforceConfig{}, false
+	}
+	return rc.EnforceTestsOnCommitConfig, rc.Features.EnforceTestsOnCommit
+}
+
+// isFileInScope applies the per-app include/exclude filter. relPath is the
+// project-relative path (matching how getGitStagedFiles returns paths).
+// Exclusions always win.
+func isFileInScope(cfg enforceConfig, relPath string) bool {
+	for _, p := range cfg.ExcludePaths {
+		if strings.Contains(relPath, p) {
+			return false
+		}
+	}
+	if len(cfg.AppPaths) == 0 {
+		return true
+	}
+	for _, p := range cfg.AppPaths {
+		if strings.Contains(relPath, p) {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	var input hookInput
 	if err := json.NewDecoder(os.Stdin).Decode(&input); err != nil {
@@ -749,6 +839,23 @@ func main() {
 
 	// Only intercept git commit
 	if !isGitCommit(command) {
+		os.Exit(exitAllow)
+	}
+
+	cwd := input.Cwd
+	if cwd == "" {
+		cwd, _ = os.Getwd()
+	}
+
+	// Opt-in gate: walk up from cwd for .pre-commit.json, bail out unless
+	// features.enforceTestsOnCommit is set. Projects that have not opted in
+	// see a silent no-op — safe to keep registered globally.
+	preCommitRoot := findPreCommitRoot(cwd)
+	if preCommitRoot == "" {
+		os.Exit(exitAllow)
+	}
+	enforceCfg, enforceEnabled := loadProjectConfig(preCommitRoot)
+	if !enforceEnabled {
 		os.Exit(exitAllow)
 	}
 
@@ -776,11 +883,6 @@ func main() {
 		sessionID = "unknown"
 	}
 
-	cwd := input.Cwd
-	if cwd == "" {
-		cwd, _ = os.Getwd()
-	}
-
 	// HYBRID APPROACH: Git as source of truth + Session as scope filter
 	// 1. Get files staged for commit (git is always accurate)
 	stagedFiles := getGitStagedFiles(cwd)
@@ -804,6 +906,18 @@ func main() {
 	// 5. Intersect: only enforce on files that are BOTH staged AND in session
 	// This means we only check files Claude touched that you're committing
 	sourceFiles := intersectFiles(stagedFiles, cleanedSession.SourceFiles)
+
+	// 6. Per-app scope filter: drop files outside the configured appPaths
+	// or inside excludePaths before checking for missing tests.
+	if len(enforceCfg.AppPaths) > 0 || len(enforceCfg.ExcludePaths) > 0 {
+		filtered := sourceFiles[:0]
+		for _, f := range sourceFiles {
+			if isFileInScope(enforceCfg, f) {
+				filtered = append(filtered, f)
+			}
+		}
+		sourceFiles = filtered
+	}
 
 	// Build test files map from session
 	testFilesEdited := make(map[string]bool)

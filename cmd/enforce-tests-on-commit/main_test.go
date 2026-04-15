@@ -615,3 +615,173 @@ func TestContainsFile(t *testing.T) {
 		t.Error("containsFile with empty slice should return false")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Project-root discovery (opt-in marker)
+// ---------------------------------------------------------------------------
+
+func TestFindPreCommitRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Layout:
+	//   projectA/.pre-commit.json          (marker at root)
+	//     apps/web/
+	//   projectB/                          (no marker)
+	//     apps/mobile/
+	//   projectC/.pre-commit.json          (marker at root)
+	//     packages/inner/.pre-commit.json  (nested — nearest wins)
+	projectA := filepath.Join(tmpDir, "projectA")
+	projectB := filepath.Join(tmpDir, "projectB")
+	projectC := filepath.Join(tmpDir, "projectC")
+	nested := filepath.Join(projectC, "packages", "inner")
+
+	for _, dir := range []string{
+		filepath.Join(projectA, "apps", "web"),
+		filepath.Join(projectB, "apps", "mobile"),
+		nested,
+	} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+	for _, p := range []string{projectA, projectC, nested} {
+		if err := os.WriteFile(filepath.Join(p, ".pre-commit.json"), []byte("{}"), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	cases := []struct {
+		name string
+		cwd  string
+		want string
+	}{
+		{"marker at root", filepath.Join(projectA, "apps", "web"), projectA},
+		{"no marker anywhere", filepath.Join(projectB, "apps", "mobile"), ""},
+		{"nearest marker wins", nested, nested},
+		{"cwd is marker dir itself", projectA, projectA},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := findPreCommitRoot(tc.cwd)
+			if got != tc.want {
+				t.Errorf("findPreCommitRoot(%q) = %q, want %q", tc.cwd, got, tc.want)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Config loader — features gate and scope
+// ---------------------------------------------------------------------------
+
+func TestLoadProjectConfig(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	cases := []struct {
+		name        string
+		raw         string
+		wantEnabled bool
+		wantApp     []string
+		wantExcl    []string
+	}{
+		{
+			name:        "feature enabled",
+			raw:         `{"features":{"enforceTestsOnCommit":true}}`,
+			wantEnabled: true,
+		},
+		{
+			name:        "feature disabled",
+			raw:         `{"features":{"enforceTestsOnCommit":false}}`,
+			wantEnabled: false,
+		},
+		{
+			name:        "feature missing",
+			raw:         `{"features":{}}`,
+			wantEnabled: false,
+		},
+		{
+			name:        "malformed json",
+			raw:         `{"features":{`,
+			wantEnabled: false,
+		},
+		{
+			name:        "scope present",
+			raw:         `{"features":{"enforceTestsOnCommit":true},"enforceTestsOnCommitConfig":{"appPaths":["apps/web"],"excludePaths":["apps/legacy"]}}`,
+			wantEnabled: true,
+			wantApp:     []string{"apps/web"},
+			wantExcl:    []string{"apps/legacy"},
+		},
+		{
+			name:        "jsonc comments",
+			raw:         "{\n// comment\n\"features\":{\"enforceTestsOnCommit\":true}\n}",
+			wantEnabled: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(tmpDir, tc.name)
+			if err := os.MkdirAll(root, 0755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".pre-commit.json"), []byte(tc.raw), 0644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			cfg, enabled := loadProjectConfig(root)
+			if enabled != tc.wantEnabled {
+				t.Errorf("enabled = %v, want %v", enabled, tc.wantEnabled)
+			}
+			if tc.wantEnabled {
+				if !stringSlicesEqual(cfg.AppPaths, tc.wantApp) {
+					t.Errorf("appPaths = %v, want %v", cfg.AppPaths, tc.wantApp)
+				}
+				if !stringSlicesEqual(cfg.ExcludePaths, tc.wantExcl) {
+					t.Errorf("excludePaths = %v, want %v", cfg.ExcludePaths, tc.wantExcl)
+				}
+			}
+		})
+	}
+}
+
+func stringSlicesEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestIsFileInScope(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  enforceConfig
+		path string
+		want bool
+	}{
+		{"empty config allows all", enforceConfig{}, "packages/backend/foo.ts", true},
+		{"appPaths include", enforceConfig{AppPaths: []string{"apps/web"}}, "apps/web/foo.ts", true},
+		{"appPaths exclude by default", enforceConfig{AppPaths: []string{"apps/web"}}, "apps/mobile/foo.ts", false},
+		{"multiple appPaths", enforceConfig{AppPaths: []string{"apps/web", "packages/ui"}}, "packages/ui/button.ts", true},
+		{"excludePaths skip", enforceConfig{ExcludePaths: []string{"apps/legacy"}}, "apps/legacy/foo.ts", false},
+		{
+			name: "excludePaths beats appPaths",
+			cfg:  enforceConfig{AppPaths: []string{"apps/web"}, ExcludePaths: []string{"apps/web/legacy"}},
+			path: "apps/web/legacy/foo.ts",
+			want: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isFileInScope(tc.cfg, tc.path)
+			if got != tc.want {
+				t.Errorf("isFileInScope(%q) = %v, want %v", tc.path, got, tc.want)
+			}
+		})
+	}
+}

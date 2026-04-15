@@ -18,6 +18,39 @@ The hook prevents incomplete or undertested code from being committed by:
 4. **Smart skipping** of test requirements for non-testable files
 5. **Session-aware tracking** of which files have been edited by Claude
 
+## Opt-in per project
+
+The hook only activates for projects that have `features.enforceTestsOnCommit: true` in a `.pre-commit.json` at the repo root. Absent that, the hook is a silent no-op — safe to keep registered globally in `~/.claude/settings.json`.
+
+```jsonc
+// <project-root>/.pre-commit.json
+{
+  "features": {
+    "enforceTestsOnCommit": true
+  }
+}
+```
+
+At invocation the binary walks up from the tool's `cwd` to find the nearest directory containing `.pre-commit.json`, treating that as the project root. JSONC (`//` comments) is supported.
+
+### Per-app scope
+
+Use `enforceTestsOnCommitConfig` to restrict or exclude which apps/packages are enforced. Matches the shape of `srpConfig` / `testCoverageConfig` / `testFilesConfig` / `docsTrackerConfig` elsewhere in `.pre-commit.json` — both lists are compared as substrings of the staged file's project-relative path.
+
+```jsonc
+{
+  "features": { "enforceTestsOnCommit": true },
+  "enforceTestsOnCommitConfig": {
+    "appPaths": ["apps/web", "apps/portal"],
+    "excludePaths": ["packages/generated", "apps/legacy"]
+  }
+}
+```
+
+- `appPaths` empty / omitted → every staged file is in scope (default).
+- `appPaths` set → a staged file must contain at least one of these substrings to be enforced.
+- `excludePaths` always wins over `appPaths`.
+
 ## Usage
 
 ### How to Use
