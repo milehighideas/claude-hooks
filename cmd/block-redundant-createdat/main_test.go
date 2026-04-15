@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -316,4 +318,80 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+func TestListViolations(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Fake repo layout with three schema files — one clean, two violators —
+	// plus a non-schema file to confirm it's ignored.
+	schemaDir := filepath.Join(tmpDir, "packages", "backend", "convex", "schema")
+	if err := os.MkdirAll(schemaDir, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cleanFile := filepath.Join(schemaDir, "clean.ts")
+	if err := os.WriteFile(cleanFile, []byte(`defineTable({ name: v.string() });`), 0644); err != nil {
+		t.Fatalf("write clean: %v", err)
+	}
+	dirty1 := filepath.Join(schemaDir, "dirty1.ts")
+	if err := os.WriteFile(dirty1, []byte(`defineTable({ createdAt: v.number(), name: v.string() });`), 0644); err != nil {
+		t.Fatalf("write dirty1: %v", err)
+	}
+	dirty2 := filepath.Join(schemaDir, "dirty2.ts")
+	if err := os.WriteFile(dirty2, []byte(`
+defineTable({ createdAt: v.number() });
+defineTable({ createdAt: v.string(), slug: v.string() });
+`), 0644); err != nil {
+		t.Fatalf("write dirty2: %v", err)
+	}
+
+	// Non-schema file at the same level — must be skipped.
+	other := filepath.Join(tmpDir, "packages", "backend", "convex", "users.ts")
+	if err := os.WriteFile(other, []byte(`const foo = { createdAt: v.number() };`), 0644); err != nil {
+		t.Fatalf("write other: %v", err)
+	}
+
+	// node_modules should be skipped entirely.
+	nmSchema := filepath.Join(tmpDir, "node_modules", "convex", "schema", "fake.ts")
+	if err := os.MkdirAll(filepath.Dir(nmSchema), 0755); err != nil {
+		t.Fatalf("mkdir nm: %v", err)
+	}
+	if err := os.WriteFile(nmSchema, []byte(`defineTable({ createdAt: v.number() });`), 0644); err != nil {
+		t.Fatalf("write nm: %v", err)
+	}
+
+	var buf bytes.Buffer
+	count, err := listViolations([]string{tmpDir}, &buf)
+	if err != nil {
+		t.Fatalf("listViolations: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+	output := buf.String()
+	if !strings.Contains(output, "dirty1.ts\t1") {
+		t.Errorf("output missing dirty1 line with count 1:\n%s", output)
+	}
+	if !strings.Contains(output, "dirty2.ts\t2") {
+		t.Errorf("output missing dirty2 line with count 2:\n%s", output)
+	}
+	if strings.Contains(output, "clean.ts") {
+		t.Errorf("clean.ts should not appear in output:\n%s", output)
+	}
+	if strings.Contains(output, "node_modules") {
+		t.Errorf("node_modules should be skipped:\n%s", output)
+	}
+}
+
+func TestListViolations_MissingRoot(t *testing.T) {
+	// Missing roots are silently skipped so the walker can cross multiple
+	// roots in one call.
+	var buf bytes.Buffer
+	count, err := listViolations([]string{"/definitely/does/not/exist"}, &buf)
+	if err != nil {
+		t.Errorf("want nil err for missing root, got %v", err)
+	}
+	if count != 0 {
+		t.Errorf("count = %d, want 0", count)
+	}
 }

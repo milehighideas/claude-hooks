@@ -22,7 +22,10 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -192,7 +195,88 @@ func checkDisabled() bool {
 	return os.Getenv("CLAUDE_HOOKS_AST_VALIDATION") == "false"
 }
 
+// walkSkipDirs are directory basenames the audit walker never descends into.
+// Mirrors the set used by the stubs detector so audits don't drown in
+// generated code or dependency trees.
+var walkSkipDirs = map[string]bool{
+	"node_modules": true,
+	".git":         true,
+	"_generated":   true,
+	"dist":         true,
+	"build":        true,
+	".next":        true,
+	".turbo":       true,
+	".vercel":      true,
+}
+
+// listViolations walks each root for schema files and prints every file that
+// has at least one `createdAt:` inside a `defineTable({...})` block, suffixed
+// with the count. Returns the total number of violating files. Unreadable
+// files are silently skipped so a permission error deep in the tree can't
+// mask results elsewhere.
+//
+// Output format: `path\t<count>\n` — tab-separated so callers can pipe
+// through `awk`/`cut` without worrying about paths containing spaces.
+func listViolations(roots []string, out io.Writer) (int, error) {
+	total := 0
+	for _, root := range roots {
+		if _, err := os.Stat(root); err != nil {
+			// Don't fail the whole scan for one bad root — just skip.
+			continue
+		}
+		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, werr error) error {
+			if werr != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if path != root && walkSkipDirs[d.Name()] {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !isSchemaFile(path) {
+				return nil
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			count := countCreatedAtInDefineTable(string(data))
+			if count > 0 {
+				fmt.Fprintf(out, "%s\t%d\n", path, count)
+				total++
+			}
+			return nil
+		})
+		if err != nil {
+			return total, fmt.Errorf("walking %s: %w", root, err)
+		}
+	}
+	return total, nil
+}
+
 func main() {
+	listMode := flag.Bool("list-violations", false,
+		"scan positional paths (or cwd) for schema files with createdAt in defineTable and exit")
+	flag.Parse()
+
+	if *listMode {
+		roots := flag.Args()
+		if len(roots) == 0 {
+			roots = []string{"."}
+		}
+		count, err := listViolations(roots, os.Stdout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "block-redundant-createdat: %v\n", err)
+			os.Exit(1)
+		}
+		if count > 0 {
+			// Non-zero exit so CI / shell pipelines can gate on cleanliness.
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	if checkDisabled() {
 		os.Exit(0)
 	}
