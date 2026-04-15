@@ -17,6 +17,46 @@ The tool ensures that:
 - Display-only components have unit tests
 - Test requirements match the appropriate app type (mobile/native use Maestro, web/portal use TypeScript)
 
+## Opt-in per project
+
+The hook is **opt-in per project** via the same `.pre-commit.json` the `pre-commit` binary reads. Projects without the file, or without the feature flag set, see no-op behavior — which makes the hook safe to wire up globally in `~/.claude/settings.json`.
+
+Minimal config:
+
+```jsonc
+// .pre-commit.json
+{
+  "features": {
+    "testFiles": true
+  }
+}
+```
+
+### Project root discovery
+
+At invocation the binary walks up from the tool's `file_path` looking for a directory that contains `.pre-commit.json`. That directory is treated as the project root. If none is found, the hook exits 0 and does nothing. The nearest marker wins when multiple exist.
+
+### Per-app scope
+
+Use `testFilesConfig` to restrict (or exclude) which apps/packages are validated. Matches the shape of `srpConfig` and `testCoverageConfig` elsewhere in `.pre-commit.json` — both lists are compared as substrings of the file's project-relative path.
+
+```jsonc
+{
+  "features": { "testFiles": true },
+  "testFilesConfig": {
+    // Only validate files whose path contains one of these substrings.
+    // Empty or omitted = every file in the project is in scope.
+    "appPaths": ["apps/web", "apps/portal", "packages/ui"],
+
+    // Skip files whose path contains any of these substrings.
+    // Exclusions always win over appPaths.
+    "excludePaths": ["apps/web/legacy", "packages/generated"]
+  }
+}
+```
+
+Projects that don't set `testFilesConfig` get the original behavior once opted in: every component file is validated.
+
 ## Usage
 
 ### As a Claude Hook
@@ -104,10 +144,12 @@ The tool does not accept command line arguments. All behavior is controlled via:
 
 ### CLAUDE_HOOKS_AST_VALIDATION
 
-Controls whether test file validation is enabled.
+Global nuclear override. Set this in the shell or a project's `.claude/settings.local.json` to force the hook off regardless of `.pre-commit.json` contents.
 
 - `CLAUDE_HOOKS_AST_VALIDATION=false`: Disables the hook (allows operations without test files)
-- Any other value or unset: Hook is enabled (default behavior)
+- Any other value or unset: Hook obeys `.pre-commit.json` (default behavior)
+
+Prefer the per-project `features.testFiles` / `testFilesConfig` knobs over this env var — the env var disables both the component-write check **and** the stub-test rejection in the same binary.
 
 **Example:**
 

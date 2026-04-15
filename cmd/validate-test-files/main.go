@@ -3,10 +3,13 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
 // E2E test extensions by app type
@@ -349,18 +352,129 @@ func checkDisabled() bool {
 	return os.Getenv("CLAUDE_HOOKS_AST_VALIDATION") == "false"
 }
 
-func main() {
-	// Check for disable flag
-	if checkDisabled() {
-		os.Exit(0)
+// findProjectRoot walks up from filePath looking for a directory that contains
+// .pre-commit.json. Returns the directory path if found, or "" if no marker is
+// found on the way up to the filesystem root. Relative paths are resolved
+// against the current working directory.
+func findProjectRoot(filePath string) string {
+	abs, err := filepath.Abs(filePath)
+	if err != nil {
+		return ""
+	}
+	dir := filepath.Dir(abs)
+	for {
+		if _, err := os.Stat(filepath.Join(dir, ".pre-commit.json")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// projectConfig is a minimal view of .pre-commit.json. The full schema lives
+// in cmd/pre-commit/config.go; we decode only the fields this hook needs so
+// the two binaries stay loosely coupled.
+type projectConfig struct {
+	Features struct {
+		TestFiles bool `json:"testFiles"`
+	} `json:"features"`
+	TestFilesConfig testFilesConfig `json:"testFilesConfig"`
+}
+
+// testFilesConfig controls which files inside an opted-in project are
+// validated. Mirrors the shape of srpConfig / testCoverageConfig: an include
+// list plus an exclude list, both matched as substrings of the file's
+// project-relative path.
+type testFilesConfig struct {
+	// AppPaths restricts validation to files whose project-relative path
+	// contains at least one of these substrings. Empty means "everything".
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose project-relative path contains any of
+	// these substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths"`
+}
+
+// loadProjectConfig walks up from filePath for .pre-commit.json, parses it,
+// and returns the project root, config, and whether features.testFiles is on.
+// root is "" when no marker is found; enabled is false on any failure.
+func loadProjectConfig(filePath string) (root string, cfg projectConfig, enabled bool) {
+	root = findProjectRoot(filePath)
+	if root == "" {
+		return "", projectConfig{}, false
+	}
+	if err := jsonc.Unmarshal(filepath.Join(root, ".pre-commit.json"), &cfg); err != nil {
+		return root, projectConfig{}, false
+	}
+	return root, cfg, cfg.Features.TestFiles
+}
+
+// isProjectOptedIn returns true when filePath lives inside a project whose
+// .pre-commit.json enables features.testFiles. Missing marker, unreadable or
+// malformed JSON, or the flag being off all result in false.
+func isProjectOptedIn(filePath string) bool {
+	_, _, enabled := loadProjectConfig(filePath)
+	return enabled
+}
+
+// isFileInScope applies the per-app include/exclude filter from testFilesConfig.
+// Paths are compared as substrings of the file's project-relative path. Files
+// outside the project root degrade to "in scope" so the hook never silently
+// drops work when rel-path computation fails.
+func isFileInScope(projectRoot, filePath string, cfg projectConfig) bool {
+	rel, err := filepath.Rel(projectRoot, filePath)
+	if err != nil {
+		return true
+	}
+	rel = filepath.ToSlash(rel)
+
+	for _, p := range cfg.TestFilesConfig.ExcludePaths {
+		if strings.Contains(rel, p) {
+			return false
+		}
 	}
 
-	// Read JSON from stdin
-	var data HookData
-	decoder := json.NewDecoder(os.Stdin)
-	if err := decoder.Decode(&data); err != nil {
-		// Allow if we can't parse
-		os.Exit(0)
+	if len(cfg.TestFilesConfig.AppPaths) == 0 {
+		return true
+	}
+
+	for _, p := range cfg.TestFilesConfig.AppPaths {
+		if strings.Contains(rel, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// run applies all gates and runs validation, returning an exit code.
+// stderr receives any block messages. It is extracted from main() so the
+// full path is testable without stdin/exit plumbing.
+func run(data HookData, stderr io.Writer) int {
+	if checkDisabled() {
+		return 0
+	}
+
+	// Need a file path to locate the project. Tool calls without one (or with
+	// non-Write/Edit tools) can never match any of our validations anyway.
+	filePath := data.ToolInput.FilePath
+	if filePath == "" {
+		return 0
+	}
+
+	// Gate everything on project opt-in via .pre-commit.json. Projects that
+	// have not enabled features.testFiles get a silent no-op, which makes the
+	// hook safe to register globally in ~/.claude/settings.json.
+	projectRoot, cfg, enabled := loadProjectConfig(filePath)
+	if !enabled {
+		return 0
+	}
+
+	// Apply per-app scope (testFilesConfig.appPaths / excludePaths). Files
+	// outside the configured scope are silently skipped.
+	if !isFileInScope(projectRoot, filePath, cfg) {
+		return 0
 	}
 
 	// Reject stub test files (expect(true).toBe(true) placeholders).
@@ -368,7 +482,7 @@ func main() {
 	if isTestOp, testPath := isTestFileWriteOperation(data); isTestOp {
 		content, err := getResultingTestContent(data)
 		if err == nil && isStubContent(content) {
-			msg := fmt.Sprintf(`BLOCKED: Stub test file rejected
+			fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
 
 File: %s
 
@@ -380,49 +494,45 @@ auth gating, etc.), ask the user how much mocking infrastructure to build
 rather than falling back to stubs.
 
 To bypass (not recommended): set CLAUDE_HOOKS_AST_VALIDATION=false
-`, filepath.Base(testPath))
-			fmt.Fprintln(os.Stderr, msg)
-			os.Exit(2)
+`, filepath.Base(testPath)))
+			return 2
 		}
 	}
 
 	// Only validate on component write operations
-	isComponentOp, filePath := isComponentWriteOperation(data)
+	isComponentOp, componentPath := isComponentWriteOperation(data)
 	if !isComponentOp {
-		os.Exit(0)
+		return 0
 	}
 
-	// Check test requirements
-	violations, err := checkTestRequirements(filePath)
+	violations, err := checkTestRequirements(componentPath)
 	if err != nil {
 		// Allow if we can't validate (don't block on errors)
-		os.Exit(0)
+		return 0
 	}
 
-	if len(violations) > 0 {
-		// Filter errors
-		var errors []Violation
-		for _, v := range violations {
-			if v.Severity == "error" {
-				errors = append(errors, v)
-			}
+	var errors []Violation
+	for _, v := range violations {
+		if v.Severity == "error" {
+			errors = append(errors, v)
 		}
+	}
+	if len(errors) == 0 {
+		return 0
+	}
 
-		if len(errors) > 0 {
-			msg := fmt.Sprintf("BLOCKED: Test file requirements not met\n\nFile: %s\n\nMissing tests:\n",
-				filepath.Base(filePath))
-
-			for _, v := range errors {
-				msg += fmt.Sprintf("\n  ❌ %s", v.Message)
-				msg += fmt.Sprintf("\n     Reason: %s require tests", v.Reason)
-				msg += fmt.Sprintf("\n     Expected: %s", v.ExpectedPath)
-				if v.AppType != "" {
-					msg += fmt.Sprintf("\n     App type: %s", v.AppType)
-				}
-				msg += "\n"
-			}
-
-			msg += `
+	msg := fmt.Sprintf("BLOCKED: Test file requirements not met\n\nFile: %s\n\nMissing tests:\n",
+		filepath.Base(componentPath))
+	for _, v := range errors {
+		msg += fmt.Sprintf("\n  ❌ %s", v.Message)
+		msg += fmt.Sprintf("\n     Reason: %s require tests", v.Reason)
+		msg += fmt.Sprintf("\n     Expected: %s", v.ExpectedPath)
+		if v.AppType != "" {
+			msg += fmt.Sprintf("\n     App type: %s", v.AppType)
+		}
+		msg += "\n"
+	}
+	msg += `
 Test requirements:
   - Screens: Unit test (.test.tsx) + E2E test
   - Forms (create/update): Unit test + E2E test
@@ -436,15 +546,18 @@ E2E test types:
 
 To fix:
 1. Create the missing test files
-2. Or set CLAUDE_HOOKS_AST_VALIDATION=false to disable
-
-See: ~/.claude/hooks/validate-test-files.py
-See: packages/backend/docs/AST_INFRASTRUCTURE_AND_CODE_QUALITY.md
+2. Disable per project: set features.testFiles=false in .pre-commit.json
+3. Or set CLAUDE_HOOKS_AST_VALIDATION=false to disable the hook globally
 `
-			fmt.Fprintln(os.Stderr, msg)
-			os.Exit(2)
-		}
-	}
+	fmt.Fprintln(stderr, msg)
+	return 2
+}
 
-	os.Exit(0)
+func main() {
+	var data HookData
+	if err := json.NewDecoder(os.Stdin).Decode(&data); err != nil {
+		// Allow if we can't parse
+		os.Exit(0)
+	}
+	os.Exit(run(data, os.Stderr))
 }

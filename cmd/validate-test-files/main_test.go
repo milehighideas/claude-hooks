@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -806,6 +808,521 @@ it("real", () => { expect(x).toBe(1); });`,
 				t.Errorf("isStubContent() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFindProjectRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Layout:
+	//   tmpDir/
+	//     project-a/
+	//       .pre-commit.json
+	//       apps/web/components/Foo.tsx
+	//     project-b/
+	//       apps/mobile/screens/Home.tsx     (no marker anywhere)
+	//     project-c/
+	//       .pre-commit.json
+	//       packages/inner/
+	//         .pre-commit.json             (nested marker)
+	//         src/Button.tsx
+	projectA := filepath.Join(tmpDir, "project-a")
+	projectAComponent := filepath.Join(projectA, "apps", "web", "components", "Foo.tsx")
+	projectB := filepath.Join(tmpDir, "project-b")
+	projectBFile := filepath.Join(projectB, "apps", "mobile", "screens", "Home.tsx")
+	projectC := filepath.Join(tmpDir, "project-c")
+	nestedInner := filepath.Join(projectC, "packages", "inner")
+	nestedFile := filepath.Join(nestedInner, "src", "Button.tsx")
+
+	// project-a
+	if err := os.MkdirAll(filepath.Dir(projectAComponent), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectA, ".pre-commit.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(projectAComponent, []byte(""), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// project-b (no marker)
+	if err := os.MkdirAll(filepath.Dir(projectBFile), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(projectBFile, []byte(""), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	// project-c with nested marker
+	if err := os.MkdirAll(filepath.Dir(nestedFile), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectC, ".pre-commit.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(nestedInner, ".pre-commit.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(nestedFile, []byte(""), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		filePath string
+		want     string
+	}{
+		{
+			name:     "marker at project root",
+			filePath: projectAComponent,
+			want:     projectA,
+		},
+		{
+			name:     "no marker anywhere",
+			filePath: projectBFile,
+			want:     "",
+		},
+		{
+			name:     "nearest marker wins",
+			filePath: nestedFile,
+			want:     nestedInner,
+		},
+		{
+			name:     "marker directory is returned when file sits next to it",
+			filePath: filepath.Join(projectA, "sibling.tsx"),
+			want:     projectA,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := findProjectRoot(tt.filePath)
+			if got != tt.want {
+				t.Errorf("findProjectRoot(%q) = %q, want %q", tt.filePath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestIsProjectOptedIn(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Cases covered:
+	//   enabled      — features.testFiles = true
+	//   disabled     — features.testFiles = false
+	//   absent       — features block present, testFiles key absent
+	//   noFeatures   — no features block
+	//   invalid      — malformed JSON
+	//   jsonc        — JSONC comments are supported
+	//   noMarker     — no .pre-commit.json in any parent
+	enabled := filepath.Join(tmpDir, "enabled")
+	disabled := filepath.Join(tmpDir, "disabled")
+	absent := filepath.Join(tmpDir, "absent")
+	noFeatures := filepath.Join(tmpDir, "no-features")
+	invalid := filepath.Join(tmpDir, "invalid")
+	jsoncDir := filepath.Join(tmpDir, "jsonc")
+	noMarker := filepath.Join(tmpDir, "no-marker")
+
+	for _, dir := range []string{enabled, disabled, absent, noFeatures, invalid, jsoncDir, noMarker} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+	}
+
+	mustWrite := func(dir, content string) {
+		if err := os.WriteFile(filepath.Join(dir, ".pre-commit.json"), []byte(content), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	mustWrite(enabled, `{"features":{"testFiles":true}}`)
+	mustWrite(disabled, `{"features":{"testFiles":false}}`)
+	mustWrite(absent, `{"features":{"lintTypecheck":true}}`)
+	mustWrite(noFeatures, `{}`)
+	mustWrite(invalid, `{"features":{`)
+	mustWrite(jsoncDir, `{
+  // testFiles flips on per-tool-use validation
+  "features": {
+    "testFiles": true // opt in
+  }
+}`)
+
+	tests := []struct {
+		name     string
+		filePath string
+		want     bool
+	}{
+		{
+			name:     "feature enabled",
+			filePath: filepath.Join(enabled, "apps", "web", "components", "Foo.tsx"),
+			want:     true,
+		},
+		{
+			name:     "feature disabled",
+			filePath: filepath.Join(disabled, "apps", "web", "components", "Foo.tsx"),
+			want:     false,
+		},
+		{
+			name:     "feature key absent",
+			filePath: filepath.Join(absent, "src", "Foo.tsx"),
+			want:     false,
+		},
+		{
+			name:     "no features block",
+			filePath: filepath.Join(noFeatures, "src", "Foo.tsx"),
+			want:     false,
+		},
+		{
+			name:     "malformed config",
+			filePath: filepath.Join(invalid, "src", "Foo.tsx"),
+			want:     false,
+		},
+		{
+			name:     "jsonc comments allowed",
+			filePath: filepath.Join(jsoncDir, "src", "Foo.tsx"),
+			want:     true,
+		},
+		{
+			name:     "no marker anywhere",
+			filePath: filepath.Join(noMarker, "src", "Foo.tsx"),
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isProjectOptedIn(tt.filePath)
+			if got != tt.want {
+				t.Errorf("isProjectOptedIn(%q) = %v, want %v", tt.filePath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunGatesOnProjectOptIn(t *testing.T) {
+	// Clear env override so opt-in is the only gate under test.
+	t.Setenv("CLAUDE_HOOKS_AST_VALIDATION", "")
+
+	tmpDir := t.TempDir()
+
+	// Helper: write a component file that the validator will flag as missing tests.
+	// The file uses useState so isInteractiveComponent returns true → requires unit + E2E.
+	interactiveSrc := `import { useState } from 'react';
+export const Foo = () => { const [v] = useState(0); return <div>{v}</div>; };`
+
+	// Opted-in project
+	optIn := filepath.Join(tmpDir, "opt-in")
+	optInComponent := filepath.Join(optIn, "apps", "web", "components", "Foo.tsx")
+	if err := os.MkdirAll(filepath.Dir(optInComponent), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(optIn, ".pre-commit.json"), []byte(`{"features":{"testFiles":true}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(optInComponent, []byte(interactiveSrc), 0644); err != nil {
+		t.Fatalf("write component: %v", err)
+	}
+
+	// Opted-in project with tests alongside (should pass)
+	passing := filepath.Join(tmpDir, "opt-in-passing")
+	passingComponent := filepath.Join(passing, "apps", "web", "components", "Bar.tsx")
+	if err := os.MkdirAll(filepath.Dir(passingComponent), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(passing, ".pre-commit.json"), []byte(`{"features":{"testFiles":true}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(passingComponent, []byte(interactiveSrc), 0644); err != nil {
+		t.Fatalf("write component: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(passingComponent), "Bar.test.tsx"), []byte(``), 0644); err != nil {
+		t.Fatalf("write unit test: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(filepath.Dir(passingComponent), "Bar.e2e.ts"), []byte(``), 0644); err != nil {
+		t.Fatalf("write e2e test: %v", err)
+	}
+
+	// Project without .pre-commit.json — should be a silent no-op
+	noOpt := filepath.Join(tmpDir, "no-opt")
+	noOptComponent := filepath.Join(noOpt, "apps", "web", "components", "Foo.tsx")
+	if err := os.MkdirAll(filepath.Dir(noOptComponent), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(noOptComponent, []byte(interactiveSrc), 0644); err != nil {
+		t.Fatalf("write component: %v", err)
+	}
+
+	// Project with features.testFiles=false — also a silent no-op
+	optOut := filepath.Join(tmpDir, "opt-out")
+	optOutComponent := filepath.Join(optOut, "apps", "web", "components", "Foo.tsx")
+	if err := os.MkdirAll(filepath.Dir(optOutComponent), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(optOut, ".pre-commit.json"), []byte(`{"features":{"testFiles":false}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	if err := os.WriteFile(optOutComponent, []byte(interactiveSrc), 0644); err != nil {
+		t.Fatalf("write component: %v", err)
+	}
+
+	// Stub test file inside an opted-in project — should be blocked
+	stubProj := filepath.Join(tmpDir, "opt-in-stub")
+	stubTestFile := filepath.Join(stubProj, "apps", "web", "components", "Baz.test.tsx")
+	if err := os.MkdirAll(filepath.Dir(stubTestFile), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stubProj, ".pre-commit.json"), []byte(`{"features":{"testFiles":true}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Same stub write in a non-opted-in project — should NOT be blocked
+	stubNoOpt := filepath.Join(tmpDir, "no-opt-stub")
+	stubNoOptFile := filepath.Join(stubNoOpt, "apps", "web", "components", "Baz.test.tsx")
+	if err := os.MkdirAll(filepath.Dir(stubNoOptFile), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	stubContent := `import { describe, it, expect } from "vitest";
+describe("Baz", () => { it("t", () => { expect(true).toBe(true); }); });`
+
+	tests := []struct {
+		name         string
+		data         HookData
+		wantExit     int
+		wantStderrIn string // substring expected in stderr when blocking
+	}{
+		{
+			name: "opted in, missing tests → block",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: optInComponent},
+			},
+			wantExit:     2,
+			wantStderrIn: "Test file requirements not met",
+		},
+		{
+			name: "opted in, tests present → allow",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: passingComponent},
+			},
+			wantExit: 0,
+		},
+		{
+			name: "no .pre-commit.json → silent no-op",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: noOptComponent},
+			},
+			wantExit: 0,
+		},
+		{
+			name: "features.testFiles=false → silent no-op",
+			data: HookData{
+				ToolName:  "Edit",
+				ToolInput: ToolInput{FilePath: optOutComponent},
+			},
+			wantExit: 0,
+		},
+		{
+			name: "opted in, stub test file → block",
+			data: HookData{
+				ToolName: "Write",
+				ToolInput: ToolInput{
+					FilePath: stubTestFile,
+					Content:  stubContent,
+				},
+			},
+			wantExit:     2,
+			wantStderrIn: "Stub test file rejected",
+		},
+		{
+			name: "no opt-in, stub test file → silent no-op",
+			data: HookData{
+				ToolName: "Write",
+				ToolInput: ToolInput{
+					FilePath: stubNoOptFile,
+					Content:  stubContent,
+				},
+			},
+			wantExit: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			got := run(tt.data, &buf)
+			if got != tt.wantExit {
+				t.Errorf("run() exit = %d, want %d (stderr: %q)", got, tt.wantExit, buf.String())
+			}
+			if tt.wantStderrIn != "" && !strings.Contains(buf.String(), tt.wantStderrIn) {
+				t.Errorf("run() stderr %q does not contain %q", buf.String(), tt.wantStderrIn)
+			}
+			if tt.wantExit == 0 && buf.Len() != 0 {
+				t.Errorf("run() expected no stderr on exit 0, got %q", buf.String())
+			}
+		})
+	}
+}
+
+func TestIsFileInScope(t *testing.T) {
+	projectRoot := "/project"
+
+	tests := []struct {
+		name     string
+		filePath string
+		cfg      projectConfig
+		want     bool
+	}{
+		{
+			name:     "empty config → everything in scope",
+			filePath: "/project/apps/web/components/Foo.tsx",
+			cfg:      projectConfig{},
+			want:     true,
+		},
+		{
+			name:     "appPaths match → in scope",
+			filePath: "/project/apps/web/components/Foo.tsx",
+			cfg: projectConfig{
+				TestFilesConfig: testFilesConfig{
+					AppPaths: []string{"apps/web"},
+				},
+			},
+			want: true,
+		},
+		{
+			name:     "appPaths set but no match → out of scope",
+			filePath: "/project/apps/legacy/components/Foo.tsx",
+			cfg: projectConfig{
+				TestFilesConfig: testFilesConfig{
+					AppPaths: []string{"apps/web"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:     "multiple appPaths, one matches",
+			filePath: "/project/packages/ui/src/Button.tsx",
+			cfg: projectConfig{
+				TestFilesConfig: testFilesConfig{
+					AppPaths: []string{"apps/web", "packages/ui"},
+				},
+			},
+			want: true,
+		},
+		{
+			name:     "excludePaths wins over appPaths",
+			filePath: "/project/apps/web/legacy/Foo.tsx",
+			cfg: projectConfig{
+				TestFilesConfig: testFilesConfig{
+					AppPaths:     []string{"apps/web"},
+					ExcludePaths: []string{"apps/web/legacy"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:     "excludePaths with empty appPaths",
+			filePath: "/project/apps/legacy/Foo.tsx",
+			cfg: projectConfig{
+				TestFilesConfig: testFilesConfig{
+					ExcludePaths: []string{"apps/legacy"},
+				},
+			},
+			want: false,
+		},
+		{
+			name:     "file outside project root → treat as in scope (degrade gracefully)",
+			filePath: "/unrelated/foo/bar.tsx",
+			cfg:      projectConfig{},
+			want:     true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isFileInScope(projectRoot, tt.filePath, tt.cfg)
+			if got != tt.want {
+				t.Errorf("isFileInScope(%q) = %v, want %v", tt.filePath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunAppliesScopeFilter(t *testing.T) {
+	t.Setenv("CLAUDE_HOOKS_AST_VALIDATION", "")
+
+	tmpDir := t.TempDir()
+	projectRoot := filepath.Join(tmpDir, "proj")
+
+	if err := os.MkdirAll(projectRoot, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".pre-commit.json"), []byte(`{
+  "features": { "testFiles": true },
+  "testFilesConfig": {
+    "appPaths": ["apps/web"],
+    "excludePaths": ["apps/web/legacy"]
+  }
+}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	interactive := `import { useState } from 'react';
+export const X = () => { const [v] = useState(0); return <div>{v}</div>; };`
+
+	inScope := filepath.Join(projectRoot, "apps", "web", "components", "InScope.tsx")
+	outOfScope := filepath.Join(projectRoot, "apps", "mobile", "components", "OutOfScope.tsx")
+	excluded := filepath.Join(projectRoot, "apps", "web", "legacy", "Excluded.tsx")
+
+	for _, f := range []string{inScope, outOfScope, excluded} {
+		if err := os.MkdirAll(filepath.Dir(f), 0755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(f, []byte(interactive), 0644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name     string
+		filePath string
+		wantExit int
+	}{
+		{name: "file inside appPaths → validated", filePath: inScope, wantExit: 2},
+		{name: "file outside appPaths → no-op", filePath: outOfScope, wantExit: 0},
+		{name: "file matches excludePaths → no-op", filePath: excluded, wantExit: 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			got := run(HookData{ToolName: "Edit", ToolInput: ToolInput{FilePath: tt.filePath}}, &buf)
+			if got != tt.wantExit {
+				t.Errorf("run() = %d, want %d (stderr: %q)", got, tt.wantExit, buf.String())
+			}
+		})
+	}
+}
+
+func TestRunRespectsEnvDisable(t *testing.T) {
+	t.Setenv("CLAUDE_HOOKS_AST_VALIDATION", "false")
+
+	tmpDir := t.TempDir()
+	component := filepath.Join(tmpDir, "opt-in", "apps", "web", "components", "Foo.tsx")
+	if err := os.MkdirAll(filepath.Dir(component), 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "opt-in", ".pre-commit.json"), []byte(`{"features":{"testFiles":true}}`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := os.WriteFile(component, []byte(`import { useState } from 'react'; export const X = () => { const [v] = useState(0); return <div>{v}</div> };`), 0644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	got := run(HookData{ToolName: "Edit", ToolInput: ToolInput{FilePath: component}}, io.Discard)
+	if got != 0 {
+		t.Errorf("run() with env disable = %d, want 0", got)
 	}
 }
 
