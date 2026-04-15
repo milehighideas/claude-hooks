@@ -768,7 +768,7 @@ describe("Component.test.tsx", () => {
 import { Button } from "./Button";
 it("renders label", () => {
   render(<Button label="Hi" />);
-  expect(screen.getByText("Hi")).toBeTruthy();
+  expect(screen.getByText("Hi").textContent).toBe("Hi");
 });`,
 			want: false,
 		},

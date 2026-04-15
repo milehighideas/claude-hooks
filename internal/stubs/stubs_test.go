@@ -32,9 +32,64 @@ it("b", () => { expect(true).toBe(true); });`,
 			want:    true,
 		},
 		{
-			name: "real test",
+			name:    "weak: not.toBeNull only",
+			content: `it("renders", () => { const { toJSON } = render(<X/>); expect(toJSON()).not.toBeNull(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: toBeDefined only",
+			content: `it("x", () => { expect(result).toBeDefined(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: toBeTruthy only (getByTestId pattern)",
+			content: `it("x", () => { const { getByTestId } = render(<X/>); expect(getByTestId('x')).toBeTruthy(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: toBeFalsy only",
+			content: `it("x", () => { expect(result).toBeFalsy(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: not.toBeUndefined only",
+			content: `it("x", () => { expect(result).not.toBeUndefined(); });`,
+			want:    true,
+		},
+		{
+			name: "mixed weak: different weak matchers all still count as weak",
+			content: `it("a", () => { expect(x).toBeDefined(); });
+it("b", () => { expect(y).not.toBeNull(); });`,
+			want: true,
+		},
+		{
+			name: "weak followed by real assertion — NOT weak",
+			content: `it("renders", () => {
+  const result = foo();
+  expect(result).toBeDefined();
+  expect(result.name).toBe('hello');
+});`,
+			want: false,
+		},
+		{
+			name:    "toBe with non-placeholder value is a real assertion",
+			content: `it("x", () => { expect(result).toBe(42); });`,
+			want:    false,
+		},
+		{
+			name:    "toEqual with value is a real assertion",
+			content: `it("x", () => { expect(result).toEqual({ a: 1 }); });`,
+			want:    false,
+		},
+		{
+			name:    "toHaveBeenCalled is a real assertion",
+			content: `it("x", () => { const spy = jest.fn(); foo(spy); expect(spy).toHaveBeenCalled(); });`,
+			want:    false,
+		},
+		{
+			name: "real test with non-weak matcher",
 			content: `import { render } from "@testing-library/react";
-it("renders", () => { expect(screen.getByText("hi")).toBeTruthy(); });`,
+it("renders", () => { expect(screen.getByText("hi").textContent).toBe("hi"); });`,
 			want: false,
 		},
 		{

@@ -33,21 +33,51 @@ var walkSkipDirs = map[string]bool{
 }
 
 var (
-	stubExpectPattern = regexp.MustCompile(`expect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)`)
-	anyExpectPattern  = regexp.MustCompile(`\bexpect\s*\(`)
+	anyExpectPattern = regexp.MustCompile(`\bexpect\s*\(`)
+
+	// weakMatchers are matcher calls that by themselves assert nothing
+	// meaningful about behavior. A file where every expect() ends in one of
+	// these is a smoke test — it verifies the code didn't throw but doesn't
+	// test what it actually does. Inspired by real examples where agents
+	// wrote these to satisfy file-presence hooks without exercising the
+	// component's behavior.
+	//
+	// The existing expect(true).toBe(true) canonical stub is covered by
+	// its own pattern because it needs to match the whole call including
+	// the expect itself (the literal `true` argument is the signal, not
+	// just the matcher).
+	weakMatchers = []*regexp.Regexp{
+		// expect(true).toBe(true) — canonical placeholder
+		regexp.MustCompile(`expect\s*\(\s*true\s*\)\s*\.\s*toBe\s*\(\s*true\s*\)`),
+		// .toBeDefined() — only checks the thing returned something
+		regexp.MustCompile(`\.\s*toBeDefined\s*\(\s*\)`),
+		// .toBeTruthy() — rendered without crashing / testID query found something
+		regexp.MustCompile(`\.\s*toBeTruthy\s*\(\s*\)`),
+		// .toBeFalsy() — symmetric
+		regexp.MustCompile(`\.\s*toBeFalsy\s*\(\s*\)`),
+		// .not.toBeNull() — "render(...) didn't return null"
+		regexp.MustCompile(`\.\s*not\s*\.\s*toBeNull\s*\(\s*\)`),
+		// .not.toBeUndefined() — symmetric
+		regexp.MustCompile(`\.\s*not\s*\.\s*toBeUndefined\s*\(\s*\)`),
+	}
 )
 
-// IsStub reports whether every expect() call in content is the placeholder
-// form expect(true).toBe(true). Empty content and content with no expect()
-// calls are NOT stubs — a stub requires at least one placeholder assertion
-// AND every assertion being a placeholder.
+// IsStub reports whether every expect() call in content is a weak-only
+// placeholder assertion — either the canonical expect(true).toBe(true) or
+// a matcher from the weakMatchers family that asserts nothing about
+// behavior. Empty content and content with no expect() calls are NOT stubs.
+// Mixing a weak assertion with a real one in the same file keeps it out
+// of stub status.
 func IsStub(content string) bool {
-	stubMatches := stubExpectPattern.FindAllString(content, -1)
-	if len(stubMatches) == 0 {
+	weakTotal := 0
+	for _, p := range weakMatchers {
+		weakTotal += len(p.FindAllString(content, -1))
+	}
+	if weakTotal == 0 {
 		return false
 	}
 	expectMatches := anyExpectPattern.FindAllString(content, -1)
-	return len(expectMatches) == len(stubMatches)
+	return len(expectMatches) == weakTotal
 }
 
 // IsTestFile reports whether path is a test file this package considers for
