@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -49,6 +51,7 @@ func runTests(ctx TestRunContext) error {
 
 	var failedApps []string
 	var passedApps []string
+	failureCounts := make(map[string]int) // appName -> number of failed tests
 
 	for appName, appConfig := range appsToTest {
 		// Use custom test command if specified, otherwise default to "test"
@@ -77,6 +80,7 @@ func runTests(ctx TestRunContext) error {
 			writeTestReport(appName, output, err, reportDir)
 			if err != nil {
 				failedApps = append(failedApps, appName)
+				failureCounts[appName] = parseTestFailureCount(output)
 			} else {
 				passedApps = append(passedApps, appName)
 			}
@@ -92,7 +96,15 @@ func runTests(ctx TestRunContext) error {
 
 	if compactMode() {
 		if len(failedApps) > 0 {
-			printStatus("Tests", false, strings.Join(failedApps, ", ")+" failed")
+			parts := make([]string, len(failedApps))
+			for i, app := range failedApps {
+				if count, ok := failureCounts[app]; ok && count > 0 {
+					parts[i] = fmt.Sprintf("%s %d failed", app, count)
+				} else {
+					parts[i] = app + " failed"
+				}
+			}
+			printStatus("Tests", false, strings.Join(parts, ", "))
 			printReportHint("tests/")
 			return fmt.Errorf("%s tests failed", strings.Join(failedApps, ", "))
 		}
@@ -100,6 +112,26 @@ func runTests(ctx TestRunContext) error {
 	}
 
 	return nil
+}
+
+// testFailurePatterns matches the "Tests" summary line from both Vitest and Jest output.
+// Vitest: "Tests  111 failed | 3878 passed"
+// Jest:   "Tests:       4 failed, 965 passed, 969 total"
+var testFailurePatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)Tests[:\s]+(\d+)\s+failed`),
+}
+
+// parseTestFailureCount extracts the number of failed tests from test runner output.
+// Returns 0 if the count cannot be determined.
+func parseTestFailureCount(output string) int {
+	for _, re := range testFailurePatterns {
+		if m := re.FindStringSubmatch(output); len(m) > 1 {
+			if n, err := strconv.Atoi(m[1]); err == nil {
+				return n
+			}
+		}
+	}
+	return 0
 }
 
 // writeTestReport writes test output to a report file
