@@ -28,8 +28,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"github.com/milehighideas/claude-hooks/internal/schemachecks"
 )
 
 // ToolInput mirrors the Write / Edit tool payloads we care about.
@@ -46,135 +47,10 @@ type HookData struct {
 	ToolInput ToolInput `json:"tool_input"`
 }
 
-// isSchemaFile returns true when the path looks like a Convex schema file.
-// Supports the multiple layouts we've seen in practice:
-//
-//   - `.../convex/schema/<name>.ts`        (dashtag convention)
-//   - `.../backend/schema/<name>.ts`       (upc-me / mhi convention)
-//   - `.../schemas/<domain>/<name>.ts`     (camcoapp convention — plural)
-//   - basename `schema.ts` / `schema.tsx`  (single-file schema)
-//   - basename `*.schema.ts` / `*.schema.tsx`  (per-entity schema module)
-//
-// The match is intentionally broad — false positives end up with a zero
-// count (no `defineTable({...})` block, nothing to block) so the worst
-// case is wasted regex work on a handful of unrelated files.
-func isSchemaFile(filePath string) bool {
-	if filePath == "" {
-		return false
-	}
-	// Normalize Windows separators so the substring checks below work
-	// regardless of platform.
-	p := strings.ReplaceAll(filePath, `\`, "/")
-	if strings.Contains(p, "/schema/") || strings.Contains(p, "/schemas/") {
-		return true
-	}
-	base := filepath.Base(filePath)
-	if base == "schema.ts" || base == "schema.tsx" {
-		return true
-	}
-	if strings.HasSuffix(base, ".schema.ts") || strings.HasSuffix(base, ".schema.tsx") {
-		return true
-	}
-	return false
-}
-
-// defineTableBlockPattern matches `defineTable({` through the matching `})`.
-// Naive — doesn't handle strings containing literal braces — but schema
-// files are constrained enough that this is fine. We search balanced.
-var defineTableStart = regexp.MustCompile(`\bdefineTable\s*\(\s*\{`)
-
-// extractDefineTableBlocks returns the inner body of every defineTable({...})
-// block in the source. Bodies are returned in source order; if the source is
-// malformed (unbalanced braces), whatever we got is still returned.
-func extractDefineTableBlocks(src string) []string {
-	var blocks []string
-	rest := src
-	offset := 0
-	for {
-		loc := defineTableStart.FindStringIndex(rest)
-		if loc == nil {
-			break
-		}
-		// Position of the `{` that opens the object literal.
-		openBrace := offset + loc[1] - 1
-		depth := 0
-		closeAt := -1
-		for i := openBrace; i < len(src); i++ {
-			switch src[i] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-				if depth == 0 {
-					closeAt = i
-				}
-			}
-			if closeAt != -1 {
-				break
-			}
-		}
-		if closeAt == -1 {
-			break
-		}
-		blocks = append(blocks, src[openBrace+1:closeAt])
-		// Advance past this block.
-		offset = closeAt + 1
-		if offset >= len(src) {
-			break
-		}
-		rest = src[offset:]
-	}
-	return blocks
-}
-
-// createdAtPattern counts `createdAt:` field declarations anywhere in a
-// block. The `\b` word boundary keeps us from matching `notCreatedAt:` or
-// similar. Comments are stripped before matching, so commented-out entries
-// don't count.
-var createdAtPattern = regexp.MustCompile(`\bcreatedAt\s*:`)
-
-// countCreatedAtInDefineTable returns the number of `createdAt:` declarations
-// found inside any `defineTable({ ... })` block in src. Occurrences outside
-// defineTable are ignored — they're regular object literals / constants.
-func countCreatedAtInDefineTable(src string) int {
-	blocks := extractDefineTableBlocks(src)
-	total := 0
-	for _, b := range blocks {
-		total += len(createdAtPattern.FindAllString(stripComments(b), -1))
-	}
-	return total
-}
-
-// stripComments removes `// line` comments and `/* block */` comments so a
-// commented-out `createdAt:` inside a defineTable block isn't counted. This
-// is the cheap path; a real lexer would handle strings correctly, but schema
-// files don't have `createdAt:` literals inside strings.
-func stripComments(src string) string {
-	// Block comments first — simple greedy replace is safe because nested
-	// block comments aren't legal in TS.
-	for {
-		start := strings.Index(src, "/*")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(src[start:], "*/")
-		if end == -1 {
-			src = src[:start]
-			break
-		}
-		src = src[:start] + src[start+end+2:]
-	}
-	// Line comments.
-	var out strings.Builder
-	for _, line := range strings.Split(src, "\n") {
-		if idx := strings.Index(line, "//"); idx != -1 {
-			line = line[:idx]
-		}
-		out.WriteString(line)
-		out.WriteByte('\n')
-	}
-	return out.String()
-}
+// Schema-file detection and createdAt counting live in the shared
+// schemachecks package so this hook and the commit-time ratchet stay in
+// lockstep on detection rules (including exemption markers). See
+// internal/schemachecks/createdat.go for the full rule set.
 
 // resultingContent computes the file content that would exist after the tool
 // call completes. Write supplies content directly; Edit applies a single
@@ -251,14 +127,14 @@ func listViolations(roots []string, out io.Writer) (int, error) {
 				}
 				return nil
 			}
-			if !isSchemaFile(path) {
+			if !schemachecks.IsSchemaFile(path) {
 				return nil
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return nil
 			}
-			count := countCreatedAtInDefineTable(string(data))
+			count := schemachecks.CountCreatedAt(string(data))
 			if count > 0 {
 				fmt.Fprintf(out, "%s\t%d\n", path, count)
 				total++
@@ -305,7 +181,7 @@ func main() {
 	if data.ToolName != "Write" && data.ToolName != "Edit" {
 		os.Exit(0)
 	}
-	if !isSchemaFile(data.ToolInput.FilePath) {
+	if !schemachecks.IsSchemaFile(data.ToolInput.FilePath) {
 		os.Exit(0)
 	}
 
@@ -316,8 +192,8 @@ func main() {
 		os.Exit(0)
 	}
 
-	before := countCreatedAtInDefineTable(currentFileContent(data.ToolInput.FilePath))
-	after := countCreatedAtInDefineTable(resulting)
+	before := schemachecks.CountCreatedAt(currentFileContent(data.ToolInput.FilePath))
+	after := schemachecks.CountCreatedAt(resulting)
 
 	if after > before {
 		fmt.Fprintf(os.Stderr, `BLOCKED: Redundant createdAt field in defineTable
@@ -335,6 +211,12 @@ Use `+"`"+`row._creationTime`+"`"+` in queries and sort via the `+"`"+`by_creati
 index instead. If you need a semantically different timestamp (e.g. when
 the record was ACTIVATED, not inserted), rename the field to reflect
 that meaning: `+"`"+`activatedAt`+"`"+`, `+"`"+`publishedAt`+"`"+`, `+"`"+`verifiedAt`+"`"+`.
+
+Legacy/transitional exemption: a `+"`"+`createdAt: v.optional(...)`+"`"+` field marked
+with either an inline `+"`"+`// hooks-allow: redundant-createdat`+"`"+` comment or a
+preceding `+"`"+`/** @deprecated ... */`+"`"+` JSDoc block is allowed. This lets you
+widen a required column to optional during a widen-migrate-narrow cleanup
+without the hook blocking the transitional state.
 
 To bypass (not recommended): set CLAUDE_HOOKS_AST_VALIDATION=false
 `, data.ToolInput.FilePath, before, after)

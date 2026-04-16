@@ -737,3 +737,227 @@ func TestWriteHookOutput(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckEmptySkipBlocks_Blocks(t *testing.T) {
+	tests := []struct {
+		name          string
+		text          string
+		filePath      string
+		expectedLabel string
+	}{
+		{
+			name:          "it.skip with empty arrow body",
+			text:          `it.skip("validates input", () => {});`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "test.skip with async empty arrow body",
+			text:          `test.skip("validates input", async () => {});`,
+			filePath:      "src/foo.test.tsx",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "it.skip with function expression empty body",
+			text:          `it.skip("validates input", function () {});`,
+			filePath:      "src/foo.test.js",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "it.skip with no body (pending form)",
+			text:          `it.skip("not yet implemented");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: ".skip() with no body",
+		},
+		{
+			name:          "test.skip with no body",
+			text:          `test.skip("not yet implemented");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: ".skip() with no body",
+		},
+		{
+			name:          "it.todo placeholder",
+			text:          `it.todo("flesh this out later");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: ".todo() placeholder",
+		},
+		{
+			name:          "test.todo placeholder",
+			text:          `test.todo("flesh this out later");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: ".todo() placeholder",
+		},
+		{
+			name:          "xit with no body",
+			text:          `xit("temporarily skipped");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "x-prefix pending test/suite",
+		},
+		{
+			name:          "xtest with empty arrow body",
+			text:          `xtest("temporarily skipped", () => {});`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "single-quoted skip name",
+			text:          `it.skip('validates input', () => {});`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "backtick-quoted skip name",
+			text:          "it.skip(`validates input`, () => {});",
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "multi-line empty arrow body still flagged",
+			text:          "it.skip('validates input', () => {\n  \n});",
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "spec file extension also covered",
+			text:          `it.skip("validates input", () => {});`,
+			filePath:      "src/foo.spec.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "describe.skip with empty arrow body",
+			text:          `describe.skip("suite", () => {});`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+		{
+			name:          "describe.skip with no body (pending form)",
+			text:          `describe.skip("not yet implemented");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: ".skip() with no body",
+		},
+		{
+			name:          "xdescribe with no body",
+			text:          `xdescribe("temporarily skipped");`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "x-prefix pending test/suite",
+		},
+		{
+			name:          "xdescribe with empty arrow body",
+			text:          `xdescribe("temporarily skipped", () => {});`,
+			filePath:      "src/foo.test.ts",
+			expectedLabel: "empty test/suite body",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := checkEmptySkipBlocks(tt.text, tt.filePath)
+			if output == nil {
+				t.Fatal("expected block decision, got nil")
+			}
+			if output.Decision != "block" {
+				t.Errorf("expected block, got %s", output.Decision)
+			}
+			if !strings.Contains(output.Reason, "BLOCKED: Empty placeholder test detected") {
+				t.Errorf("expected standard block message, got: %s", output.Reason)
+			}
+			if !strings.Contains(output.Reason, tt.expectedLabel) {
+				t.Errorf("expected reason to mention label %q, got: %s",
+					tt.expectedLabel, output.Reason)
+			}
+		})
+	}
+}
+
+func TestCheckEmptySkipBlocks_Allows(t *testing.T) {
+	tests := []struct {
+		name     string
+		text     string
+		filePath string
+	}{
+		{
+			name:     "non-test file is ignored",
+			text:     `it.skip("foo", () => {});`,
+			filePath: "src/foo.ts",
+		},
+		{
+			name:     "empty file path is ignored",
+			text:     `it.skip("foo", () => {});`,
+			filePath: "",
+		},
+		{
+			name: "skipped test with a real body",
+			text: `it.skip("flaky in CI", () => {
+				const result = doThing();
+				expect(result).toBe(42);
+			});`,
+			filePath: "src/foo.test.ts",
+		},
+		{
+			name: "regular passing test",
+			text: `it("validates input", () => {
+				expect(1).toBe(1);
+			});`,
+			filePath: "src/foo.test.ts",
+		},
+		{
+			name: "describe.skip wrapping real tests is allowed",
+			text: `describe.skip("suite", () => {
+				it("does the thing", () => {
+					expect(real()).toBe(42);
+				});
+			});`,
+			filePath: "src/foo.test.ts",
+		},
+		{
+			name:     "function literally named skip in product code",
+			text:     `function skip() { return null; }`,
+			filePath: "src/foo.test.ts",
+		},
+		{
+			name: "skipped test with a single expect is fine",
+			text: `it.skip("foo", () => {
+				expect(true).toBe(true);
+			});`,
+			filePath: "src/foo.test.ts",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			output := checkEmptySkipBlocks(tt.text, tt.filePath)
+			if output != nil {
+				t.Errorf("expected no block, got: %s", output.Reason)
+			}
+		})
+	}
+}
+
+func TestIsTestFilePath(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"foo.test.ts", true},
+		{"foo.test.tsx", true},
+		{"foo.test.js", true},
+		{"foo.test.jsx", true},
+		{"foo.spec.ts", true},
+		{"foo.spec.tsx", true},
+		{"foo.spec.js", true},
+		{"foo.spec.jsx", true},
+		{"path/to/foo.test.ts", true},
+		{"foo.ts", false},
+		{"foo.tsx", false},
+		{"foo.testing.ts", false},
+		{"", false},
+		{"test.ts", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := isTestFilePath(tt.path); got != tt.want {
+				t.Errorf("isTestFilePath(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}

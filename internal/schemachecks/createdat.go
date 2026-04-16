@@ -45,8 +45,13 @@ var defineTableStart = regexp.MustCompile(`\bdefineTable\s*\(\s*\{`)
 
 // createdAtPattern counts `createdAt:` field declarations anywhere in a
 // block. `\b` keeps us from matching `notCreatedAt:` or similar. Comments
-// are stripped by the caller before matching.
+// are blanked by the caller before matching.
 var createdAtPattern = regexp.MustCompile(`\bcreatedAt\s*:`)
+
+// hooksAllowMarker is the inline opt-out comment for a transitional/legacy
+// createdAt field. Placed as `// hooks-allow: redundant-createdat` on the
+// same line as the declaration. Mirrors the eslint-disable-next-line style.
+const hooksAllowMarker = "hooks-allow: redundant-createdat"
 
 // IsSchemaFile reports whether path looks like a Convex schema file.
 // Supports the multiple layouts seen in practice:
@@ -121,17 +126,126 @@ func DefineTableBlocks(src string) []string {
 	return blocks
 }
 
-// CountCreatedAt returns the number of `createdAt:` declarations found
-// inside any `defineTable({...})` block in src. Occurrences outside
+// CountCreatedAt returns the number of non-exempt `createdAt:` declarations
+// found inside any `defineTable({...})` block in src. Occurrences outside
 // defineTable are ignored — they're regular object literals or constants.
-// Comments are stripped before matching so commented-out entries don't count.
+// Comments are blanked before matching so commented-out entries don't count.
+//
+// A `createdAt:` declaration is EXEMPT (not counted) when BOTH hold:
+//  1. The field is wrapped in v.optional(...) on the same line.
+//  2. One of the following intent markers is present:
+//     - an inline `// hooks-allow: redundant-createdat` comment on the same line, OR
+//     - a preceding JSDoc block (/** ... */) containing `@deprecated`.
+//
+// This lets schemas grandfather legacy createdAt columns during widen-migrate-narrow
+// without silently defeating the rule: a bare v.optional() is still flagged, so
+// new columns can't slip through.
 func CountCreatedAt(src string) int {
 	blocks := DefineTableBlocks(src)
 	total := 0
 	for _, b := range blocks {
-		total += len(createdAtPattern.FindAllString(stripComments(b), -1))
+		total += countNonExemptCreatedAt(b)
 	}
 	return total
+}
+
+// countNonExemptCreatedAt counts createdAt occurrences in a block body that
+// aren't inside a comment and aren't covered by an exemption marker.
+func countNonExemptCreatedAt(block string) int {
+	// Blank comments so createdAt: inside a comment doesn't match, but keep
+	// the original block around for exemption inspection (the exemption
+	// markers LIVE in comments).
+	blanked := blankComments(block)
+	count := 0
+	for _, loc := range createdAtPattern.FindAllStringIndex(blanked, -1) {
+		if !isExemptCreatedAt(block, loc[0]) {
+			count++
+		}
+	}
+	return count
+}
+
+// isExemptCreatedAt reports whether the createdAt: occurrence at byte position
+// pos in block is exempt from the redundancy rule. See CountCreatedAt for the
+// full exemption rules.
+func isExemptCreatedAt(block string, pos int) bool {
+	lineStart := 0
+	if nl := strings.LastIndexByte(block[:pos], '\n'); nl != -1 {
+		lineStart = nl + 1
+	}
+	lineEnd := len(block)
+	if nl := strings.IndexByte(block[pos:], '\n'); nl != -1 {
+		lineEnd = pos + nl
+	}
+	line := block[lineStart:lineEnd]
+
+	// Structural requirement: wrapped in v.optional(...)
+	if !strings.Contains(line, "v.optional(") {
+		return false
+	}
+
+	// Intent marker 1: inline hooks-allow comment on same line
+	if strings.Contains(line, hooksAllowMarker) {
+		return true
+	}
+
+	// Intent marker 2: preceding JSDoc block containing @deprecated
+	return hasPrecedingDeprecatedJSDoc(block, lineStart)
+}
+
+// hasPrecedingDeprecatedJSDoc reports whether the code immediately preceding
+// lineStart (ignoring whitespace) is a JSDoc block `/** ... */` containing the
+// `@deprecated` tag. A plain `/* */` block is not accepted — JSDoc requires
+// the double-star opener. Must be directly preceding: any intervening code
+// breaks the association.
+func hasPrecedingDeprecatedJSDoc(block string, lineStart int) bool {
+	trimmed := strings.TrimRight(block[:lineStart], " \t\n\r")
+	if !strings.HasSuffix(trimmed, "*/") {
+		return false
+	}
+	jsdocStart := strings.LastIndex(trimmed, "/**")
+	if jsdocStart == -1 {
+		return false
+	}
+	jsdocBody := trimmed[jsdocStart : len(trimmed)-2]
+	return strings.Contains(jsdocBody, "@deprecated")
+}
+
+// blankComments replaces comment characters in src with spaces (preserving
+// newlines) so positions in the returned string map 1:1 to positions in src.
+// Line and block comments only — string literals are not tracked because
+// Convex schema files don't embed `createdAt:` in strings.
+func blankComments(src string) string {
+	b := []byte(src)
+	i := 0
+	for i < len(b) {
+		if i+1 < len(b) && b[i] == '/' && b[i+1] == '*' {
+			end := i + 2
+			for end+1 < len(b) && !(b[end] == '*' && b[end+1] == '/') {
+				end++
+			}
+			closeEnd := end + 2
+			if closeEnd > len(b) {
+				closeEnd = len(b)
+			}
+			for j := i; j < closeEnd; j++ {
+				if b[j] != '\n' {
+					b[j] = ' '
+				}
+			}
+			i = closeEnd
+			continue
+		}
+		if i+1 < len(b) && b[i] == '/' && b[i+1] == '/' {
+			for i < len(b) && b[i] != '\n' {
+				b[i] = ' '
+				i++
+			}
+			continue
+		}
+		i++
+	}
+	return string(b)
 }
 
 // HasRedundantCreatedAt reports whether src contains any `createdAt:` fields
@@ -139,36 +253,6 @@ func CountCreatedAt(src string) int {
 // need the count should use CountCreatedAt directly.
 func HasRedundantCreatedAt(src string) bool {
 	return CountCreatedAt(src) > 0
-}
-
-// stripComments removes `// line` and `/* block */` comments. The cheap
-// path — a real lexer would handle strings correctly, but Convex schema
-// files don't have `createdAt:` literals inside strings.
-func stripComments(src string) string {
-	// Block comments first; TS disallows nested block comments, so a greedy
-	// single-pass replace is safe.
-	for {
-		start := strings.Index(src, "/*")
-		if start == -1 {
-			break
-		}
-		end := strings.Index(src[start:], "*/")
-		if end == -1 {
-			src = src[:start]
-			break
-		}
-		src = src[:start] + src[start+end+2:]
-	}
-	// Line comments.
-	var out strings.Builder
-	for _, line := range strings.Split(src, "\n") {
-		if idx := strings.Index(line, "//"); idx != -1 {
-			line = line[:idx]
-		}
-		out.WriteString(line)
-		out.WriteByte('\n')
-	}
-	return out.String()
 }
 
 // List walks root for Convex schema files and prints the path of each file

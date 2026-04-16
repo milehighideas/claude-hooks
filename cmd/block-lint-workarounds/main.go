@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 )
 
 // HookInput represents the JSON input from stdin
@@ -103,6 +104,16 @@ func processHook(input *HookInput) *HookOutput {
 
 	// Check for TypeScript suppression comments (warn only)
 	if output := checkTSIgnore(text); output != nil {
+		return output
+	}
+
+	// Check for empty .skip()/.todo() bodies in test files — the common
+	// workaround for the eslint-plugin-vitest/warn-todo rule where an
+	// agent converts `it.todo("…")` into `it.skip("…", () => {})` to
+	// satisfy the lint rule without writing the test. Only checked in
+	// test files so production code that names something `skip` is
+	// unaffected.
+	if output := checkEmptySkipBlocks(text, filePath); output != nil {
 		return output
 	}
 
@@ -205,6 +216,124 @@ Do not add eslint-disable comments to suppress errors.
 Instead, fix the underlying issue:
 - Remove unused imports/variables
 - Fix the code properly`, match),
+			}
+		}
+	}
+
+	return nil
+}
+
+// isTestFilePath reports whether the file is a unit-test file we should
+// scan for empty .skip / .todo placeholder bodies. We only target the
+// canonical extensions used by Jest/Vitest projects so production code
+// that happens to name a function `skip` is left alone.
+func isTestFilePath(filePath string) bool {
+	if filePath == "" {
+		return false
+	}
+	suffixes := []string{".test.ts", ".test.tsx", ".test.js", ".test.jsx",
+		".spec.ts", ".spec.tsx", ".spec.js", ".spec.jsx"}
+	for _, s := range suffixes {
+		if strings.HasSuffix(filePath, s) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkEmptySkipBlocks blocks the .todo()→.skip(empty body) workaround
+// that bypasses eslint-plugin-vitest/warn-todo (and equivalents). The
+// patterns covered:
+//
+//   - it.skip("…", () => {})              // empty arrow body
+//   - test.skip("…", async () => {})      // empty async arrow body
+//   - it.skip("…", function () {})        // empty function expression
+//   - it.skip("…")                        // pending-test form (no body)
+//   - it.todo("…")                        // todo form (the original
+//                                         //   anti-pattern, same intent)
+//   - xit("…", () => {}) / xtest("…", () => {})   // legacy x-prefix variants
+//   - xit("…") / xtest("…")               // legacy pending form
+//   - describe.skip("…", () => {})        // empty suite body — same
+//   - xdescribe("…", () => {})            //   pattern at the suite level
+//
+// `describe.skip("…", () => { /* real test cases */ })` is allowed:
+// disabling a whole real suite during an outage is legitimate, and the
+// gate only fires on EMPTY bodies. Same rule as it.skip — keep the
+// content, drop the placeholder.
+//
+// Only runs on .test.* / .spec.* files so a shipping module that
+// declares a `skip` function won't ever hit this gate.
+func checkEmptySkipBlocks(text, filePath string) *HookOutput {
+	if !isTestFilePath(filePath) {
+		return nil
+	}
+
+	type emptySkipPattern struct {
+		Regex *regexp.Regexp
+		Label string
+	}
+
+	patterns := []emptySkipPattern{
+		// (it|test|describe).skip("…", () => {}) | async () => {} |
+		// function () {} — and the legacy x-prefix variants.
+		{
+			Regex: regexp.MustCompile(
+				`\b(?:x?it|x?test|x?describe)(?:\.skip)?\s*\(\s*` +
+					"[`'\"][^`'\"]+[`'\"]" +
+					`\s*,\s*(?:async\s+)?(?:\(\s*\)|function\s*\(\s*\))\s*(?:=>\s*)?\{\s*\}\s*\)`),
+			Label: "empty test/suite body",
+		},
+		// it.skip("…") / test.skip("…") / describe.skip("…") with no
+		// callback (pending-test form). Same anti-pattern as .todo().
+		{
+			Regex: regexp.MustCompile(
+				`\b(?:it|test|describe)\.skip\s*\(\s*` +
+					"[`'\"][^`'\"]+[`'\"]" +
+					`\s*\)`),
+			Label: ".skip() with no body",
+		},
+		// it.todo("…") — same intent as the workaround and frequently
+		// flagged by warn-todo lint rules.
+		{
+			Regex: regexp.MustCompile(
+				`\b(?:it|test)\.todo\s*\(\s*` +
+					"[`'\"][^`'\"]+[`'\"]" +
+					`\s*\)`),
+			Label: ".todo() placeholder",
+		},
+		// xit("…") / xtest("…") / xdescribe("…") with no body.
+		{
+			Regex: regexp.MustCompile(
+				`\b(?:xit|xtest|xdescribe)\s*\(\s*` +
+					"[`'\"][^`'\"]+[`'\"]" +
+					`\s*\)`),
+			Label: "x-prefix pending test/suite",
+		},
+	}
+
+	for _, p := range patterns {
+		if match := p.Regex.FindString(text); match != "" {
+			return &HookOutput{
+				Decision: "block",
+				Reason: fmt.Sprintf(`BLOCKED: Empty placeholder test detected (%s)
+
+Found: %s
+
+This is the .todo()→empty .skip() workaround. The eslint-plugin-vitest/
+warn-todo rule (and equivalents) blocks .todo() because it marks intent
+without writing the test; converting it to an empty .skip() body or a
+no-callback .skip("…") form is the same pattern in disguise — the test
+still does nothing.
+
+Either:
+  1. Write a real test body. Even one expect() that exercises one
+     observable behavior is enough.
+  2. If you genuinely need to disable a real test (flaky third-party,
+     temporary outage), keep the actual test code inside .skip() — the
+     gate only fires on EMPTY bodies, not skipped real tests.
+  3. If you have a list of "tests-to-write" markers, put them in a
+     comment block at the top of the file rather than as in-test
+     placeholders that fake coverage.`, p.Label, match),
 			}
 		}
 	}

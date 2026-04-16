@@ -91,6 +91,75 @@ defineTable({
 const helper = { createdAt: v.number() };
 defineTable({ name: v.string() });
 `, 0},
+		// Exemption: v.optional(...) + preceding @deprecated JSDoc
+		{"exempt: optional + JSDoc @deprecated (single-line)", `
+defineTable({
+  /** @deprecated use _creationTime */
+  createdAt: v.optional(v.string()),
+  name: v.string(),
+});
+`, 0},
+		{"exempt: optional + JSDoc @deprecated (multi-line)", `
+defineTable({
+  /**
+   * @deprecated use _creationTime.
+   * Kept optional for legacy rows.
+   */
+  createdAt: v.optional(v.string()),
+});
+`, 0},
+		// Exemption: v.optional(...) + inline hooks-allow marker
+		{"exempt: optional + inline hooks-allow line comment", `
+defineTable({
+  createdAt: v.optional(v.string()), // hooks-allow: redundant-createdat
+});
+`, 0},
+		{"exempt: optional + inline hooks-allow block comment", `
+defineTable({
+  createdAt: v.optional(v.string()), /* hooks-allow: redundant-createdat */
+});
+`, 0},
+		// Non-exemptions: one signal missing is still a violation.
+		{"not exempt: optional without any intent marker", `
+defineTable({
+  createdAt: v.optional(v.string()),
+});
+`, 1},
+		{"not exempt: @deprecated on a required (non-optional) field", `
+defineTable({
+  /** @deprecated use _creationTime */
+  createdAt: v.string(),
+});
+`, 1},
+		{"not exempt: JSDoc without @deprecated tag", `
+defineTable({
+  /** legacy field */
+  createdAt: v.optional(v.string()),
+});
+`, 1},
+		{"not exempt: @deprecated separated by another field", `
+defineTable({
+  /** @deprecated use _creationTime */
+  otherField: v.string(),
+  createdAt: v.optional(v.string()),
+});
+`, 1},
+		{"not exempt: plain /* */ block comment (not JSDoc)", `
+defineTable({
+  /* @deprecated use _creationTime */
+  createdAt: v.optional(v.string()),
+});
+`, 1},
+		// Two createdAts, one exempt, one not → count is 1.
+		{"mixed: exempt + non-exempt in same table", `
+defineTable({
+  /** @deprecated */
+  createdAt: v.optional(v.string()),
+});
+defineTable({
+  createdAt: v.number(),
+});
+`, 1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

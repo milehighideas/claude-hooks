@@ -6,169 +6,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/milehighideas/claude-hooks/internal/schemachecks"
 )
 
-func TestIsSchemaFile(t *testing.T) {
-	tests := []struct {
-		name string
-		path string
-		want bool
-	}{
-		// dashtag layout
-		{"convex schema dir", "/repo/packages/backend/convex/schema/users.ts", true},
-		{"convex schema dir nested", "/repo/packages/backend/convex/schema/events/core.ts", true},
-		{"single-file schema.ts", "/repo/packages/backend/convex/schema.ts", true},
-		{"single-file schema.tsx", "/repo/packages/backend/convex/schema.tsx", true},
-		// upc-me layout: /schema/ at an arbitrary depth
-		{"backend/schema dir", "/repo/packages/backend/schema/apiUsageLogs.ts", true},
-		// camcoapp layout: /schemas/<domain>/<name>.schema.ts
-		{"schemas plural dir", "/repo/packages/convex/convex/schemas/customers/customers.schema.ts", true},
-		{"per-entity schema suffix", "/repo/packages/foo/customers.schema.ts", true},
-		{"per-entity schema suffix tsx", "/repo/packages/foo/customers.schema.tsx", true},
-		// Negatives
-		{"unrelated convex file", "/repo/packages/backend/convex/users/usersQueries.ts", false},
-		{"components dir", "/repo/apps/story/components/Foo.tsx", false},
-		{"empty", "", false},
-		// Windows separators
-		{"windows schema dir", `C:\repo\packages\backend\convex\schema\users.ts`, true},
-		{"windows per-entity schema", `C:\repo\pkg\foo.schema.ts`, true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isSchemaFile(tt.path); got != tt.want {
-				t.Errorf("isSchemaFile(%q) = %v, want %v", tt.path, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestExtractDefineTableBlocks(t *testing.T) {
-	src := `
-export const users = defineTable({
-  email: v.string(),
-  name: v.string(),
-});
-
-const helper = { foo: "bar" };
-
-export const posts = defineTable({
-  userId: v.id("users"),
-  title: v.string(),
-});
-`
-	blocks := extractDefineTableBlocks(src)
-	if len(blocks) != 2 {
-		t.Fatalf("want 2 blocks, got %d", len(blocks))
-	}
-	if !contains(blocks[0], "email: v.string()") {
-		t.Errorf("block 0 missing email field: %q", blocks[0])
-	}
-	if !contains(blocks[1], `userId: v.id("users")`) {
-		t.Errorf("block 1 missing userId field: %q", blocks[1])
-	}
-}
-
-func TestExtractDefineTableBlocks_NestedObjects(t *testing.T) {
-	// defineTable blocks can contain nested objects (v.object, v.union, etc).
-	// The brace-depth walker must not stop at the first inner `}`.
-	src := `
-defineTable({
-  metadata: v.object({
-    nested: v.string(),
-    deeper: v.object({ x: v.number() }),
-  }),
-  status: v.string(),
-});
-`
-	blocks := extractDefineTableBlocks(src)
-	if len(blocks) != 1 {
-		t.Fatalf("want 1 block, got %d", len(blocks))
-	}
-	// The block must contain both the outer fields and the nested objects.
-	if !contains(blocks[0], "metadata:") ||
-		!contains(blocks[0], "status:") ||
-		!contains(blocks[0], "deeper:") {
-		t.Errorf("block missing expected fields: %q", blocks[0])
-	}
-}
-
-func TestCountCreatedAtInDefineTable(t *testing.T) {
-	tests := []struct {
-		name string
-		src  string
-		want int
-	}{
-		{
-			name: "no defineTable at all",
-			src:  `const foo = { createdAt: v.number() };`,
-			want: 0,
-		},
-		{
-			name: "createdAt outside defineTable",
-			src: `
-const foo = { createdAt: v.number() };
-defineTable({ name: v.string() });
-`,
-			want: 0,
-		},
-		{
-			name: "one createdAt inside defineTable",
-			src: `
-defineTable({
-  name: v.string(),
-  createdAt: v.number(),
-});
-`,
-			want: 1,
-		},
-		{
-			name: "two tables each with createdAt",
-			src: `
-defineTable({ createdAt: v.number(), name: v.string() });
-defineTable({ createdAt: v.string(), slug: v.string() });
-`,
-			want: 2,
-		},
-		{
-			name: "createdAt in comment is ignored",
-			src: `
-defineTable({
-  // createdAt: v.number(),  — removed in favor of _creationTime
-  name: v.string(),
-});
-`,
-			want: 0,
-		},
-		{
-			name: "createdAt in block comment is ignored",
-			src: `
-defineTable({
-  /*
-   * createdAt: v.number()
-   */
-  name: v.string(),
-});
-`,
-			want: 0,
-		},
-		{
-			name: "whitespace variations still matched",
-			src: `
-defineTable({
-    createdAt   :   v.number(),
-});
-`,
-			want: 1,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := countCreatedAtInDefineTable(tt.src); got != tt.want {
-				t.Errorf("got %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
+// Schema-file detection and defineTable parsing are thoroughly tested in
+// internal/schemachecks/createdat_test.go. Tests here cover main-specific
+// behavior: tool-payload handling, env-var gating, and the violation walker.
 
 func TestResultingContent(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -218,8 +62,8 @@ func TestResultingContent(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "Unknown tool errors",
-			data: HookData{ToolName: "Read"},
+			name:    "Unknown tool errors",
+			data:    HookData{ToolName: "Read"},
 			wantErr: true,
 		},
 	}
@@ -241,52 +85,78 @@ func TestBlockingDecision(t *testing.T) {
 	// End-to-end behavior: when after > before, the caller should block.
 	// We exercise the calculation directly since main() calls os.Exit.
 	tests := []struct {
-		name  string
-		before string
-		after  string
+		name    string
+		before  string
+		after   string
 		blocked bool
 	}{
 		{
-			name: "adding a new createdAt blocks",
-			before: `defineTable({ name: v.string() });`,
-			after:  `defineTable({ name: v.string(), createdAt: v.number() });`,
+			name:    "adding a new createdAt blocks",
+			before:  `defineTable({ name: v.string() });`,
+			after:   `defineTable({ name: v.string(), createdAt: v.number() });`,
 			blocked: true,
 		},
 		{
-			name: "keeping the same createdAt allows",
-			before: `defineTable({ name: v.string(), createdAt: v.number() });`,
-			after:  `defineTable({ name: v.string(), createdAt: v.number(), extra: v.string() });`,
+			name:    "keeping the same createdAt allows",
+			before:  `defineTable({ name: v.string(), createdAt: v.number() });`,
+			after:   `defineTable({ name: v.string(), createdAt: v.number(), extra: v.string() });`,
 			blocked: false,
 		},
 		{
-			name: "removing createdAt allows",
-			before: `defineTable({ createdAt: v.number(), name: v.string() });`,
-			after:  `defineTable({ name: v.string() });`,
+			name:    "removing createdAt allows",
+			before:  `defineTable({ createdAt: v.number(), name: v.string() });`,
+			after:   `defineTable({ name: v.string() });`,
 			blocked: false,
 		},
 		{
-			name: "renaming createdAt to activatedAt allows",
-			before: `defineTable({ createdAt: v.number() });`,
-			after:  `defineTable({ activatedAt: v.number() });`,
+			name:    "renaming createdAt to activatedAt allows",
+			before:  `defineTable({ createdAt: v.number() });`,
+			after:   `defineTable({ activatedAt: v.number() });`,
 			blocked: false,
 		},
 		{
-			name: "new file introducing a fresh createdAt blocks",
-			before: ``,
-			after:  `defineTable({ createdAt: v.number() });`,
+			name:    "new file introducing a fresh createdAt blocks",
+			before:  ``,
+			after:   `defineTable({ createdAt: v.number() });`,
 			blocked: true,
 		},
 		{
-			name: "empty file, empty edit — no change allows",
-			before: ``,
-			after:  ``,
+			name:    "empty file, empty edit — no change allows",
+			before:  ``,
+			after:   ``,
 			blocked: false,
+		},
+		{
+			// Widen-to-optional with @deprecated JSDoc is exempt, so the count
+			// doesn't increase and the edit is allowed.
+			name:   "widening required createdAt to optional+@deprecated allows",
+			before: `defineTable({ createdAt: v.string(), name: v.string() });`,
+			after: `defineTable({
+  /** @deprecated use _creationTime */
+  createdAt: v.optional(v.string()),
+  name: v.string(),
+});`,
+			blocked: false,
+		},
+		{
+			// Inline hooks-allow marker is equally valid as an opt-out.
+			name:    "adding optional createdAt with hooks-allow marker allows",
+			before:  `defineTable({ name: v.string() });`,
+			after:   `defineTable({ createdAt: v.optional(v.string()), /* hooks-allow: redundant-createdat */ name: v.string() });`,
+			blocked: false,
+		},
+		{
+			// Bare v.optional() without an intent marker is still flagged.
+			name:    "bare optional createdAt without marker still blocks",
+			before:  `defineTable({ name: v.string() });`,
+			after:   `defineTable({ createdAt: v.optional(v.string()), name: v.string() });`,
+			blocked: true,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			b := countCreatedAtInDefineTable(tt.before)
-			a := countCreatedAtInDefineTable(tt.after)
+			b := schemachecks.CountCreatedAt(tt.before)
+			a := schemachecks.CountCreatedAt(tt.after)
 			blocked := a > b
 			if blocked != tt.blocked {
 				t.Errorf("before=%d after=%d → blocked=%v, want %v", b, a, blocked, tt.blocked)
@@ -319,17 +189,6 @@ func TestCheckDisabled(t *testing.T) {
 	}
 }
 
-// contains is a tiny helper so tests don't need to import strings for a
-// single call.
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
-}
-
 func TestListViolations(t *testing.T) {
 	tmpDir := t.TempDir()
 
@@ -353,6 +212,15 @@ defineTable({ createdAt: v.number() });
 defineTable({ createdAt: v.string(), slug: v.string() });
 `), 0644); err != nil {
 		t.Fatalf("write dirty2: %v", err)
+	}
+	// File with exempt createdAt — should NOT be flagged.
+	exempt := filepath.Join(schemaDir, "exempt.ts")
+	if err := os.WriteFile(exempt, []byte(`defineTable({
+  /** @deprecated use _creationTime */
+  createdAt: v.optional(v.string()),
+  name: v.string(),
+});`), 0644); err != nil {
+		t.Fatalf("write exempt: %v", err)
 	}
 
 	// Non-schema file at the same level — must be skipped.
@@ -387,6 +255,9 @@ defineTable({ createdAt: v.string(), slug: v.string() });
 	}
 	if strings.Contains(output, "clean.ts") {
 		t.Errorf("clean.ts should not appear in output:\n%s", output)
+	}
+	if strings.Contains(output, "exempt.ts") {
+		t.Errorf("exempt.ts (with @deprecated marker) should not appear in output:\n%s", output)
 	}
 	if strings.Contains(output, "node_modules") {
 		t.Errorf("node_modules should be skipped:\n%s", output)
