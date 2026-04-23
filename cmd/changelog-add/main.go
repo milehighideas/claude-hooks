@@ -360,8 +360,13 @@ func main() {
 	var appName string
 	var appPath string
 
-	// --global flag always overrides config mode
+	// --global flag overrides config mode, but not when mode is "required"
 	if *globalFlag {
+		if mode == "required" {
+			fmt.Fprintln(os.Stderr, "Error: --global is not allowed when changelog mode is 'required'")
+			fmt.Fprintln(os.Stderr, "Use --app <name> to specify the target app instead.")
+			os.Exit(1)
+		}
 		appName = ""
 		appPath = ""
 	} else {

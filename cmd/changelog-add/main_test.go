@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -849,12 +850,11 @@ func TestChangelogModes(t *testing.T) {
 			wantAppPath: "",
 		},
 		{
-			name:        "global flag overrides required mode",
-			mode:        "required",
-			scope:       "native",
-			globalFlag:  true,
-			wantAppName: "",
-			wantAppPath: "",
+			name:       "global flag is rejected in required mode",
+			mode:       "required",
+			scope:      "native",
+			globalFlag: true,
+			wantErr:    true,
 		},
 	}
 
@@ -864,8 +864,12 @@ func TestChangelogModes(t *testing.T) {
 			var err error
 
 			if tt.globalFlag {
-				appName = ""
-				appPath = ""
+				if tt.mode == "required" {
+					err = fmt.Errorf("--global is not allowed when changelog mode is 'required'")
+				} else {
+					appName = ""
+					appPath = ""
+				}
 			} else {
 				switch tt.mode {
 				case "global":
