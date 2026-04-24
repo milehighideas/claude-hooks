@@ -5,7 +5,7 @@ default:
     @just --list
 
 # Build all binaries
-build: check-workspace auto-convex-gen auto-tiers-gen block-destructive-commands block-generated-files block-infrastructure block-lint-workarounds block-redundant-createdat changelog-add convex-gen docs-tracker enforce-tests-on-commit format-on-save markdown-formatter pre-commit smart-lint smart-test track-edited-files validate-frontend-structure validate-srp validate-test-files
+build: check-workspace auto-convex-gen auto-tiers-gen block-destructive-commands block-generated-files block-infrastructure block-lint-workarounds block-pre-commit-exceptions block-redundant-createdat changelog-add convex-gen docs-tracker enforce-tests-on-commit format-on-save markdown-formatter pre-commit smart-lint smart-test track-edited-files validate-frontend-structure validate-srp validate-test-files
 
 # Fail if any executable exists at the repo root with the same name as a cmd/*/ subdir.
 # These get created when someone runs `go build ./cmd/<name>` from the repo root without -o,
@@ -52,6 +52,9 @@ block-infrastructure:
 
 block-lint-workarounds:
     go build -o {{bindir}}/block-lint-workarounds ./cmd/block-lint-workarounds
+
+block-pre-commit-exceptions:
+    go build -o {{bindir}}/block-pre-commit-exceptions ./cmd/block-pre-commit-exceptions
 
 block-redundant-createdat:
     go build -o {{bindir}}/block-redundant-createdat ./cmd/block-redundant-createdat
