@@ -57,6 +57,39 @@ it("b", () => { expect(true).toBe(true); });`,
 			want:    true,
 		},
 		{
+			name:    "weak: toBeOnTheScreen only (getByText pattern)",
+			content: `it("renders", () => { render(<X/>); expect(screen.getByText('foo')).toBeOnTheScreen(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: toBeInTheDocument only (getByText pattern)",
+			content: `it("renders", () => { render(<X/>); expect(screen.getByText('foo')).toBeInTheDocument(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: toBeOnTheScreen with whitespace variation",
+			content: `it("x", () => { expect( getByText('foo') ) . toBeOnTheScreen( ); });`,
+			want:    true,
+		},
+		{
+			name: "weak toBeOnTheScreen + real toHaveBeenCalled — NOT a stub",
+			content: `it("renders and fires callback", () => {
+  const onPress = jest.fn();
+  render(<X onPress={onPress}/>);
+  expect(queryByText('foo')).toBeOnTheScreen();
+  expect(onPress).toHaveBeenCalled();
+});`,
+			want: false,
+		},
+		{
+			name: "weak toBeInTheDocument + real toBe — NOT a stub",
+			content: `it("x", () => {
+  expect(getByText('foo')).toBeInTheDocument();
+  expect(value).toBe(42);
+});`,
+			want: false,
+		},
+		{
 			name: "mixed weak: different weak matchers all still count as weak",
 			content: `it("a", () => { expect(x).toBeDefined(); });
 it("b", () => { expect(y).not.toBeNull(); });`,

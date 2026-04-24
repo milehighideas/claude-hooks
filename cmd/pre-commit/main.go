@@ -64,6 +64,7 @@ var checkKeyToDisplay = map[string]string{
 	"stubTestCheck":           "Stub tests",
 	"missingTestsCheck":       "Missing tests",
 	"redundantCreatedAtCheck": "Redundant createdAt",
+	"tiersGen":                "Tiers gen",
 	"tests":                   "Tests",
 }
 
@@ -513,6 +514,13 @@ func run() error {
 		collectResult("redundantCreatedAtCheck", runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs))
 	}
 
+	// Tiers-gen — regenerate derived translation file when the watched tier
+	// config is staged. Reads .tiers-gen.json from project root.
+	if config.Features.TiersGen {
+		projectRoot, _ := os.Getwd()
+		collectResult("tiersGen", checkTiersGen(projectRoot, stagedFiles))
+	}
+
 	// Build check
 	if config.Features.BuildCheck {
 		if !compactMode() {
@@ -917,6 +925,9 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			}
 		}
 		return runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs)
+	case "tiersGen":
+		projectRoot, _ := os.Getwd()
+		return checkTiersGen(projectRoot, files)
 	case "dataLayerCheck":
 		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
 	case "maestroValidation":

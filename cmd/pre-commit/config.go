@@ -76,6 +76,11 @@ type MissingTestsCheckConfig struct {
 	// co-located .test.ts(x). "staged" only checks staged source files.
 	// Use "all" as a ratchet once a package is test-covered.
 	Mode string `json:"mode"`
+	// StatusFilter narrows which staged files are checked when Mode is
+	// "staged". "all" (default) checks every staged file (Added, Copied,
+	// Modified, Renamed). "added" only checks newly added files, letting
+	// mechanical bulk refactors of existing untested code pass through.
+	StatusFilter string `json:"statusFilter"`
 	// AppPaths restricts scanning to files whose project-relative path
 	// contains at least one of these substrings. Empty = scan the whole
 	// project under the global Mode.
@@ -99,6 +104,11 @@ type StubTestCheckConfig struct {
 	// staged test files living under that path. Use "all" when you want a
 	// ratchet: once an app is stub-free, locking it in prevents regression.
 	Mode string `json:"mode"`
+	// StatusFilter narrows which staged files are checked when Mode is
+	// "staged". "all" (default) checks every staged file (Added, Copied,
+	// Modified, Renamed). "added" only checks newly added files, letting
+	// mechanical bulk refactors of existing stubs pass through.
+	StatusFilter string `json:"statusFilter"`
 	// AppPaths restricts scanning to files whose project-relative path
 	// contains at least one of these substrings. Empty = scan the whole
 	// project under the global Mode.
@@ -150,6 +160,7 @@ type Features struct {
 	StubTestCheck      bool `json:"stubTestCheck"`
 	MissingTestsCheck  bool `json:"missingTestsCheck"`
 	RedundantCreatedAtCheck bool `json:"redundantCreatedAtCheck"`
+	TiersGen           bool `json:"tiersGen"`
 }
 
 // AppConfig represents configuration for a single app

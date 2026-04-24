@@ -48,6 +48,24 @@ func collectStubReport(cfg StubTestCheckConfig, projectRoot string, stagedFiles 
 		}
 	}
 
+	// When statusFilter is "added", narrow staged files to only newly
+	// added ones. This lets mechanical bulk refactors (e.g. swapping
+	// toBeTruthy → toBeOnTheScreen) pass without tripping over
+	// pre-existing stubs.
+	if cfg.StatusFilter == "added" {
+		addedSet, err := getNewlyAddedFiles()
+		if err != nil {
+			return nil, fmt.Errorf("getting newly added files: %w", err)
+		}
+		filtered := stagedFiles[:0]
+		for _, f := range stagedFiles {
+			if addedSet[f] {
+				filtered = append(filtered, f)
+			}
+		}
+		stagedFiles = filtered
+	}
+
 	// No per-path scoping: fall back to global-mode behavior.
 	if len(cfg.AppPaths) == 0 && len(cfg.AppModes) == 0 {
 		return collectStubReportGlobal(cfg, projectRoot, stagedFiles, globalMode)

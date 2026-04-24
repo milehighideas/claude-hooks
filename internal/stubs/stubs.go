@@ -59,6 +59,10 @@ var (
 		regexp.MustCompile(`\.\s*not\s*\.\s*toBeNull\s*\(\s*\)`),
 		// .not.toBeUndefined() — symmetric
 		regexp.MustCompile(`\.\s*not\s*\.\s*toBeUndefined\s*\(\s*\)`),
+		// .toBeOnTheScreen() — paired with getBy* it's guaranteed (getBy* throws on miss)
+		regexp.MustCompile(`\.\s*toBeOnTheScreen\s*\(\s*\)`),
+		// .toBeInTheDocument() — paired with getBy* it's guaranteed (getBy* throws on miss)
+		regexp.MustCompile(`\.\s*toBeInTheDocument\s*\(\s*\)`),
 	}
 )
 
