@@ -24,8 +24,11 @@ func TestLoadConfig(t *testing.T) {
 				if config == nil {
 					t.Fatal("expected config, got nil")
 				}
-				if !config.Features.LintTypecheck {
-					t.Error("expected LintTypecheck to be true by default")
+				if !config.Features.Lint {
+					t.Error("expected Lint to be true by default")
+				}
+				if !config.Features.Typecheck {
+					t.Error("expected Typecheck to be true by default")
 				}
 				if !config.Features.LintStaged {
 					t.Error("expected LintStaged to be true by default")
@@ -52,7 +55,7 @@ func TestLoadConfig(t *testing.T) {
 			configExists: true,
 			configContent: `{
 				"features": {
-					"lintTypecheck": true,
+					"lint": true,
 				}
 			}`,
 			wantErr: true,
@@ -69,7 +72,8 @@ func TestLoadConfig(t *testing.T) {
 				},
 				"sharedPaths": ["packages/"],
 				"features": {
-					"lintTypecheck": true,
+					"lint": true,
+					"typecheck": true,
 					"lintStaged": false,
 					"tests": true,
 					"goLint": true,
@@ -108,8 +112,11 @@ func TestLoadConfig(t *testing.T) {
 				}
 
 				// Check features
-				if !config.Features.LintTypecheck {
-					t.Error("expected LintTypecheck to be true")
+				if !config.Features.Lint {
+					t.Error("expected Lint to be true")
+				}
+				if !config.Features.Typecheck {
+					t.Error("expected Typecheck to be true")
 				}
 				if config.Features.LintStaged {
 					t.Error("expected LintStaged to be false")
@@ -381,8 +388,11 @@ func TestDefaultConfig(t *testing.T) {
 	}
 
 	// Check default features
-	if !config.Features.LintTypecheck {
-		t.Error("LintTypecheck should be true by default")
+	if !config.Features.Lint {
+		t.Error("Lint should be true by default")
+	}
+	if !config.Features.Typecheck {
+		t.Error("Typecheck should be true by default")
 	}
 	if !config.Features.LintStaged {
 		t.Error("LintStaged should be true by default")

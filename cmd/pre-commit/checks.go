@@ -3,18 +3,21 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
+	"os"
 	"sort"
 	"strings"
 	"sync"
 )
 
-// AppCheckResult holds the result of checking a single app
+// AppCheckResult holds the result of checking a single app for a single phase
+// (lint or typecheck). Errors is the parsed count from the phase's output;
+// Err is non-nil on any failure.
 type AppCheckResult struct {
-	AppName         string
-	Output          string
-	Err             error
-	LintErrors      int
-	TypecheckErrors int
+	AppName string
+	Output  string
+	Err     error
+	Errors  int
 }
 
 // extractErrorCount parses the error count from formatted error messages
@@ -30,79 +33,129 @@ func extractErrorCount(err error) int {
 	return 1 // fallback: at least 1 error if the function returned an error
 }
 
-// runLintTypecheck orchestrates lint and typecheck for all affected apps IN PARALLEL
-func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, packageManager string) error {
-	if !compactMode() {
-		fmt.Println("================================")
-		fmt.Println("  LINT & TYPE CHECKING (PARALLEL)")
-		fmt.Println("================================")
-	}
+// phaseJob represents a single app's participation in one phase (lint or typecheck).
+type phaseJob struct {
+	name    string
+	config  AppConfig
+	files   []string
+	full    bool // true = full-project phase, false = incremental (changed files only)
+	skipped bool // true = this phase is skipped for this app (e.g. SkipLint + lint phase)
+}
 
-	// Collect apps that need checking
-	type appJob struct {
-		name     string
-		config   AppConfig
-		files    []string
-		full     bool // true = full checks, false = incremental
-		skipLint      bool // skip lint for this app (typecheck still runs)
-		skipTypecheck bool // skip typecheck for this app (lint still runs)
-	}
-	var jobs []appJob
-
+// collectJobs builds the per-app job list for a phase. A job is included when
+// fullLintOnCommit is set, when a shared path changed, or when the app has its
+// own staged files. Jobs inherit each app's skip flags via the skipped field so
+// the runner can still emit a "skipped" status line in the report.
+func collectJobs(apps map[string]AppConfig, appFiles map[string][]string, sharedChanged, fullLintOnCommit bool, appSkipped func(AppConfig) bool) []phaseJob {
+	var jobs []phaseJob
 	for appName, appConfig := range apps {
 		files := appFiles[appName]
 
 		if fullLintOnCommit {
-			jobs = append(jobs, appJob{name: appName, config: appConfig, files: files, full: true, skipLint: appConfig.SkipLint, skipTypecheck: appConfig.SkipTypecheck})
+			jobs = append(jobs, phaseJob{name: appName, config: appConfig, files: files, full: true, skipped: appSkipped(appConfig)})
 		} else if sharedChanged || len(files) > 0 {
-			jobs = append(jobs, appJob{name: appName, config: appConfig, files: files, full: sharedChanged, skipLint: appConfig.SkipLint, skipTypecheck: appConfig.SkipTypecheck})
+			jobs = append(jobs, phaseJob{name: appName, config: appConfig, files: files, full: sharedChanged, skipped: appSkipped(appConfig)})
 		}
 	}
+	return jobs
+}
+
+// filterLintableFiles filters to only .ts/.tsx/.js/.jsx files
+func filterLintableFiles(files []string) []string {
+	var lintFiles []string
+	for _, f := range files {
+		ext := strings.ToLower(f)
+		if strings.HasSuffix(ext, ".ts") || strings.HasSuffix(ext, ".tsx") ||
+			strings.HasSuffix(ext, ".js") || strings.HasSuffix(ext, ".jsx") {
+			lintFiles = append(lintFiles, f)
+		}
+	}
+	return lintFiles
+}
+
+// ===========================================================================
+// LINT PHASE
+// ===========================================================================
+
+// runLint runs oxlint/eslint across all affected apps in parallel. Incremental
+// mode (no fullLintOnCommit, no shared-path change) short-circuits: lint-staged
+// has already run on the staged files, so there's nothing to do.
+//
+// Reports land under $reportDir/lint/<app>.txt.
+func runLint(apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, lintFilter LintFilter, fullLintOnCommit bool, packageManager string) error {
+	return runLintTo(os.Stdout, apps, appFiles, sharedChanged, lintFilter, fullLintOnCommit, packageManager)
+}
+
+// runLintTo is the io.Writer-parameterized variant used when the top-level
+// caller wants to run lint + typecheck concurrently and print their sections
+// in deterministic order after both have finished.
+func runLintTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, lintFilter LintFilter, fullLintOnCommit bool, packageManager string) error {
+	if !compactMode() {
+		fmt.Fprintln(w, "================================")
+		fmt.Fprintln(w, "  LINT (PARALLEL)")
+		fmt.Fprintln(w, "================================")
+	}
+
+	jobs := collectJobs(apps, appFiles, sharedChanged, fullLintOnCommit, func(a AppConfig) bool { return a.SkipLint })
 
 	if len(jobs) == 0 {
 		if !compactMode() {
-			fmt.Println("No apps to check")
+			fmt.Fprintln(w, "No apps to lint")
 		}
 		return nil
 	}
 
 	if !compactMode() {
-		fmt.Printf("Running checks on %d app(s) in parallel...\n\n", len(jobs))
+		fmt.Fprintf(w, "Linting %d app(s) in parallel...\n\n", len(jobs))
 	}
 
-	// Run all jobs in parallel (including convex ESLint if detected)
 	var wg sync.WaitGroup
 	results := make([]AppCheckResult, len(jobs))
 
 	for i, job := range jobs {
 		wg.Add(1)
-		go func(idx int, j appJob) {
+		go func(idx int, j phaseJob) {
 			defer wg.Done()
 
 			var output bytes.Buffer
 			var err error
-			var lintErrs, typecheckErrs int
+			var errs int
 
-			// Merge global typecheck filter with per-app override
-			effectiveTypecheckFilter := GetTypecheckFilter(typecheckFilter, j.config.TypecheckFilter)
-
-			if j.full {
-				lintErrs, typecheckErrs, err = runFullChecksBuffered(j.name, j.config.Path, j.config.Filter, effectiveTypecheckFilter, lintFilter, j.config.NodeMemoryMB, j.skipLint, j.skipTypecheck, packageManager, &output)
+			if j.skipped {
+				fmt.Fprintf(&output, "   ⏩ %s lint skipped (skipLint: true)\n", j.name)
+			} else if j.full {
+				fmt.Fprintf(&output, "🔍 Running full lint for %s...\n", j.name)
+				lintOutput, lintErr := runFilteredLintBuffered(j.name, j.config.Path, lintFilter)
+				output.WriteString(lintOutput)
+				if lintErr != nil {
+					fmt.Fprintf(&output, "   ❌ %s lint failed\n", j.name)
+					errs = extractErrorCount(lintErr)
+					err = lintErr
+				} else {
+					fmt.Fprintf(&output, "   ✓ %s passed lint\n", j.name)
+				}
 			} else {
-				lintErrs, typecheckErrs, err = runIncrementalChecksBuffered(j.name, j.config.Path, j.config.Filter, j.files, effectiveTypecheckFilter, lintFilter, fullLintOnCommit, j.config.NodeMemoryMB, j.skipLint, j.skipTypecheck, packageManager, &output)
+				// Incremental: lint-staged already ran on the staged files.
+				// Nothing to do at this layer unless fullLintOnCommit is set.
+				lintFiles := filterLintableFiles(j.files)
+				if len(lintFiles) == 0 {
+					fmt.Fprintf(&output, "   No lintable files in %s\n", j.name)
+				} else {
+					fmt.Fprintf(&output, "   ✓ %s lint handled by lint-staged (%d files)\n", j.name, len(lintFiles))
+				}
 			}
 
 			results[idx] = AppCheckResult{
-				AppName:         j.name,
-				Output:          output.String(),
-				Err:             err,
-				LintErrors:      lintErrs,
-				TypecheckErrors: typecheckErrs,
+				AppName: j.name,
+				Output:  output.String(),
+				Err:     err,
+				Errors:  errs,
 			}
 		}(i, job)
 	}
 
-	// Run convex/backend ESLint in parallel if an eslint config exists there
+	// Run convex/backend ESLint in parallel if an eslint config exists there.
+	// Convex ESLint is a lint-only check; it has no typecheck counterpart.
 	var convexResult AppCheckResult
 	if findConvexEslintPath() != "" {
 		wg.Add(1)
@@ -119,26 +172,128 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 
 	wg.Wait()
 
-	// Print results sequentially
-	checksFailed := false
-	var failedResults []AppCheckResult
-
-	// Append convex ESLint result if it ran
 	if convexResult.Output != "" {
 		results = append(results, convexResult)
 	}
 
+	return finalizePhaseResults(w, "Lint", "lint/", results, len(jobs))
+}
+
+// ===========================================================================
+// TYPECHECK PHASE
+// ===========================================================================
+
+// runTypecheck runs tsc (or tsgo when TypecheckFilter.UseTsgo is true) across
+// all affected apps in parallel.
+//
+// Full mode: `tsc --noEmit` (or `-b`) at the app root. Incremental mode:
+// `tsc-files` on just the changed files.
+//
+// Reports land under $reportDir/typecheck/<app>.txt.
+func runTypecheck(apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, typecheckFilter TypecheckFilter, fullLintOnCommit bool, packageManager string) error {
+	return runTypecheckTo(os.Stdout, apps, appFiles, sharedChanged, typecheckFilter, fullLintOnCommit, packageManager)
+}
+
+// runTypecheckTo is the io.Writer-parameterized variant; see runLintTo.
+func runTypecheckTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, typecheckFilter TypecheckFilter, fullLintOnCommit bool, packageManager string) error {
+	if !compactMode() {
+		fmt.Fprintln(w, "================================")
+		fmt.Fprintln(w, "  TYPECHECK (PARALLEL)")
+		fmt.Fprintln(w, "================================")
+	}
+
+	jobs := collectJobs(apps, appFiles, sharedChanged, fullLintOnCommit, func(a AppConfig) bool { return a.SkipTypecheck })
+
+	if len(jobs) == 0 {
+		if !compactMode() {
+			fmt.Fprintln(w, "No apps to typecheck")
+		}
+		return nil
+	}
+
+	if !compactMode() {
+		fmt.Fprintf(w, "Typechecking %d app(s) in parallel...\n\n", len(jobs))
+	}
+
+	var wg sync.WaitGroup
+	results := make([]AppCheckResult, len(jobs))
+
+	for i, job := range jobs {
+		wg.Add(1)
+		go func(idx int, j phaseJob) {
+			defer wg.Done()
+
+			var output bytes.Buffer
+			var err error
+			var errs int
+
+			// Merge global typecheck filter with per-app override
+			effectiveFilter := GetTypecheckFilter(typecheckFilter, j.config.TypecheckFilter)
+
+			if j.skipped {
+				fmt.Fprintf(&output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", j.name)
+			} else if j.full {
+				fmt.Fprintf(&output, "🔍 Running full typecheck for %s...\n", j.name)
+				tcOutput, tcErr := runFilteredTypecheckBuffered(j.name, j.config.Path, j.config.Filter, packageManager, effectiveFilter, j.config.NodeMemoryMB)
+				output.WriteString(tcOutput)
+				if tcErr != nil {
+					fmt.Fprintf(&output, "   ❌ %s typecheck failed\n", j.name)
+					errs = extractErrorCount(tcErr)
+					err = tcErr
+				} else {
+					fmt.Fprintf(&output, "   ✓ %s passed typecheck\n", j.name)
+				}
+			} else {
+				// Incremental typecheck on changed files only.
+				lintFiles := filterLintableFiles(j.files)
+				if len(lintFiles) == 0 {
+					fmt.Fprintf(&output, "   No typecheckable files in %s\n", j.name)
+				} else {
+					fmt.Fprintf(&output, "🔍 Running incremental typecheck for %s (%d files)...\n", j.name, len(lintFiles))
+					tcOutput, tcErr := runIncrementalTypecheckBuffered(j.config.Path, lintFiles, effectiveFilter)
+					output.WriteString(tcOutput)
+					if tcErr != nil {
+						fmt.Fprintf(&output, "   ❌ %s incremental typecheck failed\n", j.name)
+						errs = extractErrorCount(tcErr)
+						err = tcErr
+					} else {
+						fmt.Fprintf(&output, "   ✓ %s passed incremental typecheck\n", j.name)
+					}
+				}
+			}
+
+			results[idx] = AppCheckResult{
+				AppName: j.name,
+				Output:  output.String(),
+				Err:     err,
+				Errors:  errs,
+			}
+		}(i, job)
+	}
+
+	wg.Wait()
+
+	return finalizePhaseResults(w, "Typecheck", "typecheck/", results, len(jobs))
+}
+
+// finalizePhaseResults prints the per-app output, emits the compact status
+// line, and returns an aggregate error if any app failed. Kept out of the
+// phase runners so the two phases stay identical in shape — only the phase
+// name, report-dir hint, and per-job logic differ.
+func finalizePhaseResults(w io.Writer, phaseName, reportSubdir string, results []AppCheckResult, jobCount int) error {
+	checksFailed := false
+	var failedResults []AppCheckResult
+
 	for _, result := range results {
 		if compactMode() {
-			// Compact: show per-app one-liner
 			if result.Err != nil {
 				checksFailed = true
 				failedResults = append(failedResults, result)
 			}
 		} else {
 			if result.Output != "" {
-				fmt.Print(result.Output)
-				fmt.Println()
+				fmt.Fprint(w, result.Output)
+				fmt.Fprintln(w)
 			}
 			if result.Err != nil {
 				checksFailed = true
@@ -153,196 +308,52 @@ func runLintTypecheck(apps map[string]AppConfig, appFiles map[string][]string, s
 			})
 			parts := make([]string, 0, len(failedResults))
 			for _, r := range failedResults {
-				total := r.LintErrors + r.TypecheckErrors
-				if total > 0 {
-					parts = append(parts, fmt.Sprintf("%s %d errors", r.AppName, total))
+				if r.Errors > 0 {
+					parts = append(parts, fmt.Sprintf("%s %d errors", r.AppName, r.Errors))
 				} else {
 					parts = append(parts, r.AppName+" failed")
 				}
 			}
-			printStatus("Lint & typecheck", false, strings.Join(parts, ", "))
-			printReportHint("lint/ and typecheck/")
-			return fmt.Errorf("lint/typecheck failed")
+			printStatusTo(w, phaseName, false, strings.Join(parts, ", "))
+			printReportHintTo(w, reportSubdir)
+			return fmt.Errorf("%s failed", strings.ToLower(phaseName))
 		}
-		printStatus("Lint & typecheck", true, fmt.Sprintf("%d apps", len(jobs)))
+		printStatusTo(w, phaseName, true, fmt.Sprintf("%d apps", jobCount))
 		return nil
 	}
 
 	if checksFailed {
-		fmt.Println("================================")
-		fmt.Println("  PRE-COMMIT CHECKS FAILED")
-		fmt.Println("================================")
-		fmt.Println()
-		fmt.Println("Fix the errors above and try again")
-		fmt.Println()
-		return fmt.Errorf("lint/typecheck failed")
+		fmt.Fprintln(w, "================================")
+		fmt.Fprintf(w, "  %s FAILED\n", strings.ToUpper(phaseName))
+		fmt.Fprintln(w, "================================")
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, "Fix the errors above and try again")
+		fmt.Fprintln(w)
+		return fmt.Errorf("%s failed", strings.ToLower(phaseName))
 	}
 	return nil
 }
 
-// filterLintableFiles filters to only .ts/.tsx/.js/.jsx files
-func filterLintableFiles(files []string) []string {
-	var lintFiles []string
-	for _, f := range files {
-		ext := strings.ToLower(f)
-		if strings.HasSuffix(ext, ".ts") || strings.HasSuffix(ext, ".tsx") ||
-			strings.HasSuffix(ext, ".js") || strings.HasSuffix(ext, ".jsx") {
-			lintFiles = append(lintFiles, f)
-		}
-	}
-	return lintFiles
-}
+// RunLintAndTypecheckConcurrent fires lint and typecheck as top-level
+// goroutines so their CPU work overlaps, while buffering each phase's
+// output so the final stdout stays ordered (lint block, then typecheck).
+// Returns the first error encountered (both are still run to completion).
+func RunLintAndTypecheckConcurrent(apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, packageManager string) (lintErr error, typecheckErr error) {
+	var lintBuf, typecheckBuf bytes.Buffer
+	var wg sync.WaitGroup
 
-func runFullChecks(appName, appPath, filter string, typecheckFilter TypecheckFilter, lintFilter LintFilter, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string) error {
-	fmt.Printf("🔍 Running full lint and typecheck for %s...\n", appName)
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		lintErr = runLintTo(&lintBuf, apps, appFiles, sharedChanged, lintFilter, fullLintOnCommit, packageManager)
+	}()
+	go func() {
+		defer wg.Done()
+		typecheckErr = runTypecheckTo(&typecheckBuf, apps, appFiles, sharedChanged, typecheckFilter, fullLintOnCommit, packageManager)
+	}()
+	wg.Wait()
 
-	var hasError bool
-
-	// Run typecheck with filtering
-	if skipTypecheck {
-		fmt.Printf("   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
-	} else {
-		fmt.Printf("   → Starting typecheck for %s...\n", appName)
-		if err := runFilteredTypecheck(appName, appPath, filter, packageManager, typecheckFilter, nodeMemoryMB); err != nil {
-			fmt.Printf("   ❌ %s typecheck failed\n", appName)
-			hasError = true
-		} else {
-			fmt.Printf("   ✓ %s passed typecheck\n", appName)
-		}
-	}
-
-	// Run lint with filtering (continue even if typecheck failed)
-	if skipLint {
-		fmt.Printf("   ⏩ %s lint skipped (skipLint: true)\n", appName)
-	} else {
-		fmt.Printf("   → Starting lint for %s...\n", appName)
-		if err := runFilteredLint(appName, appPath, lintFilter); err != nil {
-			fmt.Printf("   ❌ %s lint failed\n", appName)
-			hasError = true
-		} else {
-			fmt.Printf("   ✓ %s passed lint\n", appName)
-		}
-	}
-
-	if hasError {
-		fmt.Printf("❌ %s had failures\n", appName)
-		return fmt.Errorf("%s checks failed", appName)
-	}
-
-	fmt.Printf("✅ %s passed all checks\n", appName)
-	return nil
-}
-
-// runFullChecksBuffered runs full checks and writes output to a buffer (for parallel execution)
-func runFullChecksBuffered(appName, appPath, filter string, typecheckFilter TypecheckFilter, lintFilter LintFilter, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string, output *bytes.Buffer) (lintErrs int, typecheckErrs int, err error) {
-	fmt.Fprintf(output, "🔍 Running full lint and typecheck for %s...\n", appName)
-
-	var hasError bool
-
-	// Run typecheck with filtering
-	if skipTypecheck {
-		fmt.Fprintf(output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
-	} else {
-		fmt.Fprintf(output, "   → Starting typecheck for %s...\n", appName)
-		typecheckOutput, typecheckErr := runFilteredTypecheckBuffered(appName, appPath, filter, packageManager, typecheckFilter, nodeMemoryMB)
-		output.WriteString(typecheckOutput)
-		if typecheckErr != nil {
-			fmt.Fprintf(output, "   ❌ %s typecheck failed\n", appName)
-			typecheckErrs = extractErrorCount(typecheckErr)
-			hasError = true
-		} else {
-			fmt.Fprintf(output, "   ✓ %s passed typecheck\n", appName)
-		}
-	}
-
-	// Run lint with filtering (continue even if typecheck failed)
-	if skipLint {
-		fmt.Fprintf(output, "   ⏩ %s lint skipped (skipLint: true)\n", appName)
-	} else {
-		fmt.Fprintf(output, "   → Starting lint for %s...\n", appName)
-		lintOutput, lintErr := runFilteredLintBuffered(appName, appPath, lintFilter)
-		output.WriteString(lintOutput)
-		if lintErr != nil {
-			fmt.Fprintf(output, "   ❌ %s lint failed\n", appName)
-			lintErrs = extractErrorCount(lintErr)
-			hasError = true
-		} else {
-			fmt.Fprintf(output, "   ✓ %s passed lint\n", appName)
-		}
-	}
-
-	if hasError {
-		fmt.Fprintf(output, "❌ %s had failures\n", appName)
-		return lintErrs, typecheckErrs, fmt.Errorf("%s checks failed", appName)
-	}
-
-	fmt.Fprintf(output, "✅ %s passed all checks\n", appName)
-	return 0, 0, nil
-}
-
-func runIncrementalChecks(appName string, appPath string, filter string, files []string, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string) error {
-	lintFiles := filterLintableFiles(files)
-
-	if len(lintFiles) == 0 {
-		fmt.Printf("   No lintable files in %s\n", appName)
-		return nil
-	}
-
-	// When fullLintOnCommit is enabled, run full checks instead of incremental
-	if fullLintOnCommit {
-		fmt.Printf("🔍 Running full lint and typecheck for %s (fullLintOnCommit enabled)...\n", appName)
-		return runFullChecks(appName, appPath, filter, typecheckFilter, lintFilter, nodeMemoryMB, skipLint, skipTypecheck, packageManager)
-	}
-
-	fmt.Printf("🔍 Running incremental checks for %s (%d files)...\n", appName, len(lintFiles))
-
-	// lint-staged already ran eslint --fix on staged files, so skip redundant lint
-	// But we still need to run typecheck on the changed files
-
-	// Run incremental typecheck
-	if skipTypecheck {
-		fmt.Printf("   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
-	} else if err := runIncrementalTypecheck(appPath, lintFiles, typecheckFilter); err != nil {
-		fmt.Printf("❌ %s incremental typecheck failed\n", appName)
-		return err
-	}
-
-	fmt.Printf("✅ %s passed incremental checks\n", appName)
-	return nil
-}
-
-// runIncrementalChecksBuffered runs incremental checks and writes output to a buffer (for parallel execution)
-func runIncrementalChecksBuffered(appName string, appPath string, filter string, files []string, typecheckFilter TypecheckFilter, lintFilter LintFilter, fullLintOnCommit bool, nodeMemoryMB int, skipLint bool, skipTypecheck bool, packageManager string, output *bytes.Buffer) (lintErrs int, typecheckErrs int, err error) {
-	lintFiles := filterLintableFiles(files)
-
-	if len(lintFiles) == 0 {
-		fmt.Fprintf(output, "   No lintable files in %s\n", appName)
-		return 0, 0, nil
-	}
-
-	// When fullLintOnCommit is enabled, run full checks instead of incremental
-	if fullLintOnCommit {
-		fmt.Fprintf(output, "🔍 Running full lint and typecheck for %s (fullLintOnCommit enabled)...\n", appName)
-		return runFullChecksBuffered(appName, appPath, filter, typecheckFilter, lintFilter, nodeMemoryMB, skipLint, skipTypecheck, packageManager, output)
-	}
-
-	fmt.Fprintf(output, "🔍 Running incremental checks for %s (%d files)...\n", appName, len(lintFiles))
-
-	// lint-staged already ran eslint --fix on staged files, so skip redundant lint
-	// But we still need to run typecheck on the changed files
-
-	// Run incremental typecheck
-	if skipTypecheck {
-		fmt.Fprintf(output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", appName)
-	} else {
-		typecheckOutput, typecheckErr := runIncrementalTypecheckBuffered(appPath, lintFiles, typecheckFilter)
-		output.WriteString(typecheckOutput)
-		if typecheckErr != nil {
-			fmt.Fprintf(output, "❌ %s incremental typecheck failed\n", appName)
-			return 0, extractErrorCount(typecheckErr), typecheckErr
-		}
-	}
-
-	fmt.Fprintf(output, "✅ %s passed incremental checks\n", appName)
-	return 0, 0, nil
+	fmt.Print(lintBuf.String())
+	fmt.Print(typecheckBuf.String())
+	return lintErr, typecheckErr
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,6 +19,7 @@ var (
 	targetPath    string
 	checkName     string
 	listChecks    bool
+	verboseFlag   bool
 	configPath    string
 	reportDir     string
 	noLock        bool
@@ -31,11 +33,16 @@ func init() {
 	flag.StringVar(&configPath, "config", "", "Path to .pre-commit.json config file (defaults to .pre-commit.json in target path)")
 	flag.StringVar(&reportDir, "report-dir", "", "Directory to write detailed lint/typecheck reports (creates lint/ and typecheck/ subdirs)")
 	flag.BoolVar(&noLock, "no-lock", false, "Skip exclusive lock (allow concurrent runs)")
+	flag.BoolVar(&verboseFlag, "verbose", false, "Print full per-app output even when reports are being written. Default: compact status lines when report-dir is set.")
 }
 
-// compactMode returns true when reports are being written to a directory,
-// meaning detailed output should be suppressed in favor of pass/fail status lines.
+// compactMode returns true when reports are being written to a directory AND
+// -verbose was not passed. Verbose overrides compaction so callers can see the
+// full per-app output even while reports are also written to disk.
 func compactMode() bool {
+	if verboseFlag {
+		return false
+	}
 	return reportDir != ""
 }
 
@@ -44,7 +51,8 @@ func compactMode() bool {
 // central lets printStatus detect "this failing check is configured as a
 // warning" by display name without threading the key through every caller.
 var checkKeyToDisplay = map[string]string{
-	"lintTypecheck":           "Lint & typecheck",
+	"lint":                    "Lint",
+	"typecheck":               "Typecheck",
 	"lintStaged":              "Formatting",
 	"consoleCheck":            "Console check",
 	"dataLayerCheck":          "Data layer check",
@@ -93,11 +101,18 @@ func registerWarningChecks(keys []string) {
 // so the visual signal matches the non-blocking routing that collectResult
 // applies to the same check.
 func printStatus(name string, passed bool, detail string) {
+	printStatusTo(os.Stdout, name, passed, detail)
+}
+
+// printStatusTo writes a compact status line to the given writer. Used by the
+// split lint/typecheck runners which buffer their output so phase sections
+// print in a deterministic order even though they ran concurrently.
+func printStatusTo(w io.Writer, name string, passed bool, detail string) {
 	if !compactMode() {
 		return
 	}
 	if !passed && warningDisplayNames[name] {
-		printWarningStatus(name, detail)
+		printWarningStatusTo(w, name, detail)
 		return
 	}
 	icon := "✅"
@@ -108,11 +123,15 @@ func printStatus(name string, passed bool, detail string) {
 	if detail != "" {
 		status = " (" + detail + ")"
 	}
-	fmt.Printf("  %s %s%s\n", icon, name, status)
+	fmt.Fprintf(w, "  %s %s%s\n", icon, name, status)
 }
 
 // printWarningStatus prints a compact warning status line for a non-blocking check.
 func printWarningStatus(name string, detail string) {
+	printWarningStatusTo(os.Stdout, name, detail)
+}
+
+func printWarningStatusTo(w io.Writer, name string, detail string) {
 	if !compactMode() {
 		return
 	}
@@ -120,13 +139,17 @@ func printWarningStatus(name string, detail string) {
 	if detail != "" {
 		status = " (" + detail + ")"
 	}
-	fmt.Printf("  ⚠️  %s%s (warning)\n", name, status)
+	fmt.Fprintf(w, "  ⚠️  %s%s (warning)\n", name, status)
 }
 
 // printReportHint prints a pointer to the report directory for a failed check.
 func printReportHint(subdir string) {
+	printReportHintTo(os.Stdout, subdir)
+}
+
+func printReportHintTo(w io.Writer, subdir string) {
 	if compactMode() {
-		fmt.Printf("     → %s/%s\n", reportDir, subdir)
+		fmt.Fprintf(w, "     → %s/%s\n", reportDir, subdir)
 	}
 }
 
@@ -221,9 +244,8 @@ func printAvailableChecks() {
 	fmt.Println("  srp                - Single Responsibility Principle check")
 	fmt.Println("  mockCheck          - Ensure tests use __mocks__/ instead of inline mocks")
 	fmt.Println("  consoleCheck       - Check for console.log statements")
-	fmt.Println("  lint               - Run linting only (skip typecheck)")
-	fmt.Println("  typecheck          - Run TypeScript type checking only (skip lint)")
-	fmt.Println("  lintTypecheck      - Run both linting and TypeScript type checking")
+	fmt.Println("  lint               - Run oxlint/eslint across all affected apps")
+	fmt.Println("  typecheck          - Run tsc (or tsgo) across all affected apps")
 	fmt.Println("  tests              - Run test suites")
 	fmt.Println("  changelog          - Validate changelog entries")
 	fmt.Println("  goLint             - Go linting (if enabled)")
@@ -385,10 +407,21 @@ func run() error {
 		}
 	}
 
-	// Lint and typecheck
-	if config.Features.LintTypecheck {
-		if err := runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager); err != nil {
-			collectResult("lintTypecheck", err)
+	// Lint and typecheck — run concurrently, print in deterministic order (lint first, then typecheck)
+	if config.Features.Lint || config.Features.Typecheck {
+		var lintErr, typecheckErr error
+		if config.Features.Lint && config.Features.Typecheck {
+			lintErr, typecheckErr = RunLintAndTypecheckConcurrent(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		} else if config.Features.Lint {
+			lintErr = runLint(config.Apps, appFiles, sharedChanged, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		} else {
+			typecheckErr = runTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		}
+		if lintErr != nil {
+			collectResult("lint", lintErr)
+		}
+		if typecheckErr != nil {
+			collectResult("typecheck", typecheckErr)
 		}
 	}
 
@@ -850,21 +883,9 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 	case "consoleCheck":
 		return runConsoleCheck(appFiles, config.ConsoleAllowed)
 	case "lint":
-		lintApps := make(map[string]AppConfig)
-		for k, v := range config.Apps {
-			v.SkipTypecheck = true
-			lintApps[k] = v
-		}
-		return runLintTypecheck(lintApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		return runLint(config.Apps, appFiles, sharedChanged, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
 	case "typecheck":
-		tcApps := make(map[string]AppConfig)
-		for k, v := range config.Apps {
-			v.SkipLint = true
-			tcApps[k] = v
-		}
-		return runLintTypecheck(tcApps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
-	case "lintTypecheck":
-		return runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		return runTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.Features.FullLintOnCommit, config.PackageManager)
 	case "tests":
 		testCtx := TestRunContext{
 			AllApps:        config.Apps,
@@ -1047,9 +1068,22 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 		collectResult("redundantCreatedAtCheck", runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs))
 	}
 
-	// Lint and typecheck
-	if config.Features.LintTypecheck {
-		collectResult("lintTypecheck", runLintTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager))
+	// Lint and typecheck — run concurrently, print in deterministic order
+	if config.Features.Lint || config.Features.Typecheck {
+		var lintErr, typecheckErr error
+		if config.Features.Lint && config.Features.Typecheck {
+			lintErr, typecheckErr = RunLintAndTypecheckConcurrent(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		} else if config.Features.Lint {
+			lintErr = runLint(config.Apps, appFiles, sharedChanged, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		} else {
+			typecheckErr = runTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		}
+		if lintErr != nil {
+			collectResult("lint", lintErr)
+		}
+		if typecheckErr != nil {
+			collectResult("typecheck", typecheckErr)
+		}
 	}
 
 	// Report warnings

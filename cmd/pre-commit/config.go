@@ -136,7 +136,12 @@ func (c *Config) IsWarningCheck(name string) bool {
 
 // Features represents which pre-commit features are enabled
 type Features struct {
-	LintTypecheck      bool `json:"lintTypecheck"`
+	// Lint and Typecheck are independent phases. A previous flag `lintTypecheck`
+	// ran both together; it was split so each can be toggled, gated, and
+	// reported on separately. Keep these two flags in sync in .pre-commit.json
+	// if you want the old combined behavior.
+	Lint               bool `json:"lint"`
+	Typecheck          bool `json:"typecheck"`
 	LintStaged         bool `json:"lintStaged"`
 	FullLintOnCommit   bool `json:"fullLintOnCommit"`
 	Tests              bool `json:"tests"`
@@ -180,8 +185,12 @@ type TypecheckFilter struct {
 	ErrorCodes     []string `json:"errorCodes"`
 	ExcludePaths   []string `json:"excludePaths"`
 	ErrorCodePaths []string `json:"errorCodePaths"`
-	SkipLibCheck   *bool    `json:"skipLibCheck,omitempty"`   // If false, check .d.ts files (stricter). Default: true
-	UseBuildMode   *bool    `json:"useBuildMode,omitempty"`   // If true, use `tsc -b` instead of `tsc --noEmit`. Default: false
+	SkipLibCheck   *bool    `json:"skipLibCheck,omitempty"` // If false, check .d.ts files (stricter). Default: true
+	UseBuildMode   *bool    `json:"useBuildMode,omitempty"` // If true, use `tsc -b` instead of `tsc --noEmit`. Default: false
+	// UseTsgo swaps the TypeScript binary from `tsc` (TS 6.x) to `tsgo`
+	// (TypeScript 7 native preview, shipped by @typescript/native-preview).
+	// All other flags pass through unchanged. Default: false (use tsc).
+	UseTsgo *bool `json:"useTsgo,omitempty"`
 }
 
 // LintFilter configures which lint errors to filter out
@@ -479,8 +488,9 @@ func defaultConfig() *Config {
 	return &Config{
 		Apps: map[string]AppConfig{},
 		Features: Features{
-			LintTypecheck: true,
-			LintStaged:    true,
+			Lint:       true,
+			Typecheck:  true,
+			LintStaged: true,
 		},
 		GoLint: GoLintConfig{
 			Tool: "golangci-lint",
@@ -515,6 +525,9 @@ func GetTypecheckFilter(global TypecheckFilter, appOverride *TypecheckFilter) Ty
 	}
 	if appOverride.UseBuildMode != nil {
 		result.UseBuildMode = appOverride.UseBuildMode
+	}
+	if appOverride.UseTsgo != nil {
+		result.UseTsgo = appOverride.UseTsgo
 	}
 
 	return result

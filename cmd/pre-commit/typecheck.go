@@ -24,20 +24,30 @@ var DefaultErrorCodes = []string{"TS2589", "TS2742"}
 // DefaultExcludePaths are the path patterns excluded by default (test files)
 var DefaultExcludePaths = []string{"__tests__/", ".test.", ".spec."}
 
-// buildTypecheckCmd builds the tsc command using the configured package manager.
-// For bun, --filter only works with package scripts, not direct executables like tsc,
-// so we run tsc directly and set cmd.Dir to the app path instead.
+// buildTypecheckCmd builds the tsc (or tsgo) command using the configured package manager.
+// For bun, --filter only works with package scripts, not direct executables,
+// so we run the binary directly and set cmd.Dir to the app path instead.
+//
+// When TypecheckFilter.UseTsgo is true, the binary name is swapped from `tsc`
+// (TypeScript 6.x) to `tsgo` (TypeScript 7 native preview, from
+// @typescript/native-preview). All flags pass through unchanged — tsgo accepts
+// --noEmit, --skipLibCheck, and -b.
 func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilter) *exec.Cmd {
+	bin := "tsc"
+	if tf.UseTsgo != nil && *tf.UseTsgo {
+		bin = "tsgo"
+	}
+
 	if tf.UseBuildMode != nil && *tf.UseBuildMode {
 		switch packageManager {
 		case "bun":
-			cmd := exec.Command("npx", "tsc", "-b")
+			cmd := exec.Command("npx", bin, "-b")
 			cmd.Dir = appPath
 			return cmd
 		case "yarn":
-			return exec.Command("yarn", "workspace", filter, "exec", "tsc", "-b")
+			return exec.Command("yarn", "workspace", filter, "exec", bin, "-b")
 		default:
-			return exec.Command("pnpm", "--filter", filter, "exec", "tsc", "-b")
+			return exec.Command("pnpm", "--filter", filter, "exec", bin, "-b")
 		}
 	}
 
@@ -48,13 +58,13 @@ func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilte
 
 	switch packageManager {
 	case "bun":
-		cmd := exec.Command("npx", append([]string{"tsc"}, args...)...)
+		cmd := exec.Command("npx", append([]string{bin}, args...)...)
 		cmd.Dir = appPath
 		return cmd
 	case "yarn":
-		return exec.Command("yarn", append([]string{"workspace", filter, "exec", "tsc"}, args...)...)
+		return exec.Command("yarn", append([]string{"workspace", filter, "exec", bin}, args...)...)
 	default:
-		return exec.Command("pnpm", append([]string{"--filter", filter, "exec", "tsc"}, args...)...)
+		return exec.Command("pnpm", append([]string{"--filter", filter, "exec", bin}, args...)...)
 	}
 }
 
