@@ -71,6 +71,7 @@ var checkKeyToDisplay = map[string]string{
 	"testQuality":             "Test quality",
 	"stubTestCheck":           "Stub tests",
 	"missingTestsCheck":       "Missing tests",
+	"testSubstanceCheck":      "Test substance",
 	"redundantCreatedAtCheck": "Redundant createdAt",
 	"tiersGen":                "Tiers gen",
 	"tests":                   "Tests",
@@ -257,6 +258,7 @@ func printAvailableChecks() {
 	fmt.Println("  testQuality        - Ban export-only stub tests (toBeDefined/typeof checks)")
 	fmt.Println("  stubTestCheck      - Ban placeholder expect(true).toBe(true) stub tests")
 	fmt.Println("  missingTestsCheck  - Ban source files without co-located .test.ts(x) (per-app scoped)")
+	fmt.Println("  testSubstanceCheck - LOC-ratio / interaction / branch / tautology gates against (source, test) pairs")
 	fmt.Println("  redundantCreatedAtCheck - Ban createdAt fields inside Convex defineTable (use _creationTime)")
 	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
 	fmt.Println("  maestroValidation  - Validate Maestro flow id: selectors resolve to source testIDs")
@@ -530,6 +532,22 @@ func run() error {
 			}
 		}
 		collectResult("missingTestsCheck", runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs))
+	}
+
+	// Test substance check — runs LOC-ratio / interaction / branch / tautology
+	// gates against (source, test) pairs. Files where the test exists but
+	// doesn't actually exercise the source are flagged.
+	if config.Features.TestSubstanceCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(stagedFiles))
+		for _, f := range stagedFiles {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("testSubstanceCheck", runTestSubstanceCheck(config.TestSubstanceCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Redundant createdAt check — bans `createdAt:` inside Convex
@@ -935,6 +953,17 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			}
 		}
 		return runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs)
+	case "testSubstanceCheck":
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		return runTestSubstanceCheck(config.TestSubstanceCheckConfig, projectRoot, stagedAbs)
 	case "redundantCreatedAtCheck":
 		projectRoot, _ := os.Getwd()
 		stagedAbs := make([]string, 0, len(files))
@@ -1051,6 +1080,20 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 			}
 		}
 		collectResult("missingTestsCheck", runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs))
+	}
+
+	// Test substance check
+	if config.Features.TestSubstanceCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("testSubstanceCheck", runTestSubstanceCheck(config.TestSubstanceCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Redundant createdAt check — bans `createdAt:` inside Convex

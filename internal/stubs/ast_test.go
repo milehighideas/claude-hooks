@@ -140,3 +140,103 @@ it('x', () => { expect(result).toEqual({ a: 1 }); });
 		t.Errorf("expected self-mock flag for %q", path)
 	}
 }
+
+func TestCountTautological(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    int
+	}{
+		{
+			name:    "string literal equals itself",
+			content: `it("x", () => { expect("hello").toBe("hello"); });`,
+			want:    1,
+		},
+		{
+			name:    "identifier equals itself",
+			content: `it("x", () => { expect(planName).toBe(planName); });`,
+			want:    1,
+		},
+		{
+			name:    "member access equals itself",
+			content: `it("x", () => { expect(obj.foo).toEqual(obj.foo); });`,
+			want:    1,
+		},
+		{
+			name:    "toStrictEqual same identifier",
+			content: `it("x", () => { expect(arr).toStrictEqual(arr); });`,
+			want:    1,
+		},
+		{
+			name:    "toMatchObject same identifier",
+			content: `it("x", () => { expect(user).toMatchObject(user); });`,
+			want:    1,
+		},
+		{
+			name:    "different identifiers — not tautological",
+			content: `it("x", () => { expect(actual).toBe(expected); });`,
+			want:    0,
+		},
+		{
+			name:    "literal equals different literal — not tautological",
+			content: `it("x", () => { expect("a").toBe("b"); });`,
+			want:    0,
+		},
+		{
+			name: "multiple tautologies in one file",
+			content: `it("a", () => { expect("x").toBe("x"); });
+it("b", () => { expect(y).toEqual(y); });`,
+			want: 2,
+		},
+		{
+			name:    "non-equality matcher with same args — not flagged",
+			content: `it("x", () => { expect(x).toHaveBeenCalledWith(x); });`,
+			want:    0,
+		},
+		{
+			name:    "negated equality (.not.toBe(x)) — not flagged",
+			content: `it("x", () => { expect(y).not.toBe(y); });`,
+			want:    0,
+		},
+		{
+			name:    "tautology mixed with real assertions",
+			content: `it("x", () => { expect("k").toBe("k"); expect(real).toBe(42); });`,
+			want:    1,
+		},
+		{name: "empty file", content: ``, want: 0},
+		{
+			name:    "syntactically malformed — fails open",
+			content: `it("x", () => { expect("a").toBe(`, // unterminated
+			want:    0,
+		},
+		{
+			name: "real RTL pattern — not tautological",
+			content: `it("renders", () => {
+  render(<X />);
+  expect(screen.getByText("Save").textContent).toBe("Save");
+});`,
+			// limitation: textContent === "Save" is a runtime tautology our
+			// syntactic check can't see (different node shapes).
+			want: 0,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := CountTautological(tc.content); got != tc.want {
+				t.Errorf("CountTautological() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsTautological(t *testing.T) {
+	if !IsTautological(`expect(x).toBe(x);`) {
+		t.Error("expected IsTautological(true) for identifier equals itself")
+	}
+	if IsTautological(`expect(x).toBe(y);`) {
+		t.Error("expected IsTautological(false) for differing identifiers")
+	}
+	if IsTautological(``) {
+		t.Error("expected IsTautological(false) for empty content")
+	}
+}

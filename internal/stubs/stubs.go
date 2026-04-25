@@ -63,6 +63,9 @@ var (
 		regexp.MustCompile(`\.\s*toBeOnTheScreen\s*\(\s*\)`),
 		// .toBeInTheDocument() — paired with getBy* it's guaranteed (getBy* throws on miss)
 		regexp.MustCompile(`\.\s*toBeInTheDocument\s*\(\s*\)`),
+		// .toBeVisible() — DOM/RTL helper that's effectively guaranteed when
+		// paired with a getBy* query that already enforces presence in the tree.
+		regexp.MustCompile(`\.\s*toBeVisible\s*\(\s*\)`),
 	}
 )
 
@@ -82,6 +85,31 @@ func IsStub(content string) bool {
 	}
 	expectMatches := anyExpectPattern.FindAllString(content, -1)
 	return len(expectMatches) == weakTotal
+}
+
+// IsStubMajority reports whether more than half of the expect() calls in
+// content are weak-only matchers. Closes the "wall of weak + one
+// tautological real one" escape from IsStub, where adding a single
+// non-weak matcher (even one whose actual==expected) flips the file out
+// of stub status. Threshold is strictly greater than 50%.
+//
+// Returns false when there are no expect() calls or no weak matchers, and
+// when the weak count is exactly half (split case is treated as not-a-stub
+// to leave room for a deliberate mix of render-presence + behavior checks).
+func IsStubMajority(content string) bool {
+	weakTotal := 0
+	for _, p := range weakMatchers {
+		weakTotal += len(p.FindAllString(content, -1))
+	}
+	if weakTotal == 0 {
+		return false
+	}
+	expectMatches := anyExpectPattern.FindAllString(content, -1)
+	if len(expectMatches) == 0 {
+		return false
+	}
+	// Strictly more than half. Use 2*weak > total to avoid float division.
+	return 2*weakTotal > len(expectMatches)
 }
 
 // IsTestFile reports whether path is a test file this package considers for

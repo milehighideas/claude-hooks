@@ -38,6 +38,36 @@ var jestMockQuery = func() *sitter.Query {
 	return q
 }()
 
+// expectMatcherQuery finds two-argument matcher calls of the shape
+// `expect(<actual>).<matcher>(<expected>)`. The shape is two nested
+// call_expressions joined by a member_expression: outer.function = the
+// member expression, outer.arguments = (expected); inner = expect(actual).
+// We capture both argument nodes so the walker can compare their
+// trimmed source text and decide whether the assertion is tautological.
+//
+// Note: we deliberately match only when expect's *direct* property is the
+// matcher — calls like `expect(x).not.toBe(y)` are skipped because they
+// have an extra member_expression layer (.not before .toBe), and the
+// tautology shape we care about doesn't apply to negated equality.
+var expectMatcherQuery = func() *sitter.Query {
+	q, err := sitter.NewQuery([]byte(`
+(call_expression
+  function: (member_expression
+    object: (call_expression
+      function: (identifier) @expect_id
+      arguments: (arguments . (_) @actual .)
+    )
+    property: (property_identifier) @matcher
+  )
+  arguments: (arguments . (_) @expected .)
+)
+`), tsx.GetLanguage())
+	if err != nil {
+		panic("stubs: expect-matcher query failed to compile: " + err.Error())
+	}
+	return q
+}()
+
 // IsSelfMockStub reports whether a test file mocks its own subject in a way
 // that neutralizes the test. Specifically: the file's basename (minus
 // .test.ts[x]) matches a jest.mock() path argument, AND that mock's factory
@@ -308,4 +338,95 @@ func fragmentOnlyPassesThroughChildren(fragment *sitter.Node, src []byte) bool {
 		}
 	}
 	return sawExpression
+}
+
+// equalityMatchers are the matcher names whose argument is compared to
+// expect()'s argument. When actual and expected texts are identical at
+// these matchers, the assertion is tautological — it asserts a value
+// equals itself, which the runtime guarantees regardless of behavior.
+var equalityMatchers = map[string]bool{
+	"toBe":           true,
+	"toEqual":        true,
+	"toStrictEqual":  true,
+	"toMatch":        true,
+	"toMatchObject":  true,
+	"toContainEqual": true,
+}
+
+// CountTautological returns the number of tautological assertions in
+// content — calls of the shape `expect(X).toBe(Y)` (or any equality
+// matcher in equalityMatchers) where X and Y are textually identical
+// after whitespace trimming. Catches:
+//
+//   - expect("a").toBe("a")  — string literal equals itself
+//   - expect(planName).toBe(planName)  — identifier equals itself
+//   - expect(getByText(label).textContent).toBe(getByText(label).textContent)  — same expression both sides
+//   - expect(arr).toEqual(arr)  — same reference
+//
+// Returns 0 on any parse failure (fail open).
+//
+// Limitation: this is a *syntactic* check. Tautologies that only equal at
+// runtime — e.g., expect(getByText("Save").textContent).toBe("Save") —
+// are not detected because the expressions differ syntactically. Closing
+// that requires symbolic / value-flow analysis, which is out of scope.
+func CountTautological(content string) int {
+	parser := sitter.NewParser()
+	parser.SetLanguage(tsx.GetLanguage())
+	ctx, cancel := context.WithTimeout(context.Background(), astParseTimeout)
+	defer cancel()
+
+	tree, err := parser.ParseCtx(ctx, nil, []byte(content))
+	if err != nil || tree == nil {
+		return 0
+	}
+	defer tree.Close()
+
+	cursor := sitter.NewQueryCursor()
+	defer cursor.Close()
+	cursor.Exec(expectMatcherQuery, tree.RootNode())
+
+	src := []byte(content)
+	count := 0
+	for {
+		match, ok := cursor.NextMatch()
+		if !ok {
+			break
+		}
+
+		var expectID, matcher, actual, expected string
+		for _, cap := range match.Captures {
+			name := expectMatcherQuery.CaptureNameForId(cap.Index)
+			switch name {
+			case "expect_id":
+				expectID = cap.Node.Content(src)
+			case "matcher":
+				matcher = cap.Node.Content(src)
+			case "actual":
+				actual = strings.TrimSpace(cap.Node.Content(src))
+			case "expected":
+				expected = strings.TrimSpace(cap.Node.Content(src))
+			}
+		}
+
+		if expectID != "expect" {
+			continue
+		}
+		if !equalityMatchers[matcher] {
+			continue
+		}
+		if actual == "" || expected == "" {
+			continue
+		}
+		if actual == expected {
+			count++
+		}
+	}
+	return count
+}
+
+// IsTautological reports whether content contains at least one tautological
+// assertion as detected by CountTautological. A convenience wrapper for
+// callers that only care about the boolean.
+func IsTautological(content string) bool {
+	return CountTautological(content) > 0
 }

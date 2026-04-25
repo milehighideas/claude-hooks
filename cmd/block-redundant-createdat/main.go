@@ -217,8 +217,6 @@ with either an inline `+"`"+`// hooks-allow: redundant-createdat`+"`"+` comment 
 preceding `+"`"+`/** @deprecated ... */`+"`"+` JSDoc block is allowed. This lets you
 widen a required column to optional during a widen-migrate-narrow cleanup
 without the hook blocking the transitional state.
-
-To bypass (not recommended): set CLAUDE_HOOKS_AST_VALIDATION=false
 `, data.ToolInput.FilePath, before, after)
 		os.Exit(2)
 	}

@@ -494,16 +494,27 @@ func run(data HookData, stderr io.Writer) int {
 	// AST-level self-mock anti-patterns where a test mocks out its own
 	// subject. Runs before the component-write check because test files
 	// are skipped there.
+	//
+	// Also rejects:
+	//   - Tautological assertions: expect(X).toBe(X) where actual and
+	//     expected are textually identical. These pass lint (the matcher
+	//     is real) but assert nothing about behavior — a value equals
+	//     itself by definition.
+	//   - Majority-weak files: more than half of expect() calls use weak
+	//     matchers, even if a couple of real assertions are mixed in.
+	//     Closes the "wall of weak + one tautology" escape from IsStub.
 	if stubGateOn {
 		if isTestOp, testPath := isTestFileWriteOperation(data); isTestOp {
 			content, err := getResultingTestContent(data)
-			if err == nil && stubs.IsStubFile(testPath, content) {
-				fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
+			if err == nil {
+				if stubs.IsStubFile(testPath, content) {
+					fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
 
 File: %s
 
 Test file contains only weak placeholder assertions
-(expect(true).toBe(true), .toBeDefined(), .toBeTruthy(), .not.toBeNull()),
+(expect(true).toBe(true), .toBeDefined(), .toBeTruthy(), .not.toBeNull(),
+.toBeOnTheScreen(), .toBeInTheDocument(), .toBeVisible()),
 OR mocks out its own subject with a null-returning factory.
 
 Write real assertions that verify the component's behavior.
@@ -511,10 +522,46 @@ Write real assertions that verify the component's behavior.
 If the component is genuinely hard to test (complex Convex/Clerk context,
 auth gating, etc.), ask the user how much mocking infrastructure to build
 rather than falling back to stubs.
-
-To bypass (not recommended): set CLAUDE_HOOKS_AST_VALIDATION=false
 `, filepath.Base(testPath)))
-				return 2
+					return 2
+				}
+				if tautoCount := stubs.CountTautological(content); tautoCount > 0 {
+					fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Tautological assertion rejected
+
+File: %s
+
+Test file contains %d call(s) of the shape expect(X).toBe(X) where actual
+and expected are textually identical (same literal, same identifier, same
+member access). These assertions are guaranteed by the runtime regardless
+of behavior — a value equals itself.
+
+Examples that trip this check:
+  expect("save").toBe("save")          // string equals itself
+  expect(planName).toBe(planName)      // identifier equals itself
+  expect(arr).toEqual(arr)             // same reference
+
+Replace with an assertion that verifies what your code actually does. If
+you're asserting a label rendered correctly, compare against the source
+constant: expect(getByText(labels.SAVE).textContent).toBe(labels.SAVE).
+`, filepath.Base(testPath), tautoCount))
+					return 2
+				}
+				if stubs.IsStubMajority(content) {
+					fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Majority-weak test file rejected
+
+File: %s
+
+More than half of the expect() calls in this file use weak placeholder
+matchers (toBeDefined / toBeTruthy / not.toBeNull / toBeOnTheScreen /
+toBeInTheDocument / toBeVisible). Mixing a single non-weak matcher into
+a wall of weak ones used to pass the all-weak detector — this gate
+closes that loophole.
+
+Replace the weak matchers with real assertions that compare against
+expected values: toBe / toEqual / toMatchObject / toHaveBeenCalledWith.
+`, filepath.Base(testPath)))
+					return 2
+				}
 			}
 		}
 	}
@@ -572,7 +619,6 @@ E2E test types:
 To fix:
 1. Create the missing test files
 2. Disable per project: set features.testFiles=false in .pre-commit.json
-3. Or set CLAUDE_HOOKS_AST_VALIDATION=false to disable the hook globally
 `
 	fmt.Fprintln(stderr, msg)
 	return 2

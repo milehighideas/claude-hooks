@@ -152,6 +152,97 @@ it("real", () => { expect(x).toBe(1); });`,
 	}
 }
 
+func TestIsStub_toBeVisible(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "weak: toBeVisible only",
+			content: `it("renders", () => { render(<X/>); expect(getByText('foo')).toBeVisible(); });`,
+			want:    true,
+		},
+		{
+			name:    "weak: toBeVisible with whitespace",
+			content: `it("x", () => { expect( el ) . toBeVisible( ); });`,
+			want:    true,
+		},
+		{
+			name: "weak toBeVisible + real toBe — NOT a stub",
+			content: `it("x", () => {
+  expect(getByText('foo')).toBeVisible();
+  expect(value).toBe(42);
+});`,
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsStub(tc.content); got != tc.want {
+				t.Errorf("IsStub() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsStubMajority(t *testing.T) {
+	cases := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{
+			name:    "all weak (also a regular stub)",
+			content: `it("a", () => { expect(x).toBeDefined(); expect(y).toBeTruthy(); });`,
+			want:    true,
+		},
+		{
+			name: "3 weak + 1 real — majority weak",
+			content: `it("a", () => {
+  expect(x).toBeDefined();
+  expect(y).toBeTruthy();
+  expect(z).not.toBeNull();
+  expect(real).toBe(42);
+});`,
+			want: true,
+		},
+		{
+			name: "2 weak + 2 real — split, not majority",
+			content: `it("a", () => {
+  expect(x).toBeDefined();
+  expect(y).toBeTruthy();
+  expect(real1).toBe(42);
+  expect(real2).toEqual({ a: 1 });
+});`,
+			want: false,
+		},
+		{
+			name: "1 weak + 2 real — minority weak",
+			content: `it("a", () => {
+  expect(x).toBeDefined();
+  expect(real1).toBe(42);
+  expect(real2).toEqual({ a: 1 });
+});`,
+			want: false,
+		},
+		{
+			name:    "no weak matchers",
+			content: `it("a", () => { expect(x).toBe(1); expect(y).toEqual(2); });`,
+			want:    false,
+		},
+		{name: "empty file", content: ``, want: false},
+		{name: "no expects", content: `it("a", () => {});`, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsStubMajority(tc.content); got != tc.want {
+				t.Errorf("IsStubMajority() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestList(t *testing.T) {
 	root := t.TempDir()
 

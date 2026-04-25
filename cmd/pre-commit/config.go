@@ -37,6 +37,7 @@ type Config struct {
 	MaestroValidation  MaestroValidationConfig `json:"maestroValidation"`
 	StubTestCheckConfig StubTestCheckConfig    `json:"stubTestCheckConfig"`
 	MissingTestsCheckConfig MissingTestsCheckConfig `json:"missingTestsCheckConfig"`
+	TestSubstanceCheckConfig TestSubstanceCheckConfig `json:"testSubstanceCheckConfig"`
 	RedundantCreatedAtCheckConfig RedundantCreatedAtCheckConfig `json:"redundantCreatedAtCheckConfig"`
 	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
 }
@@ -93,6 +94,44 @@ type MissingTestsCheckConfig struct {
 	// ExcludePaths skips files whose project-relative path contains any of
 	// these substrings. Exclusions always win over AppPaths/AppModes.
 	ExcludePaths []string `json:"excludePaths"`
+}
+
+// TestSubstanceCheckConfig configures the test-substance gates: LOC ratio,
+// UI-interaction requirement, branch-proportional it() block count, and
+// tautological-assertion detection. Runs against the (source, test) pair
+// for each staged source file with a co-located test. The intent is to
+// catch "minimal tests" — tests that exist on disk and pass lint but
+// don't actually exercise the code they claim to cover.
+type TestSubstanceCheckConfig struct {
+	// Mode is "staged" (default) or "all". Staged checks only the test
+	// files paired with currently staged source files. "all" walks every
+	// app path recursively (use as a ratchet once a package is clean).
+	Mode string `json:"mode"`
+	// AppPaths restricts the scan to files under at least one of these
+	// project-relative substrings. Mirrors missingTestsCheckConfig.appPaths.
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose path contains any of these substrings.
+	// Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths"`
+	// MinTestSourceRatio is the minimum (testLOC / sourceLOC) ratio. The
+	// underlying counter ignores blanks and comments. 0 disables the LOC
+	// gate. Default: 0.3 (test must be at least 30% of source LOC).
+	MinTestSourceRatio float64 `json:"minTestSourceRatio"`
+	// BranchToItRatio is the maximum sourceBranches / testItBlocks ratio.
+	// 0 disables the branch gate. Default: 4 (one it() per 4 branches; a
+	// 14-branch source needs at least 4 it()s).
+	BranchToItRatio int `json:"branchToItRatio"`
+	// RequireInteraction enables the UI-interaction gate when the source
+	// looks like a React component. Default: true.
+	RequireInteraction *bool `json:"requireInteraction"`
+	// MinSourceLOCForCheck is the LOC floor below which the LOC-ratio and
+	// branch gates are skipped (small utility files don't need ratio
+	// enforcement). Default: 50.
+	MinSourceLOCForCheck int `json:"minSourceLOCForCheck"`
+	// AllowTautological controls whether tautological assertions
+	// (expect(X).toBe(X) where X==Y syntactically) are allowed. Default:
+	// false (tautologies are violations).
+	AllowTautological bool `json:"allowTautological"`
 }
 
 // StubTestCheckConfig configures the stub-test detector. Mirrors the shape of
@@ -166,6 +205,12 @@ type Features struct {
 	MissingTestsCheck  bool `json:"missingTestsCheck"`
 	RedundantCreatedAtCheck bool `json:"redundantCreatedAtCheck"`
 	TiersGen           bool `json:"tiersGen"`
+	// TestSubstanceCheck runs substance gates against test files for staged
+	// source files: LOC ratio, UI-interaction requirement, branch-proportional
+	// it() count, plus tautological-assertion detection. Catches "minimal
+	// tests" that satisfy the missingTestsCheck file-existence gate but don't
+	// actually exercise the source. Configured via testSubstanceCheckConfig.
+	TestSubstanceCheck bool `json:"testSubstanceCheck"`
 }
 
 // AppConfig represents configuration for a single app
