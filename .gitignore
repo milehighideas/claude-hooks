@@ -4,6 +4,8 @@ bin/*
 
 # Go binaries accidentally built into repo root (from `go build ./cmd/<name>`)
 /pre-commit
+/convex-gen
+/auto-convex-gen
 
 # Go
 *.exe

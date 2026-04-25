@@ -1,19 +1,23 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"strings"
 )
 
 func main() {
-	if err := run(); err != nil {
+	typedReturns := flag.Bool("typed-returns", false, "Emit typed `FunctionReturnType<typeof api.x.y> | undefined` returns on shouldSkip query hooks instead of `as any`. When true, overrides .convex-gen.json `dataLayer.typedReturns`. Default off (existing behavior).")
+	flag.Parse()
+
+	if err := run(*typedReturns); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(cliTypedReturns bool) error {
 	fmt.Println("convex-gen - Convex Data Layer Generator")
 	fmt.Println()
 
@@ -21,6 +25,13 @@ func run() error {
 	config, err := LoadConfig()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// CLI flag is a one-way override: when true, force typed returns regardless of config.
+	// When false (default), config wins — preserving existing behavior unless `.convex-gen.json`
+	// opts in via `dataLayer.typedReturns: true`.
+	if cliTypedReturns {
+		config.DataLayer.TypedReturns = true
 	}
 
 	fmt.Printf("Organization: %s\n", config.Org)

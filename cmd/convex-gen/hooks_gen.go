@@ -245,6 +245,9 @@ func (g *HooksGenerator) generateSplitHookFileContent(topNamespace, fullNamespac
 	if needsFunctionArgs {
 		sb.WriteString("import type { FunctionArgs } from 'convex/server';\n")
 	}
+	if g.config.DataLayer.TypedReturns && funcType == "query" && needsRegularQuery {
+		sb.WriteString("import type { FunctionReturnType } from 'convex/server';\n")
+	}
 
 	sb.WriteString("\n")
 
@@ -365,6 +368,9 @@ func (g *HooksGenerator) generateGroupedHookFileContent(topNamespace string, fun
 	if needsFunctionArgs {
 		sb.WriteString("import type { FunctionArgs } from \"convex/server\";\n")
 	}
+	if g.config.DataLayer.TypedReturns && funcType == "query" && needsRegularQuery {
+		sb.WriteString("import type { FunctionReturnType } from \"convex/server\";\n")
+	}
 
 	// Generate hooks grouped by sub-namespace with section comments
 	for _, subNs := range subNamespaces {
@@ -479,7 +485,8 @@ func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, co
 
 	// Function signature
 	params := g.generateParamsV2(fn)
-	sb.WriteString(fmt.Sprintf("export function %s(%s) {\n", hookName, params))
+	returnAnnotation := g.generateReturnAnnotation(fn, apiPath)
+	sb.WriteString(fmt.Sprintf("export function %s(%s)%s {\n", hookName, params, returnAnnotation))
 
 	// Add @ts-ignore comment for deep type issues
 	sb.WriteString("  // @ts-ignore - TS2589: Deep type instantiation with nested API path\n")
@@ -551,7 +558,8 @@ func (g *HooksGenerator) generateSplitHook(topNamespace string, fn ConvexFunctio
 
 	// Function signature
 	params := g.generateParamsV2(fn)
-	sb.WriteString(fmt.Sprintf("export function %s(%s) {\n", hookName, params))
+	returnAnnotation := g.generateReturnAnnotation(fn, apiPath)
+	sb.WriteString(fmt.Sprintf("export function %s(%s)%s {\n", hookName, params, returnAnnotation))
 
 	// Add @ts-ignore comment for deep type issues
 	sb.WriteString("  // @ts-ignore - TS2589: Deep type instantiation with nested API path\n")
@@ -649,6 +657,29 @@ func (g *HooksGenerator) getTypeScriptType(arg ArgInfo) string {
 	return baseType
 }
 
+// generateReturnAnnotation produces the TypeScript return-type annotation appended
+// to a hook's function signature when `dataLayer.typedReturns` is enabled.
+//
+// Returns "" (no annotation) when:
+//   - typedReturns is disabled in config (preserves existing untyped behavior)
+//   - the function is not a query (mutations/actions are typed natively by useMutation/useAction)
+//   - the query is paginated (the existing emit already preserves return types via usePaginatedQuery's generic)
+//
+// Otherwise returns ": FunctionReturnType<typeof <apiPath>> | undefined". The trailing
+// `| undefined` matches useQuery's runtime contract — undefined while loading or when args === "skip".
+func (g *HooksGenerator) generateReturnAnnotation(fn ConvexFunction, apiPath string) string {
+	if !g.config.DataLayer.TypedReturns {
+		return ""
+	}
+	if fn.Type != FunctionTypeQuery {
+		return ""
+	}
+	if fn.IsPaginated {
+		return ""
+	}
+	return fmt.Sprintf(": FunctionReturnType<typeof %s> | undefined", apiPath)
+}
+
 // generateHookBodyV2 creates the body of a hook function matching TypeScript output
 func (g *HooksGenerator) generateHookBodyV2(fn ConvexFunction, apiPath string) string {
 	var sb strings.Builder
@@ -681,7 +712,11 @@ func (g *HooksGenerator) generateHookBodyV2(fn ConvexFunction, apiPath string) s
 			sb.WriteString("  );\n")
 		} else {
 			argsExpr, needsAsAnyCast := g.generateArgsWithSpreadInline(fn)
-			if needsAsAnyCast {
+			// When typed returns are enabled, the function signature carries
+			// `FunctionReturnType<typeof api.x.y> | undefined`, so the historical
+			// `as any` return cast (used to swallow TS2589 deep-instantiation noise
+			// during inference) is no longer needed and would erase the real type.
+			if needsAsAnyCast && !g.config.DataLayer.TypedReturns {
 				sb.WriteString(fmt.Sprintf("  return useQuery(%s, %s) as any;\n", apiPath, argsExpr))
 			} else {
 				sb.WriteString(fmt.Sprintf("  return useQuery(%s, %s);\n", apiPath, argsExpr))

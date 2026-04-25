@@ -35,6 +35,7 @@ type DataLayerConfig struct {
 	FileStructure string `json:"fileStructure"` // "grouped", "split", or "both"
 	HookNaming    string `json:"hookNaming"`    // "flat" (no sub-namespace), "qualified" (always sub-namespace), or "auto" (sub-namespace only on collision)
 	ExportAPI     bool   `json:"exportApi"`     // Re-export { api } from the generated-api index
+	TypedReturns  bool   `json:"typedReturns"`  // When true, emit typed `FunctionReturnType<typeof api.x.y> | undefined` on shouldSkip query hooks instead of `as any`
 }
 
 // ImportsConfig configures how generated code imports dependencies
