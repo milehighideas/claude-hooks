@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
@@ -357,6 +358,11 @@ type SRPConfig struct {
 	// WarnOnly specifies rules whose violations should be downgraded to warnings
 	// instead of errors, making them non-blocking.
 	WarnOnly []string `json:"warnOnly"`
+	// ErrorPaths specifies file path prefixes whose SRP violations should
+	// remain errors even when their rule is listed in WarnOnly. This lets one
+	// app (e.g. apps/mobile/) enforce SRP strictly while other apps stay at
+	// warning-level. Matching is by prefix (Contains) against the file path.
+	ErrorPaths []string `json:"errorPaths"`
 	// TestRequired configures the testRequired rule (requires enabledRules to include "testRequired").
 	// Accepts a single object (legacy) or an array of named profiles.
 	TestRequired TestRequiredProfiles `json:"testRequired"`
@@ -383,8 +389,11 @@ type TestRequiredConfig struct {
 	ExcludePaths []string `json:"excludePaths"`
 	// ExcludeFiles skips exact filenames (basename match, e.g., "index.tsx", "_layout.tsx")
 	ExcludeFiles []string `json:"excludeFiles"`
-	// Severity controls violation severity: "error" (default) or "warning".
-	// Global warnOnly for "testRequired" overrides this to "warning".
+	// Severity controls violation severity: "error" or "warning".
+	// When set explicitly, per-profile Severity wins over the global warnOnly
+	// list — letting one app error on missing tests while others only warn.
+	// When omitted, defaults to "error" unless "testRequired" is in WarnOnly,
+	// in which case it falls back to "warning".
 	Severity string `json:"severity"`
 }
 
@@ -471,6 +480,20 @@ func (c SRPConfig) isRuleEnabled(rule string) bool {
 func (c SRPConfig) isWarnOnly(rule string) bool {
 	for _, r := range c.WarnOnly {
 		if r == rule {
+			return true
+		}
+	}
+	return false
+}
+
+// isErrorPath returns true if file is covered by ErrorPaths and SRP
+// violations against it should remain errors regardless of WarnOnly.
+func (c SRPConfig) isErrorPath(file string) bool {
+	for _, p := range c.ErrorPaths {
+		if p == "" {
+			continue
+		}
+		if strings.Contains(file, p) {
 			return true
 		}
 	}

@@ -252,8 +252,11 @@ func (c *SRPChecker) validateSRPCompliance(analysis *SRPAnalysis, filePath strin
 		violations = append(violations, c.checkMixedConcerns(analysis, filePath)...)
 	}
 
-	// Apply warnOnly overrides
+	// Apply warnOnly overrides — but ErrorPaths keep their severity.
 	for i := range violations {
+		if c.config.isErrorPath(violations[i].File) {
+			continue
+		}
 		if c.config.isWarnOnly(violations[i].RuleID) {
 			violations[i].Severity = "warning"
 		}
@@ -569,12 +572,22 @@ func (c *SRPChecker) checkTestRequired(files []string) []SRPViolation {
 					suggestedTest = base + ".test" + ext
 				}
 
-				severity := "error"
-				if cfg.Severity == "warning" {
-					severity = "warning"
-				}
-				if c.config.isWarnOnly("testRequired") {
-					severity = "warning"
+				// Per-profile severity wins over the global warnOnly list. This
+				// lets one app (e.g. apps/mobile) error on missing tests while
+				// other apps (e.g. apps/web) only warn — set Severity explicitly
+				// per profile. If the field is omitted, fall back to the global
+				// warnOnly behaviour ("error" → "warning" when in WarnOnly).
+				// ErrorPaths trumps WarnOnly for files under those prefixes.
+				var severity string
+				switch cfg.Severity {
+				case "error", "warning":
+					severity = cfg.Severity
+				default:
+					if c.config.isWarnOnly("testRequired") && !c.config.isErrorPath(file) {
+						severity = "warning"
+					} else {
+						severity = "error"
+					}
 				}
 
 				violations = append(violations, SRPViolation{

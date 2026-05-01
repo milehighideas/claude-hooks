@@ -707,13 +707,24 @@ func TestCheckTestRequired_PerProfileSeverity(t *testing.T) {
 			wantSeverity: "error",
 		},
 		{
-			name:         "global warnOnly overrides profile error to warning",
+			// Per-profile severity wins over global warnOnly so one app can
+			// require tests as errors while others only warn.
+			name:         "explicit profile error beats global warnOnly",
 			severity:     "error",
+			warnOnly:     []string{"testRequired"},
+			wantSeverity: "error",
+		},
+		{
+			// Explicit warning is honoured regardless of warnOnly.
+			name:         "explicit profile warning is honoured under warnOnly",
+			severity:     "warning",
 			warnOnly:     []string{"testRequired"},
 			wantSeverity: "warning",
 		},
 		{
-			name:         "global warnOnly overrides default to warning",
+			// When the profile has no explicit severity, warnOnly downgrades
+			// the implicit "error" default to "warning".
+			name:         "global warnOnly downgrades default to warning",
 			severity:     "",
 			warnOnly:     []string{"testRequired"},
 			wantSeverity: "warning",
