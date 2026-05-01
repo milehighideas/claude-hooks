@@ -279,6 +279,21 @@ type TestConfig struct {
 	RunOnSharedChanges *bool `json:"runOnSharedChanges,omitempty"`
 	// AppOverrides allows per-app test configuration
 	AppOverrides map[string]AppTestOverride `json:"appOverrides,omitempty"`
+	// Retries is the number of times a failing test command is re-executed
+	// before the gate reports failure. Each retry runs the full app test
+	// command again. Default: 0 (no retries — strict). Set to 1 to absorb
+	// the most common environmental flake class (worker contention, fake
+	// timer + scheduler interaction) without masking real regressions.
+	Retries int `json:"retries,omitempty"`
+	// FlakyTestFiles is a list of project-relative test file paths that
+	// receive *one additional retry beyond Retries* before counting as a
+	// failure. These are tests known to be environmentally flaky (e.g. a
+	// scheduler test whose pump budget is occasionally starved by worker
+	// contention). The retry only kicks in when one of these files appears
+	// in the failure output; otherwise the standard Retries policy applies.
+	// Listing a test here is a contract: it MUST pass on a clean isolated
+	// run. The quarantine bypasses gate failures, not real bugs.
+	FlakyTestFiles []string `json:"flakyTestFiles,omitempty"`
 }
 
 // AppTestOverride configures test behavior for a specific app

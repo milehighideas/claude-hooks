@@ -52,6 +52,7 @@ func runTests(ctx TestRunContext) error {
 	var failedApps []string
 	var passedApps []string
 	failureCounts := make(map[string]int) // appName -> number of failed tests
+	retriedApps := make(map[string]int)   // appName -> retry attempts that ultimately passed
 
 	for appName, appConfig := range appsToTest {
 		// Use custom test command if specified, otherwise default to "test"
@@ -77,20 +78,51 @@ func runTests(ctx TestRunContext) error {
 		if compactMode() {
 			// Capture output and write to report file
 			output, err := runCommandCapturedWithEnv(ctx.Env, pm, args...)
+
+			// Retry policy: TestConfig.Retries gives every failed run a
+			// chance to recover from environmental flake. Files listed in
+			// TestConfig.FlakyTestFiles get one extra retry beyond that,
+			// but only when the failure output mentions one of them — a
+			// real regression in non-quarantined code still fails fast.
+			retries := ctx.Config.Retries
+			if err != nil && hasFlakyFailure(output, ctx.Config.FlakyTestFiles) {
+				retries++
+			}
+			retryAttempts := 0
+			for err != nil && retryAttempts < retries {
+				retryAttempts++
+				output, err = runCommandCapturedWithEnv(ctx.Env, pm, args...)
+			}
+
 			writeTestReport(appName, output, err, reportDir)
 			if err != nil {
 				failedApps = append(failedApps, appName)
 				failureCounts[appName] = parseTestFailureCount(output)
 			} else {
+				if retryAttempts > 0 {
+					retriedApps[appName] = retryAttempts
+				}
 				passedApps = append(passedApps, appName)
 			}
 		} else {
 			fmt.Printf("\nRunning %s tests (command: %s)...\n", appName, testCmd)
-			if err := runCommandWithEnv(ctx.Env, pm, args...); err != nil {
+			err := runCommandWithEnv(ctx.Env, pm, args...)
+			retries := ctx.Config.Retries
+			retryAttempts := 0
+			for err != nil && retryAttempts < retries {
+				retryAttempts++
+				fmt.Printf("\nRetrying %s tests (attempt %d/%d)...\n", appName, retryAttempts, retries)
+				err = runCommandWithEnv(ctx.Env, pm, args...)
+			}
+			if err != nil {
 				fmt.Printf("%s tests failed\n", appName)
 				return fmt.Errorf("%s tests failed", appName)
 			}
-			fmt.Printf("%s tests passed\n", appName)
+			if retryAttempts > 0 {
+				fmt.Printf("%s tests passed (after %d retry)\n", appName, retryAttempts)
+			} else {
+				fmt.Printf("%s tests passed\n", appName)
+			}
 		}
 	}
 
@@ -108,10 +140,40 @@ func runTests(ctx TestRunContext) error {
 			printReportHint("tests/")
 			return fmt.Errorf("%s tests failed", strings.Join(failedApps, ", "))
 		}
-		printStatus("Tests", true, strings.Join(passedApps, ", "))
+		summary := strings.Join(passedApps, ", ")
+		if len(retriedApps) > 0 {
+			retryParts := make([]string, 0, len(retriedApps))
+			for app, n := range retriedApps {
+				word := "retry"
+				if n != 1 {
+					word = "retries"
+				}
+				retryParts = append(retryParts, fmt.Sprintf("%s after %d %s", app, n, word))
+			}
+			summary += " — recovered: " + strings.Join(retryParts, ", ")
+		}
+		printStatus("Tests", true, summary)
 	}
 
 	return nil
+}
+
+// hasFlakyFailure reports whether any of the configured flaky-test files
+// appears in the test runner's failure output. We match against the file
+// path because both Vitest and Jest print failed test specs as
+// "FAIL <relative-path-to-test-file>". This lets us widen the retry
+// budget *only* when the failure is in a quarantined file; failures
+// elsewhere fail fast under the normal Retries policy.
+func hasFlakyFailure(output string, flakyTestFiles []string) bool {
+	if len(flakyTestFiles) == 0 {
+		return false
+	}
+	for _, p := range flakyTestFiles {
+		if strings.Contains(output, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // testFailurePatterns matches the "Tests" summary line from both Vitest and Jest output.
