@@ -29,7 +29,7 @@ type Config struct {
 	NativeBuild        NativeBuildConfig     `json:"nativeBuild"`
 	Convex             ConvexConfig          `json:"convex"`
 	Build              BuildConfig           `json:"build"`
-	BundleCheck        BundleCheckConfig     `json:"bundleCheck"`
+	BundleCheck        BundleCheckConfig     `json:"bundleCheckConfig"`
 	MockCheck          MockCheckConfig       `json:"mockCheck"`
 	TestConfig         TestConfig            `json:"testConfig"`
 	TestCoverageConfig TestCoverageConfig    `json:"testCoverageConfig"`
