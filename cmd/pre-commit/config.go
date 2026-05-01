@@ -29,6 +29,7 @@ type Config struct {
 	NativeBuild        NativeBuildConfig     `json:"nativeBuild"`
 	Convex             ConvexConfig          `json:"convex"`
 	Build              BuildConfig           `json:"build"`
+	BundleCheck        BundleCheckConfig     `json:"bundleCheck"`
 	MockCheck          MockCheckConfig       `json:"mockCheck"`
 	TestConfig         TestConfig            `json:"testConfig"`
 	TestCoverageConfig TestCoverageConfig    `json:"testCoverageConfig"`
@@ -191,6 +192,11 @@ type Features struct {
 	GoLint             bool `json:"goLint"`
 	ConvexValidation   bool `json:"convexValidation"`
 	BuildCheck         bool `json:"buildCheck"`
+	// BundleCheck runs Metro/Webpack bundle-only validation per app
+	// (typically `expo export` for RN apps). Catches missing-dependency and
+	// bad-import errors that pass typecheck and lint but break the bundler.
+	// See bundleCheckConfig for which apps to bundle and the npm script name.
+	BundleCheck        bool `json:"bundleCheck"`
 	FrontendStructure  bool `json:"frontendStructure"`
 	SRP                bool `json:"srp"`
 	FullSRPOnCommit    bool `json:"fullSRPOnCommit"`

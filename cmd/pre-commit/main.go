@@ -61,6 +61,7 @@ var checkKeyToDisplay = map[string]string{
 	"nativeBuild":             "Native build",
 	"convexValidation":        "Convex validation",
 	"buildCheck":              "Build check",
+	"bundleCheck":             "Bundle check",
 	"maestroValidation":       "Maestro validation",
 	"frontendStructure":       "Frontend structure",
 	"srp":                     "SRP compliance",
@@ -253,6 +254,7 @@ func printAvailableChecks() {
 	fmt.Println("  nativeBuild        - Native app compilation check (iOS/Android)")
 	fmt.Println("  convexValidation   - Convex schema validation (if enabled)")
 	fmt.Println("  buildCheck         - Build verification (if enabled)")
+	fmt.Println("  bundleCheck        - Run app bundlers (e.g. expo export) without native compile")
 	fmt.Println("  vitestAssertions   - Ensure vitest configs have requireAssertions: true")
 	fmt.Println("  testCoverage       - Ensure source files have corresponding test files")
 	fmt.Println("  testQuality        - Ban export-only stub tests (toBeDefined/typeof checks)")
@@ -584,6 +586,28 @@ func run() error {
 			printStatus("Build check", false, "")
 		} else {
 			printStatus("Build check", true, "")
+		}
+		if !compactMode() {
+			fmt.Println()
+		}
+	}
+
+	// Bundle check — runs each app's bundler (e.g. expo export) without
+	// compiling native code. Surfaces missing-dep / bad-import errors that
+	// typecheck and lint miss because the package is hoisted into root
+	// node_modules from another workspace but never declared in this app's
+	// package.json.
+	if config.Features.BundleCheck {
+		if err := runBundleCheck(config.BundleCheck, config.Apps, config.PackageManager); err != nil {
+			collectResult("bundleCheck", err)
+			parts := strings.SplitN(err.Error(), ":", 2)
+			detail := ""
+			if len(parts) == 2 {
+				detail = strings.TrimSpace(parts[1])
+			}
+			printStatus("Bundle check", false, detail)
+		} else if len(config.BundleCheck.Apps) > 0 {
+			printStatus("Bundle check", true, fmt.Sprintf("%d apps", len(config.BundleCheck.Apps)))
 		}
 		if !compactMode() {
 			fmt.Println()
@@ -925,6 +949,8 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return checkConvex(config.Convex)
 	case "buildCheck":
 		return checkBuild(config.Build, config.Apps)
+	case "bundleCheck":
+		return runBundleCheck(config.BundleCheck, config.Apps, config.PackageManager)
 	case "vitestAssertions":
 		return runVitestAssertionsCheck(config.Apps)
 	case "testCoverage":
