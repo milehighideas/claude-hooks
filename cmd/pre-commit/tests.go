@@ -75,6 +75,11 @@ func runTests(ctx TestRunContext) error {
 			args = append(args, appConfig.TestArgs...)
 		}
 
+		// Per-app start line so each app's run shows up live in compact mode
+		// instead of disappearing into the long Tests phase.
+		appCheck := "Tests " + appName
+		printStart(appCheck)
+
 		if compactMode() {
 			// Capture output and write to report file
 			output, err := runCommandCapturedWithEnv(ctx.Env, pm, args...)
@@ -98,9 +103,13 @@ func runTests(ctx TestRunContext) error {
 			if err != nil {
 				failedApps = append(failedApps, appName)
 				failureCounts[appName] = parseTestFailureCount(output)
+				printStatus(appCheck, false, fmt.Sprintf("%d failed", failureCounts[appName]))
 			} else {
 				if retryAttempts > 0 {
 					retriedApps[appName] = retryAttempts
+					printStatus(appCheck, true, fmt.Sprintf("after %d retry", retryAttempts))
+				} else {
+					printStatus(appCheck, true, "")
 				}
 				passedApps = append(passedApps, appName)
 			}

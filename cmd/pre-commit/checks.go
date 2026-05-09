@@ -117,12 +117,20 @@ func runLintTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]str
 		go func(idx int, j phaseJob) {
 			defer wg.Done()
 
+			// Per-app timing: each goroutine emits its own start/end lines
+			// directly to stdout in compact mode so the user sees live
+			// progress instead of a long silent wait. The phase-level
+			// status line still summarizes at the end.
+			appCheck := "Lint " + j.name
+			printStart(appCheck)
+
 			var output bytes.Buffer
 			var err error
 			var errs int
 
 			if j.skipped {
 				fmt.Fprintf(&output, "   ⏩ %s lint skipped (skipLint: true)\n", j.name)
+				printStatus(appCheck, true, "skipped")
 			} else if j.full {
 				fmt.Fprintf(&output, "🔍 Running full lint for %s...\n", j.name)
 				lintOutput, lintErr := runFilteredLintBuffered(j.name, j.config.Path, lintFilter)
@@ -131,8 +139,10 @@ func runLintTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]str
 					fmt.Fprintf(&output, "   ❌ %s lint failed\n", j.name)
 					errs = extractErrorCount(lintErr)
 					err = lintErr
+					printStatus(appCheck, false, fmt.Sprintf("%d errors", errs))
 				} else {
 					fmt.Fprintf(&output, "   ✓ %s passed lint\n", j.name)
+					printStatus(appCheck, true, "")
 				}
 			} else {
 				// Incremental: lint-staged already ran on the staged files.
@@ -140,8 +150,10 @@ func runLintTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]str
 				lintFiles := filterLintableFiles(j.files)
 				if len(lintFiles) == 0 {
 					fmt.Fprintf(&output, "   No lintable files in %s\n", j.name)
+					printStatus(appCheck, true, "no files")
 				} else {
 					fmt.Fprintf(&output, "   ✓ %s lint handled by lint-staged (%d files)\n", j.name, len(lintFiles))
+					printStatus(appCheck, true, fmt.Sprintf("%d files via lint-staged", len(lintFiles)))
 				}
 			}
 
@@ -223,6 +235,9 @@ func runTypecheckTo(w io.Writer, apps map[string]AppConfig, appFiles map[string]
 		go func(idx int, j phaseJob) {
 			defer wg.Done()
 
+			appCheck := "Typecheck " + j.name
+			printStart(appCheck)
+
 			var output bytes.Buffer
 			var err error
 			var errs int
@@ -232,6 +247,7 @@ func runTypecheckTo(w io.Writer, apps map[string]AppConfig, appFiles map[string]
 
 			if j.skipped {
 				fmt.Fprintf(&output, "   ⏩ %s typecheck skipped (skipTypecheck: true)\n", j.name)
+				printStatus(appCheck, true, "skipped")
 			} else if j.full {
 				fmt.Fprintf(&output, "🔍 Running full typecheck for %s...\n", j.name)
 				tcOutput, tcErr := runFilteredTypecheckBuffered(j.name, j.config.Path, j.config.Filter, packageManager, effectiveFilter, j.config.NodeMemoryMB)
@@ -240,14 +256,17 @@ func runTypecheckTo(w io.Writer, apps map[string]AppConfig, appFiles map[string]
 					fmt.Fprintf(&output, "   ❌ %s typecheck failed\n", j.name)
 					errs = extractErrorCount(tcErr)
 					err = tcErr
+					printStatus(appCheck, false, fmt.Sprintf("%d errors", errs))
 				} else {
 					fmt.Fprintf(&output, "   ✓ %s passed typecheck\n", j.name)
+					printStatus(appCheck, true, "")
 				}
 			} else {
 				// Incremental typecheck on changed files only.
 				lintFiles := filterLintableFiles(j.files)
 				if len(lintFiles) == 0 {
 					fmt.Fprintf(&output, "   No typecheckable files in %s\n", j.name)
+					printStatus(appCheck, true, "no files")
 				} else {
 					fmt.Fprintf(&output, "🔍 Running incremental typecheck for %s (%d files)...\n", j.name, len(lintFiles))
 					tcOutput, tcErr := runIncrementalTypecheckBuffered(j.config.Path, lintFiles, effectiveFilter)
@@ -256,8 +275,10 @@ func runTypecheckTo(w io.Writer, apps map[string]AppConfig, appFiles map[string]
 						fmt.Fprintf(&output, "   ❌ %s incremental typecheck failed\n", j.name)
 						errs = extractErrorCount(tcErr)
 						err = tcErr
+						printStatus(appCheck, false, fmt.Sprintf("%d errors", errs))
 					} else {
 						fmt.Fprintf(&output, "   ✓ %s passed incremental typecheck\n", j.name)
+						printStatus(appCheck, true, fmt.Sprintf("%d files", len(lintFiles)))
 					}
 				}
 			}

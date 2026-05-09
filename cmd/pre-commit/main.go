@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -95,6 +96,81 @@ func registerWarningChecks(keys []string) {
 	}
 }
 
+// checkStarts records when each check began so the pass/fail status line can
+// fold elapsed time into its detail string. Lint and typecheck run as
+// concurrent goroutines under the same process, so access is guarded by
+// checkStartsMu.
+var (
+	checkStartsMu sync.Mutex
+	checkStarts   = map[string]time.Time{}
+)
+
+// printStart marks the moment a check began running. In compact mode it
+// emits a "▶ HH:MM:SS Name" line so the user sees work in flight, not just
+// the eventual result. The start time is stashed by name so printStatus /
+// printWarningStatus can fold elapsed time into the end-of-check line.
+func printStart(name string) {
+	printStartTo(os.Stdout, name)
+}
+
+// printStartTo writes the start line to a specific writer. Used so the
+// lint+typecheck concurrent runner can emit start lines directly to stdout
+// before the buffered phase output is flushed.
+func printStartTo(w io.Writer, name string) {
+	now := time.Now()
+	checkStartsMu.Lock()
+	checkStarts[name] = now
+	checkStartsMu.Unlock()
+	if !compactMode() {
+		return
+	}
+	fmt.Fprintf(w, "  ▶ %s %s\n", now.Format("15:04:05"), name)
+}
+
+// consumeStart returns the start time recorded by printStart for name and
+// clears it. The clear matters because printStatus and printWarningStatus
+// can both fire for the same check (warning routing) and we only want
+// timing folded in once.
+func consumeStart(name string) (time.Time, bool) {
+	checkStartsMu.Lock()
+	defer checkStartsMu.Unlock()
+	start, ok := checkStarts[name]
+	if ok {
+		delete(checkStarts, name)
+	}
+	return start, ok
+}
+
+// formatCheckDuration trims durations to a readable form for status lines.
+// Sub-second runs render as "Nms"; anything longer collapses to one decimal
+// of seconds (or whole seconds past 10s) so the line stays compact.
+func formatCheckDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < 10*time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return d.Truncate(time.Second).String()
+}
+
+// foldTimingIntoDetail prefixes "HH:MM:SS, Ns" onto detail when a printStart
+// was recorded for name. Timing comes first so the eye lands on it; the
+// caller's existing detail (e.g. "12 apps") trails. Returns detail unchanged
+// when no start was recorded — keeps the helper safe for call sites that
+// were not paired with printStart.
+func foldTimingIntoDetail(name, detail string) string {
+	start, ok := consumeStart(name)
+	if !ok {
+		return detail
+	}
+	timing := fmt.Sprintf("%s, %s", time.Now().Format("15:04:05"), formatCheckDuration(time.Since(start)))
+	if detail == "" {
+		return timing
+	}
+	return timing + ", " + detail
+}
+
 // printStatus prints a compact pass/fail status line for a check.
 // name is the check name, passed indicates success, detail is optional context (e.g., error count).
 //
@@ -111,9 +187,15 @@ func printStatus(name string, passed bool, detail string) {
 // print in a deterministic order even though they ran concurrently.
 func printStatusTo(w io.Writer, name string, passed bool, detail string) {
 	if !compactMode() {
+		// Still drain the recorded start so the map stays clean across runs
+		// of the same process (e.g. tests that exercise multiple checks).
+		consumeStart(name)
 		return
 	}
+	detail = foldTimingIntoDetail(name, detail)
 	if !passed && warningDisplayNames[name] {
+		// foldTimingIntoDetail already consumed the start, so the inner call
+		// is a no-op for timing — it just re-uses the warning rendering.
 		printWarningStatusTo(w, name, detail)
 		return
 	}
@@ -135,8 +217,10 @@ func printWarningStatus(name string, detail string) {
 
 func printWarningStatusTo(w io.Writer, name string, detail string) {
 	if !compactMode() {
+		consumeStart(name)
 		return
 	}
+	detail = foldTimingIntoDetail(name, detail)
 	status := ""
 	if detail != "" {
 		status = " (" + detail + ")"
@@ -312,6 +396,10 @@ func run() error {
 		return runSpecificCheck(checkName, config, stagedFiles)
 	}
 
+	// =====================================================================
+	// PHASE 1 — Hard gates that must pass before any work runs.
+	// =====================================================================
+
 	// Branch protection
 	if config.Features.BranchProtection {
 		if err := checkBranchProtection(config.ProtectedBranches); err != nil {
@@ -319,8 +407,22 @@ func run() error {
 		}
 	}
 
-	// Check changelog if enabled
+	// =====================================================================
+	// PHASE 2 — Sequential prerequisites.
+	//
+	//   - Changelog: cheapest possible gate; if a fragment is missing the
+	//     commit is going to fail anyway, so bail before burning CPU on
+	//     lint/typecheck/tests.
+	//   - lint-staged: auto-formats staged files. Must run before any
+	//     read-based check or readers race against the formatter.
+	//   - tiersGen: regenerates a derived TypeScript file. Must run before
+	//     typecheck reads the regenerated output.
+	//
+	// All three fail fast on error.
+	// =====================================================================
+
 	if config.Features.Changelog {
+		printStart("Changelog")
 		if err := checkChangelog(stagedFiles, config.ChangelogExclude, config.ChangelogConfig, config.Apps); err != nil {
 			if compactMode() {
 				printStatus("Changelog", false, "missing fragments")
@@ -330,80 +432,43 @@ func run() error {
 		printStatus("Changelog", true, "")
 	}
 
-	// Lint-staged formatting (auto-fix first, before validation)
 	if config.Features.LintStaged {
+		printStart("Formatting")
 		if err := runLintStaged(config.LintStagedConfig); err != nil {
 			return err
 		}
 	}
 
-	// Go linting
-	if config.Features.GoLint {
-		if !compactMode() {
-			fmt.Println("================================")
-			fmt.Println("  GO LINTING")
-			fmt.Println("================================")
-		}
-		if err := checkGoLint(stagedFiles, config.GoLint); err != nil {
-			printStatus("Go linting", false, "")
+	if config.Features.TiersGen {
+		printStart("Tiers gen")
+		projectRoot, _ := os.Getwd()
+		if err := checkTiersGen(projectRoot, stagedFiles); err != nil {
+			fmt.Fprintf(os.Stderr, "Tiers gen failed: %v\n", err)
 			return err
-		}
-		if !compactMode() {
-			fmt.Println("Go linting passed")
-			fmt.Println()
-		} else {
-			printStatus("Go linting", true, "")
 		}
 	}
 
-	// Native app compilation (iOS/Android)
-	if config.Features.NativeBuild {
-		if !compactMode() {
-			fmt.Println("================================")
-			fmt.Println("  NATIVE BUILD CHECK")
-			fmt.Println("================================")
-		}
-		if err := checkNativeBuild(stagedFiles, config.NativeBuild); err != nil {
-			printStatus("Native build", false, "")
-			return err
-		}
-		if !compactMode() {
-			fmt.Println("Native build check passed")
-			fmt.Println()
-		} else {
-			printStatus("Native build", true, "")
-		}
-	}
+	// =====================================================================
+	// PHASE 3 — Everything else, fully async.
+	//
+	// Each check runs in its own goroutine. Status lines emit live to
+	// stdout as each goroutine finishes — order is intentionally
+	// non-deterministic. Errors and warnings are aggregated under
+	// resultsMu and reported once after all goroutines drain.
+	// =====================================================================
 
-	// Convex validation
-	if config.Features.ConvexValidation {
-		if !compactMode() {
-			fmt.Println("================================")
-			fmt.Println("  CONVEX VALIDATION")
-			fmt.Println("================================")
-		}
-		if err := checkConvex(config.Convex); err != nil {
-			printStatus("Convex validation", false, "")
-			return err
-		}
-		if !compactMode() {
-			fmt.Println("Convex validation passed")
-			fmt.Println()
-		} else {
-			printStatus("Convex validation", true, "")
-		}
-	}
-
-	// Collect all errors and warnings instead of failing fast
 	var allErrors []string
 	var allWarnings []string
+	var resultsMu sync.Mutex
+	var asyncWg sync.WaitGroup
 
-	// collectResult routes a check failure to warnings or errors based on config
 	collectResult := func(checkName string, err error) {
 		if err == nil {
 			return
 		}
 		msg := fmt.Sprintf("%s: %v", checkName, err)
+		resultsMu.Lock()
+		defer resultsMu.Unlock()
 		if config.IsWarningCheck(checkName) {
 			allWarnings = append(allWarnings, msg)
 		} else {
@@ -411,207 +476,256 @@ func run() error {
 		}
 	}
 
-	// Lint and typecheck — run concurrently, print in deterministic order (lint first, then typecheck)
-	if config.Features.Lint || config.Features.Typecheck {
-		var lintErr, typecheckErr error
-		if config.Features.Lint && config.Features.Typecheck {
-			lintErr, typecheckErr = RunLintAndTypecheckConcurrent(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
-		} else if config.Features.Lint {
-			lintErr = runLint(config.Apps, appFiles, sharedChanged, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
-		} else {
-			typecheckErr = runTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.Features.FullLintOnCommit, config.PackageManager)
-		}
-		if lintErr != nil {
-			collectResult("lint", lintErr)
-		}
-		if typecheckErr != nil {
-			collectResult("typecheck", typecheckErr)
-		}
+	// asyncCheck launches fn as a goroutine. printStart is called inside the
+	// goroutine so the start clock matches the moment work actually begins
+	// (not the dispatch order). The runner is expected to print its own
+	// pass/fail status line via printStatus / printWarningStatus.
+	asyncCheck := func(displayName, configKey string, fn func() error) {
+		asyncWg.Add(1)
+		go func() {
+			defer asyncWg.Done()
+			printStart(displayName)
+			collectResult(configKey, fn())
+		}()
 	}
 
-	// Console check
+	if config.Features.GoLint {
+		asyncCheck("Go linting", "goLint", func() error {
+			if !compactMode() {
+				fmt.Println("================================")
+				fmt.Println("  GO LINTING")
+				fmt.Println("================================")
+			}
+			if err := checkGoLint(stagedFiles, config.GoLint); err != nil {
+				printStatus("Go linting", false, "")
+				return err
+			}
+			if !compactMode() {
+				fmt.Println("Go linting passed")
+				fmt.Println()
+			} else {
+				printStatus("Go linting", true, "")
+			}
+			return nil
+		})
+	}
+
+	if config.Features.NativeBuild {
+		asyncCheck("Native build", "nativeBuild", func() error {
+			if !compactMode() {
+				fmt.Println("================================")
+				fmt.Println("  NATIVE BUILD CHECK")
+				fmt.Println("================================")
+			}
+			if err := checkNativeBuild(stagedFiles, config.NativeBuild); err != nil {
+				printStatus("Native build", false, "")
+				return err
+			}
+			if !compactMode() {
+				fmt.Println("Native build check passed")
+				fmt.Println()
+			} else {
+				printStatus("Native build", true, "")
+			}
+			return nil
+		})
+	}
+
+	if config.Features.ConvexValidation {
+		asyncCheck("Convex validation", "convexValidation", func() error {
+			if !compactMode() {
+				fmt.Println("================================")
+				fmt.Println("  CONVEX VALIDATION")
+				fmt.Println("================================")
+			}
+			if err := checkConvex(config.Convex); err != nil {
+				printStatus("Convex validation", false, "")
+				return err
+			}
+			if !compactMode() {
+				fmt.Println("Convex validation passed")
+				fmt.Println()
+			} else {
+				printStatus("Convex validation", true, "")
+			}
+			return nil
+		})
+	}
+
+	// Lint and Typecheck — each runs in its own goroutine and internally
+	// fans out per-app goroutines. Per-app start/end lines emit live; the
+	// phase-level summary appears at the end of each goroutine.
+	if config.Features.Lint {
+		asyncCheck("Lint", "lint", func() error {
+			return runLint(config.Apps, appFiles, sharedChanged, config.LintFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		})
+	}
+	if config.Features.Typecheck {
+		asyncCheck("Typecheck", "typecheck", func() error {
+			return runTypecheck(config.Apps, appFiles, sharedChanged, config.TypecheckFilter, config.Features.FullLintOnCommit, config.PackageManager)
+		})
+	}
+
 	if config.Features.ConsoleCheck {
-		collectResult("consoleCheck", runConsoleCheck(appFiles, config.ConsoleAllowed))
+		asyncCheck("Console check", "consoleCheck", func() error {
+			return runConsoleCheck(appFiles, config.ConsoleAllowed)
+		})
 	}
 
-	// Data layer check
 	if config.Features.DataLayerCheck {
-		collectResult("dataLayerCheck", runDataLayerCheck(appFiles, config.DataLayerAllowed))
+		asyncCheck("Data layer check", "dataLayerCheck", func() error {
+			return runDataLayerCheck(appFiles, config.DataLayerAllowed)
+		})
 	}
 
-	// Maestro flow validation
 	if config.Features.MaestroValidation {
-		collectResult("maestroValidation", runMaestroValidation(config.MaestroValidation))
+		asyncCheck("Maestro validation", "maestroValidation", func() error {
+			return runMaestroValidation(config.MaestroValidation)
+		})
 	}
 
-	// Frontend structure check
 	if config.Features.FrontendStructure {
-		collectResult("frontendStructure", runFrontendStructureCheck(config.Apps, stagedFiles))
+		asyncCheck("Frontend structure", "frontendStructure", func() error {
+			return runFrontendStructureCheck(config.Apps, stagedFiles)
+		})
 	}
 
-	// SRP check
 	if config.Features.SRP {
-		var srpFiles []string
-		fullMode := config.Features.FullSRPOnCommit
+		asyncCheck("SRP compliance", "srp", func() error {
+			var srpFiles []string
+			fullMode := config.Features.FullSRPOnCommit
 
-		if fullMode && len(config.SRPConfig.AppPaths) > 0 {
-			// Get all files from configured app paths for full SRP check
-			for _, appPath := range config.SRPConfig.AppPaths {
-				files, err := getAllFilesInPath(appPath)
-				if err != nil {
-					fmt.Printf("Warning: failed to get files from %s: %v\n", appPath, err)
-					continue
+			if fullMode && len(config.SRPConfig.AppPaths) > 0 {
+				for _, appPath := range config.SRPConfig.AppPaths {
+					files, err := getAllFilesInPath(appPath)
+					if err != nil {
+						fmt.Printf("Warning: failed to get files from %s: %v\n", appPath, err)
+						continue
+					}
+					srpFiles = append(srpFiles, files...)
 				}
-				srpFiles = append(srpFiles, files...)
+			} else {
+				srpFiles = stagedFiles
 			}
-		} else {
-			srpFiles = stagedFiles
-		}
 
-		// Build scope maps for testRequired rule
-		var newFiles, changedFiles map[string]bool
-		if config.SRPConfig.isRuleEnabled("testRequired") {
-			newFiles, _ = getNewlyAddedFiles()
-			// Build changedFiles set so scope:"changed" works with fullSRPOnCommit
-			changedFiles = make(map[string]bool, len(stagedFiles))
-			for _, f := range stagedFiles {
-				changedFiles[f] = true
+			var newFiles, changedFiles map[string]bool
+			if config.SRPConfig.isRuleEnabled("testRequired") {
+				newFiles, _ = getNewlyAddedFiles()
+				changedFiles = make(map[string]bool, len(stagedFiles))
+				for _, f := range stagedFiles {
+					changedFiles[f] = true
+				}
 			}
-		}
 
-		filterResult := filterFilesForSRPWithDetails(srpFiles, config.SRPConfig)
-		collectResult("srp", runSRPCheckWithFilter(filterResult, config.SRPConfig, fullMode, newFiles, changedFiles))
+			filterResult := filterFilesForSRPWithDetails(srpFiles, config.SRPConfig)
+			return runSRPCheckWithFilter(filterResult, config.SRPConfig, fullMode, newFiles, changedFiles)
+		})
 	}
 
-	// Test files check
 	if config.Features.TestFiles {
-		collectResult("testFiles", runTestFilesCheck(stagedFiles))
+		asyncCheck("Test files", "testFiles", func() error {
+			return runTestFilesCheck(stagedFiles)
+		})
 	}
 
-	// Mock check - ensures test files use __mocks__/ instead of inline jest.mock
 	if config.Features.MockCheck {
-		collectResult("mockCheck", runMockCheck(stagedFiles, config.MockCheck))
+		asyncCheck("Mock check", "mockCheck", func() error {
+			return runMockCheck(stagedFiles, config.MockCheck)
+		})
 	}
 
-	// Vitest assertions check - ensures vitest configs have requireAssertions: true
 	if config.Features.VitestAssertions {
-		collectResult("vitestAssertions", runVitestAssertionsCheck(config.Apps))
+		asyncCheck("Vitest assertions", "vitestAssertions", func() error {
+			return runVitestAssertionsCheck(config.Apps)
+		})
 	}
 
-	// Test coverage check - ensures source files have corresponding test files
 	if config.Features.TestCoverage {
-		collectResult("testCoverage", runTestCoverageCheck(config.TestCoverageConfig))
+		asyncCheck("Test coverage", "testCoverage", func() error {
+			return runTestCoverageCheck(config.TestCoverageConfig)
+		})
 	}
 
-	// Test quality check - bans export-only stub tests
 	if config.Features.TestQuality {
-		collectResult("testQuality", runTestQualityCheck(config.TestQualityConfig))
+		asyncCheck("Test quality", "testQuality", func() error {
+			return runTestQualityCheck(config.TestQualityConfig)
+		})
 	}
 
-	// Stub test check - bans expect(true).toBe(true) placeholder assertions
-	if config.Features.StubTestCheck {
-		projectRoot, _ := os.Getwd()
-		stagedAbs := make([]string, 0, len(stagedFiles))
-		for _, f := range stagedFiles {
-			if filepath.IsAbs(f) {
-				stagedAbs = append(stagedAbs, f)
-			} else {
-				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
-			}
-		}
-		collectResult("stubTestCheck", runStubTestCheck(config.StubTestCheckConfig, projectRoot, stagedAbs))
-	}
-
-	// Missing tests check - bans source files without co-located tests
-	if config.Features.MissingTestsCheck {
-		projectRoot, _ := os.Getwd()
-		stagedAbs := make([]string, 0, len(stagedFiles))
-		for _, f := range stagedFiles {
-			if filepath.IsAbs(f) {
-				stagedAbs = append(stagedAbs, f)
-			} else {
-				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
-			}
-		}
-		collectResult("missingTestsCheck", runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs))
-	}
-
-	// Test substance check — runs LOC-ratio / interaction / branch / tautology
-	// gates against (source, test) pairs. Files where the test exists but
-	// doesn't actually exercise the source are flagged.
-	if config.Features.TestSubstanceCheck {
-		projectRoot, _ := os.Getwd()
-		stagedAbs := make([]string, 0, len(stagedFiles))
-		for _, f := range stagedFiles {
-			if filepath.IsAbs(f) {
-				stagedAbs = append(stagedAbs, f)
-			} else {
-				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
-			}
-		}
-		collectResult("testSubstanceCheck", runTestSubstanceCheck(config.TestSubstanceCheckConfig, projectRoot, stagedAbs))
-	}
-
-	// Redundant createdAt check — bans `createdAt:` inside Convex
-	// defineTable({...}) because Convex provides `_creationTime` for free.
-	if config.Features.RedundantCreatedAtCheck {
-		projectRoot, _ := os.Getwd()
-		stagedAbs := make([]string, 0, len(stagedFiles))
-		for _, f := range stagedFiles {
-			if filepath.IsAbs(f) {
-				stagedAbs = append(stagedAbs, f)
-			} else {
-				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
-			}
-		}
-		collectResult("redundantCreatedAtCheck", runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs))
-	}
-
-	// Tiers-gen — regenerate derived translation file when the watched tier
-	// config is staged. Reads .tiers-gen.json from project root.
-	if config.Features.TiersGen {
-		projectRoot, _ := os.Getwd()
-		collectResult("tiersGen", checkTiersGen(projectRoot, stagedFiles))
-	}
-
-	// Build check
-	if config.Features.BuildCheck {
-		if !compactMode() {
-			fmt.Println("================================")
-			fmt.Println("  BUILD CHECK")
-			fmt.Println("================================")
-		}
-		if err := checkBuild(config.Build, config.Apps); err != nil {
-			collectResult("buildCheck", err)
-			printStatus("Build check", false, "")
+	// Pre-resolve project root + absolutized staged files once so the
+	// path-scoped checkers below don't each re-walk the working dir.
+	projectRoot, _ := os.Getwd()
+	stagedAbs := make([]string, 0, len(stagedFiles))
+	for _, f := range stagedFiles {
+		if filepath.IsAbs(f) {
+			stagedAbs = append(stagedAbs, f)
 		} else {
-			printStatus("Build check", true, "")
-		}
-		if !compactMode() {
-			fmt.Println()
+			stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
 		}
 	}
 
-	// Bundle check — runs each app's bundler (e.g. expo export) without
-	// compiling native code. Surfaces missing-dep / bad-import errors that
-	// typecheck and lint miss because the package is hoisted into root
-	// node_modules from another workspace but never declared in this app's
-	// package.json.
-	if config.Features.BundleCheck {
-		if err := runBundleCheck(config.BundleCheck, config.Apps, config.PackageManager); err != nil {
-			collectResult("bundleCheck", err)
-			parts := strings.SplitN(err.Error(), ":", 2)
-			detail := ""
-			if len(parts) == 2 {
-				detail = strings.TrimSpace(parts[1])
+	if config.Features.StubTestCheck {
+		asyncCheck("Stub tests", "stubTestCheck", func() error {
+			return runStubTestCheck(config.StubTestCheckConfig, projectRoot, stagedAbs)
+		})
+	}
+
+	if config.Features.MissingTestsCheck {
+		asyncCheck("Missing tests", "missingTestsCheck", func() error {
+			return runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs)
+		})
+	}
+
+	if config.Features.TestSubstanceCheck {
+		asyncCheck("Test substance", "testSubstanceCheck", func() error {
+			return runTestSubstanceCheck(config.TestSubstanceCheckConfig, projectRoot, stagedAbs)
+		})
+	}
+
+	if config.Features.RedundantCreatedAtCheck {
+		asyncCheck("Redundant createdAt", "redundantCreatedAtCheck", func() error {
+			return runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs)
+		})
+	}
+
+	if config.Features.BuildCheck {
+		asyncCheck("Build check", "buildCheck", func() error {
+			if !compactMode() {
+				fmt.Println("================================")
+				fmt.Println("  BUILD CHECK")
+				fmt.Println("================================")
 			}
-			printStatus("Bundle check", false, detail)
-		} else if len(config.BundleCheck.Apps) > 0 {
-			printStatus("Bundle check", true, fmt.Sprintf("%d apps", len(config.BundleCheck.Apps)))
-		}
-		if !compactMode() {
-			fmt.Println()
-		}
+			err := checkBuild(config.Build, config.Apps)
+			if err != nil {
+				printStatus("Build check", false, "")
+			} else {
+				printStatus("Build check", true, "")
+			}
+			if !compactMode() {
+				fmt.Println()
+			}
+			return err
+		})
+	}
+
+	if config.Features.BundleCheck {
+		asyncCheck("Bundle check", "bundleCheck", func() error {
+			err := runBundleCheck(config.BundleCheck, config.Apps, config.PackageManager)
+			if err != nil {
+				parts := strings.SplitN(err.Error(), ":", 2)
+				detail := ""
+				if len(parts) == 2 {
+					detail = strings.TrimSpace(parts[1])
+				}
+				printStatus("Bundle check", false, detail)
+			} else if len(config.BundleCheck.Apps) > 0 {
+				printStatus("Bundle check", true, fmt.Sprintf("%d apps", len(config.BundleCheck.Apps)))
+			}
+			if !compactMode() {
+				fmt.Println()
+			}
+			return err
+		})
 	}
 
 	// Tests - run if global enabled OR any per-app override enables tests
@@ -626,17 +740,24 @@ func run() error {
 		}
 	}
 	if shouldRunTests {
-		testCtx := TestRunContext{
-			AllApps:        config.Apps,
-			AffectedApps:   appFiles,
-			SharedChanged:  sharedChanged,
-			Config:         config.TestConfig,
-			GlobalEnabled:  config.Features.Tests,
-			PackageManager: config.PackageManager,
-			Env:            config.Env,
-		}
-		collectResult("tests", runTests(testCtx))
+		asyncCheck("Tests", "tests", func() error {
+			testCtx := TestRunContext{
+				AllApps:        config.Apps,
+				AffectedApps:   appFiles,
+				SharedChanged:  sharedChanged,
+				Config:         config.TestConfig,
+				GlobalEnabled:  config.Features.Tests,
+				PackageManager: config.PackageManager,
+				Env:            config.Env,
+			}
+			return runTests(testCtx)
+		})
 	}
+
+	// Wait for every async check to drain before we report aggregated
+	// errors and warnings. Status lines have already streamed to stdout in
+	// the order checks finished.
+	asyncWg.Wait()
 
 	// Report warnings
 	if len(allWarnings) > 0 {
