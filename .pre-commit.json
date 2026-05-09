@@ -1,0 +1,44 @@
+{
+  // This repo dogfoods its own pre-commit binary. The hook lives at
+  // .githooks/pre-commit (activated once per clone via `just setup-hooks`).
+  // The wrapping script rebuilds the binary, invokes it against this
+  // config, and runs `go test ./...` afterward — the binary's `tests`
+  // feature is shaped for JS package managers, so Go tests run via the
+  // wrapper rather than as a pre-commit feature.
+  //
+  // Only the features this repo actually uses are listed below. Every
+  // other feature defaults to off (Go zero value) — this avoids tripping
+  // the block-pre-commit-exceptions hook, which fires when features.*
+  // is explicitly flipped from true to false.
+  "packageManager": "bun",
+  "apps": {},
+  "sharedPaths": [],
+  "features": {
+    "changelog": true,
+    "goLint": true
+  },
+  // Global mode: every commit that touches non-excluded files needs at
+  // least one fragment under .changelog/*.txt at the repo root.
+  "changelog": {
+    "mode": "global",
+    "globalDir": ".changelog"
+  },
+  // Files that don't require a changelog entry.
+  "changelogExclude": [
+    "^\\.changelog/",
+    "^\\.github/",
+    "^\\.githooks/",
+    "^\\..+",
+    "^README\\.md$",
+    "^LICENSE",
+    "\\.md$",
+    "^justfile$",
+    "_test\\.go$"
+  ],
+  // Lint Go source under cmd/ and internal/. Falls back to `go vet` when
+  // golangci-lint isn't installed locally — see cmd/pre-commit/go_lint.go.
+  "goLint": {
+    "paths": ["cmd", "internal"],
+    "tool": "golangci-lint"
+  }
+}

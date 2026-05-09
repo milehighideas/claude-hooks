@@ -1,0 +1,7 @@
+chore: dogfood pre-commit binary in claude-hooks-monorepo
+
+Adds .pre-commit.json (changelog + goLint), .githooks/pre-commit
+(builds binary, runs binary, runs `go test ./...`), and a
+`just setup-hooks` recipe to activate the hook on a fresh clone.
+
+Future commits to this repo must ship a fragment under .changelog/.

@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+# Pre-commit hook for claude-hooks-monorepo (self-hosted).
+#
+# Activate once per clone with: just setup-hooks
+# (sets core.hooksPath to .githooks)
+#
+# Steps:
+#   1. Rebuild bin/pre-commit so the hook always reflects the staged code,
+#      not whatever was last built.
+#   2. Run bin/pre-commit, which reads .pre-commit.json and enforces the
+#      enabled features (currently goLint + changelog).
+#   3. Run `go test ./...` — the binary's `tests` feature targets JS
+#      package-manager workspaces and isn't viable for a Go repo.
+
+set -euo pipefail
+
+repo_root=$(git rev-parse --show-toplevel)
+cd "$repo_root"
+
+echo "→ Rebuilding bin/pre-commit"
+go build -o bin/pre-commit ./cmd/pre-commit/
+
+echo "→ Running pre-commit checks"
+./bin/pre-commit
+
+echo "→ Running go test ./..."
+go test ./...

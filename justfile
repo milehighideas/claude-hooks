@@ -4,6 +4,15 @@ bindir := "bin"
 default:
     @just --list
 
+# Activate the in-repo git pre-commit hook. One-time setup per clone.
+# Points core.hooksPath at .githooks so the wrapper script
+# (rebuild binary → run binary → go test ./...) fires on every commit.
+setup-hooks:
+    git config core.hooksPath .githooks
+    @echo "✓ Pre-commit hook installed."
+    @echo "  Each commit will rebuild bin/pre-commit, run it against"
+    @echo "  .pre-commit.json (goLint + changelog), and run go test ./..."
+
 # Build all binaries
 build: check-workspace auto-convex-gen auto-tiers-gen block-destructive-commands block-generated-files block-infrastructure block-lint-workarounds block-pre-commit-exceptions block-redundant-createdat changelog-add convex-gen docs-tracker enforce-tests-on-commit format-on-save markdown-formatter pre-commit smart-lint smart-test track-edited-files validate-frontend-structure validate-srp validate-test-files
 
