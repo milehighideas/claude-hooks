@@ -1,0 +1,1 @@
+feat(pre-commit): add --global-lock for cross-repo serialization

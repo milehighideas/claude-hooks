@@ -24,6 +24,7 @@ var (
 	configPath    string
 	reportDir     string
 	noLock        bool
+	globalLock    bool
 )
 
 func init() {
@@ -34,6 +35,7 @@ func init() {
 	flag.StringVar(&configPath, "config", "", "Path to .pre-commit.json config file (defaults to .pre-commit.json in target path)")
 	flag.StringVar(&reportDir, "report-dir", "", "Directory to write detailed lint/typecheck reports (creates lint/ and typecheck/ subdirs)")
 	flag.BoolVar(&noLock, "no-lock", false, "Skip exclusive lock (allow concurrent runs)")
+	flag.BoolVar(&globalLock, "global-lock", os.Getenv("PRE_COMMIT_GLOBAL_LOCK") == "1", "Serialize pre-commit runs across all repos via /tmp/pre-commit-global.lock (waits for previous run to finish). Also enabled by env PRE_COMMIT_GLOBAL_LOCK=1.")
 	flag.BoolVar(&verboseFlag, "verbose", false, "Print full per-app output even when reports are being written. Default: compact status lines when report-dir is set.")
 }
 
@@ -124,7 +126,7 @@ func printStartTo(w io.Writer, name string) {
 	if !compactMode() {
 		return
 	}
-	fmt.Fprintf(w, "  ▶ %s %s\n", now.Format("15:04:05"), name)
+	_, _ = fmt.Fprintf(w, "  ▶ %s %s\n", now.Format("15:04:05"), name)
 }
 
 // consumeStart returns the start time recorded by printStart for name and
@@ -207,7 +209,7 @@ func printStatusTo(w io.Writer, name string, passed bool, detail string) {
 	if detail != "" {
 		status = " (" + detail + ")"
 	}
-	fmt.Fprintf(w, "  %s %s%s\n", icon, name, status)
+	_, _ = fmt.Fprintf(w, "  %s %s%s\n", icon, name, status)
 }
 
 // printWarningStatus prints a compact warning status line for a non-blocking check.
@@ -225,7 +227,7 @@ func printWarningStatusTo(w io.Writer, name string, detail string) {
 	if detail != "" {
 		status = " (" + detail + ")"
 	}
-	fmt.Fprintf(w, "  ⚠️  %s%s (warning)\n", name, status)
+	_, _ = fmt.Fprintf(w, "  ⚠️  %s%s (warning)\n", name, status)
 }
 
 // printReportHint prints a pointer to the report directory for a failed check.
@@ -235,7 +237,7 @@ func printReportHint(subdir string) {
 
 func printReportHintTo(w io.Writer, subdir string) {
 	if compactMode() {
-		fmt.Fprintf(w, "     → %s/%s\n", reportDir, subdir)
+		_, _ = fmt.Fprintf(w, "     → %s/%s\n", reportDir, subdir)
 	}
 }
 
@@ -246,6 +248,20 @@ func main() {
 		printAvailableChecks()
 		return
 	}
+
+	// Optional system-wide blocking lock — serializes pre-commits across all repos
+	// on this machine. Lets two Claude sessions in different repos coexist without
+	// starving each other on test/typecheck CPU.
+	var globalLockFile *os.File
+	if globalLock && !noLock {
+		var err error
+		globalLockFile, err = acquireGlobalLockBlocking(getRepoToplevel())
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error acquiring global pre-commit lock: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	defer releaseLock(globalLockFile)
 
 	// Acquire exclusive lock to prevent concurrent pre-commit runs
 	var lockFile *os.File
@@ -268,6 +284,17 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// getRepoToplevel returns the absolute path of the current git repo, or
+// "unknown" if `git rev-parse` fails (e.g. running outside a repo).
+func getRepoToplevel() string {
+	cmd := exec.Command("git", "rev-parse", "--show-toplevel")
+	out, err := cmd.Output()
+	if err != nil {
+		return "unknown"
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // getLockPath returns a temp file path unique to the current git repo.
@@ -860,7 +887,7 @@ func runStandalone() error {
 	if err := os.Chdir(projectRoot); err != nil {
 		return fmt.Errorf("failed to change to project root: %w", err)
 	}
-	defer os.Chdir(originalDir)
+	defer func() { _ = os.Chdir(originalDir) }()
 
 	// Load configuration
 	config, err := loadConfig()
