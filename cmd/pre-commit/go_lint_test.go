@@ -206,7 +206,7 @@ func TestCheckGoLint_ToolFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	goDir := filepath.Join(tmpDir, "apps", "vendor-sync")
 	if err := os.MkdirAll(goDir, 0755); err != nil {
@@ -230,7 +230,7 @@ func TestCheckGoLint_ToolFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(oldDir)
+	defer func() { _ = os.Chdir(oldDir) }()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)
@@ -262,7 +262,7 @@ func TestCheckGoLint_LintingFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	goDir := filepath.Join(tmpDir, "apps", "vendor-sync")
 	if err := os.MkdirAll(goDir, 0755); err != nil {
@@ -295,7 +295,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(oldDir)
+	defer func() { _ = os.Chdir(oldDir) }()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)
@@ -326,7 +326,7 @@ func TestCheckGoLint_LintingSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	goDir := filepath.Join(tmpDir, "apps", "vendor-sync")
 	if err := os.MkdirAll(goDir, 0755); err != nil {
@@ -358,7 +358,7 @@ func main() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.Chdir(oldDir)
+	defer func() { _ = os.Chdir(oldDir) }()
 
 	if err := os.Chdir(tmpDir); err != nil {
 		t.Fatal(err)

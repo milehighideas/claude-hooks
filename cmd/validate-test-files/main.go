@@ -508,7 +508,7 @@ func run(data HookData, stderr io.Writer) int {
 			content, err := getResultingTestContent(data)
 			if err == nil {
 				if stubs.IsStubFile(testPath, content) {
-					fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Stub test file rejected
+					_, _ = fmt.Fprintf(stderr, `BLOCKED: Stub test file rejected
 
 File: %s
 
@@ -522,11 +522,11 @@ Write real assertions that verify the component's behavior.
 If the component is genuinely hard to test (complex Convex/Clerk context,
 auth gating, etc.), ask the user how much mocking infrastructure to build
 rather than falling back to stubs.
-`, filepath.Base(testPath)))
+`+"\n", filepath.Base(testPath))
 					return 2
 				}
 				if tautoCount := stubs.CountTautological(content); tautoCount > 0 {
-					fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Tautological assertion rejected
+					_, _ = fmt.Fprintf(stderr, `BLOCKED: Tautological assertion rejected
 
 File: %s
 
@@ -543,11 +543,11 @@ Examples that trip this check:
 Replace with an assertion that verifies what your code actually does. If
 you're asserting a label rendered correctly, compare against the source
 constant: expect(getByText(labels.SAVE).textContent).toBe(labels.SAVE).
-`, filepath.Base(testPath), tautoCount))
+`+"\n", filepath.Base(testPath), tautoCount)
 					return 2
 				}
 				if stubs.IsStubMajority(content) {
-					fmt.Fprintln(stderr, fmt.Sprintf(`BLOCKED: Majority-weak test file rejected
+					_, _ = fmt.Fprintf(stderr, `BLOCKED: Majority-weak test file rejected
 
 File: %s
 
@@ -559,7 +559,7 @@ closes that loophole.
 
 Replace the weak matchers with real assertions that compare against
 expected values: toBe / toEqual / toMatchObject / toHaveBeenCalledWith.
-`, filepath.Base(testPath)))
+`+"\n", filepath.Base(testPath))
 					return 2
 				}
 			}
@@ -620,7 +620,7 @@ To fix:
 1. Create the missing test files
 2. Disable per project: set features.testFiles=false in .pre-commit.json
 `
-	fmt.Fprintln(stderr, msg)
+	_, _ = fmt.Fprintln(stderr, msg)
 	return 2
 }
 

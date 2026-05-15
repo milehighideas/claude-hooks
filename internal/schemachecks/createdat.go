@@ -5,10 +5,10 @@
 // every row. Shared between:
 //
 //   - cmd/block-redundant-createdat   (PreToolUse hook — blocks edits that
-//                                      ADD a new createdAt)
+//     ADD a new createdAt)
 //   - cmd/pre-commit                  (commit-time ratchet — reports every
-//                                      schema file currently violating the
-//                                      rule)
+//     schema file currently violating the
+//     rule)
 //
 // Like internal/stubs, the detector is regex-based rather than AST-based.
 // Schema files are constrained enough that a brace-depth walker + comment
@@ -221,7 +221,7 @@ func blankComments(src string) string {
 	for i < len(b) {
 		if i+1 < len(b) && b[i] == '/' && b[i+1] == '*' {
 			end := i + 2
-			for end+1 < len(b) && !(b[end] == '*' && b[end+1] == '/') {
+			for end+1 < len(b) && (b[end] != '*' || b[end+1] != '/') {
 				end++
 			}
 			closeEnd := end + 2
@@ -282,7 +282,7 @@ func List(root string, out io.Writer) (int, error) {
 			return nil
 		}
 		if HasRedundantCreatedAt(string(data)) {
-			fmt.Fprintln(out, path)
+			_, _ = fmt.Fprintln(out, path)
 			count++
 		}
 		return nil

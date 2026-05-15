@@ -83,7 +83,7 @@ func seedSession(t *testing.T, provider sessionFileProvider, sessionID string, d
 }
 
 // runEnforce runs enforceWithProvider for a given file_path/session.
-func runEnforce(t *testing.T, provider sessionFileProvider, sessionID, filePath string) (error, string) {
+func runEnforce(t *testing.T, provider sessionFileProvider, sessionID, filePath string) (string, error) {
 	t.Helper()
 	input := HookInput{
 		ToolName:  "Edit",
@@ -93,7 +93,7 @@ func runEnforce(t *testing.T, provider sessionFileProvider, sessionID, filePath 
 	data, _ := json.Marshal(input)
 	var stderr bytes.Buffer
 	err := enforceWithProvider(bytes.NewReader(data), &stderr, provider)
-	return err, stderr.String()
+	return stderr.String(), err
 }
 
 // ---------------------------------------------------------------------------
@@ -107,7 +107,7 @@ func TestEnforce_NoConfig_IsNoOp(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Fatalf("expected allow, got %v", err)
 	}
@@ -124,7 +124,7 @@ func TestEnforce_FeatureFlagOff_IsNoOp(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Fatalf("expected allow, got %v", err)
 	}
@@ -141,7 +141,7 @@ func TestEnforce_FeatureFlagMissing_IsNoOp(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Fatalf("expected allow, got %v", err)
 	}
@@ -158,7 +158,7 @@ func TestEnforce_MalformedConfig_IsNoOp(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Fatalf("expected allow, got %v", err)
 	}
@@ -178,7 +178,7 @@ func TestEnforce_JSONCCommentsAllowed(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block (exit 2), got %v", err)
@@ -202,14 +202,14 @@ func TestEnforce_AppPaths_LimitsScope(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 
 	// In-scope: blocked.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.ts"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("apps/web: expected block, got %v", err)
 	}
 
 	// Out-of-scope: allowed.
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "mobile", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "mobile", "foo.ts"))
 	if err != nil {
 		t.Fatalf("apps/mobile: expected allow, got %v", err)
 	}
@@ -231,14 +231,14 @@ func TestEnforce_ExcludePaths_Skips(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 
 	// Non-excluded: still blocked.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.ts"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("apps/web: expected block, got %v", err)
 	}
 
 	// Excluded: allowed.
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "legacy", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "legacy", "foo.ts"))
 	if err != nil {
 		t.Fatalf("apps/legacy: expected allow, got %v", err)
 	}
@@ -255,7 +255,7 @@ func TestEnforce_ExcludePaths_BeatsAppPaths(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "legacy", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "legacy", "foo.ts"))
 	if err != nil {
 		t.Fatalf("expected allow (excluded), got %v", err)
 	}
@@ -279,7 +279,7 @@ func TestEnforce_CustomMapping_GatesOnExternalDoc(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block, got %v", err)
@@ -290,7 +290,7 @@ func TestEnforce_CustomMapping_GatesOnExternalDoc(t *testing.T) {
 
 	// After reading the doc, edits should be allowed.
 	seedSession(t, provider, "s", []string{"docs/frontend.md"})
-	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	_, err = runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	if err != nil {
 		t.Fatalf("expected allow after reading, got %v", err)
 	}
@@ -314,7 +314,7 @@ func TestEnforce_CustomMapping_MergesWithAutoDiscovery(t *testing.T) {
 
 	// Reading only one → still blocked.
 	seedSession(t, provider, "s", []string{"apps/web/CLAUDE.md"})
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block until both read, got %v", err)
@@ -325,7 +325,7 @@ func TestEnforce_CustomMapping_MergesWithAutoDiscovery(t *testing.T) {
 
 	// Reading both → allowed.
 	seedSession(t, provider, "s", []string{"apps/web/CLAUDE.md", "docs/frontend.md"})
-	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	_, err = runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	if err != nil {
 		t.Fatalf("expected allow with both read, got %v", err)
 	}
@@ -345,7 +345,7 @@ func TestEnforce_CustomMapping_MostSpecificWins(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block, got %v", err)
@@ -371,7 +371,7 @@ func TestEnforce_CustomMapping_NormalizesSlashes(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block, got %v", err)
@@ -397,13 +397,13 @@ func TestEnforce_CustomMapping_SkipsEmptyEntries(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 
 	// apps/web/ had empty docs → not gated.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	if err != nil {
 		t.Fatalf("expected allow (dropped mapping), got %v", err)
 	}
 
 	// apps/mobile/ is valid → gated.
-	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "apps", "mobile", "foo.tsx"))
+	_, err = runEnforce(t, provider, "s", filepath.Join(root, "apps", "mobile", "foo.tsx"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block on apps/mobile, got %v", err)
@@ -435,7 +435,7 @@ func TestTrack_RecordsCustomDocRead(t *testing.T) {
 	}
 
 	// Subsequent edit should be allowed.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "foo.tsx"))
 	if err != nil {
 		t.Fatalf("expected allow after track, got %v", err)
 	}
@@ -452,7 +452,7 @@ func TestEnforce_AutoDiscover_BlocksWhenDocUnread(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block (exit 2), got %v", err)
@@ -470,7 +470,7 @@ func TestEnforce_AutoDiscover_AllowsWhenDocRead(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
 
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Errorf("expected allow, got %v", err)
 	}
@@ -483,7 +483,7 @@ func TestEnforce_AutoDiscoverOff_IgnoresClaudeMd(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Errorf("expected allow with autoDiscover false, got %v", err)
 	}
@@ -496,7 +496,7 @@ func TestEnforce_CustomDocFileNames(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	exitErr, ok := err.(*ExitError)
 	if !ok || exitErr.Code != 2 {
 		t.Fatalf("expected block, got %v", err)
@@ -524,7 +524,7 @@ func TestEnforce_ConvexPreset_Blocks(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected block, got %v", err)
 	}
@@ -559,7 +559,7 @@ func TestEnforce_ConvexPreset_ListsOnlyMissing(t *testing.T) {
 		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
 	})
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected block (one skill still missing), got %v", err)
 	}
@@ -589,7 +589,7 @@ func TestEnforce_ConvexPreset_AllowsWhenAllDocsRead(t *testing.T) {
 		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
 	})
 
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Errorf("expected allow, got %v", err)
 	}
@@ -605,7 +605,7 @@ func TestEnforce_ConvexPreset_CustomBackendDir(t *testing.T) {
 	})
 	provider := sessionProvider(t.TempDir())
 
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "apps", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "backend", "foo.ts"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected block, got %v", err)
 	}
@@ -628,7 +628,7 @@ func TestEnforce_ConvexPreset_OnlyAffectsBackendDir(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 
 	// Editing a frontend file should NOT be blocked.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "page.tsx"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "page.tsx"))
 	if err != nil {
 		t.Errorf("expected allow for apps/web/page.tsx, got %v", err)
 	}
@@ -645,12 +645,12 @@ func TestEnforce_ConvexPreset_SkipsEditingOwnDocs(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 
 	// Editing the guidelines.md itself should be allowed.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "convex", "_generated", "ai", "guidelines.md"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "convex", "_generated", "ai", "guidelines.md"))
 	if err != nil {
 		t.Errorf("expected allow for editing own required doc, got %v", err)
 	}
 	// Editing a SKILL.md should be allowed.
-	err, _ = runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", ".agents", "skills", "convex-quickstart", "SKILL.md"))
+	_, err = runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", ".agents", "skills", "convex-quickstart", "SKILL.md"))
 	if err != nil {
 		t.Errorf("expected allow for editing own SKILL.md, got %v", err)
 	}
@@ -665,7 +665,7 @@ func TestEnforce_ConvexPreset_NoBackendDir_IsNoOp(t *testing.T) {
 	provider := sessionProvider(t.TempDir())
 
 	// Random file edit with no backend dir: preset is silent, auto-discovery handles ui.
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "page.tsx"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "apps", "web", "page.tsx"))
 	if err != nil {
 		t.Errorf("expected allow (no backend, no matching doc), got %v", err)
 	}
@@ -691,7 +691,7 @@ func TestEnforce_ConvexPreset_MergesWithClaudeMdAutoDiscovery(t *testing.T) {
 
 	// Reading only CLAUDE.md should NOT satisfy — preset docs still missing.
 	seedSession(t, provider, "s", []string{"packages/backend/CLAUDE.md"})
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected block (preset docs still unread), got %v", err)
 	}
@@ -704,7 +704,7 @@ func TestEnforce_ConvexPreset_MergesWithClaudeMdAutoDiscovery(t *testing.T) {
 		"packages/backend/convex/_generated/ai/guidelines.md",
 		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
 	})
-	err, stderr = runEnforce(t, provider, "s2", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err = runEnforce(t, provider, "s2", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected block (CLAUDE.md still unread), got %v", err)
 	}
@@ -718,13 +718,13 @@ func TestEnforce_ConvexPreset_MergesWithClaudeMdAutoDiscovery(t *testing.T) {
 		"packages/backend/convex/_generated/ai/guidelines.md",
 		"packages/backend/.agents/skills/convex-quickstart/SKILL.md",
 	})
-	err, _ = runEnforce(t, provider, "s3", filepath.Join(root, "packages", "backend", "foo.ts"))
+	_, err = runEnforce(t, provider, "s3", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Fatalf("expected allow with full union read, got %v", err)
 	}
 
 	// Editing a ui file should still be gated by CLAUDE.md auto-discovery.
-	err, stderr = runEnforce(t, provider, "s4", filepath.Join(root, "packages", "ui", "Button.tsx"))
+	stderr, err = runEnforce(t, provider, "s4", filepath.Join(root, "packages", "ui", "Button.tsx"))
 	if _, ok := err.(*ExitError); !ok {
 		t.Fatalf("expected ui block, got %v", err)
 	}
@@ -751,7 +751,7 @@ func TestEnforce_SkipPatterns(t *testing.T) {
 	}
 	for _, path := range cases {
 		t.Run(path, func(t *testing.T) {
-			err, _ := runEnforce(t, provider, "s", path)
+			_, err := runEnforce(t, provider, "s", path)
 			if err != nil {
 				t.Errorf("expected allow, got %v", err)
 			}
@@ -783,7 +783,7 @@ func TestEnforce_UnmappedFilesAllowed(t *testing.T) {
 		docs:   []string{"packages/backend/CLAUDE.md"},
 	})
 	provider := sessionProvider(t.TempDir())
-	err, _ := runEnforce(t, provider, "s", filepath.Join(root, "src", "utils", "helper.ts"))
+	_, err := runEnforce(t, provider, "s", filepath.Join(root, "src", "utils", "helper.ts"))
 	if err != nil {
 		t.Errorf("expected allow, got %v", err)
 	}
@@ -819,7 +819,7 @@ func TestTrack_RegistersKnownDoc(t *testing.T) {
 	}
 
 	// Edit should now be allowed.
-	err, stderr := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
+	stderr, err := runEnforce(t, provider, "s", filepath.Join(root, "packages", "backend", "foo.ts"))
 	if err != nil {
 		t.Errorf("expected allow after reading both docs, got %v, stderr: %s", err, stderr)
 	}

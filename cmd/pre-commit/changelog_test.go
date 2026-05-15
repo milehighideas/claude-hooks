@@ -135,10 +135,10 @@ func TestCheckChangelog(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set or clear the skip env var
 			if tt.skipEnvVar != "" {
-				os.Setenv("SKIP_CHANGELOG_CHECK", tt.skipEnvVar)
-				defer os.Unsetenv("SKIP_CHANGELOG_CHECK")
+				_ = os.Setenv("SKIP_CHANGELOG_CHECK", tt.skipEnvVar)
+				defer func() { _ = os.Unsetenv("SKIP_CHANGELOG_CHECK") }()
 			} else {
-				os.Unsetenv("SKIP_CHANGELOG_CHECK")
+				_ = os.Unsetenv("SKIP_CHANGELOG_CHECK")
 			}
 
 			err := checkChangelog(tt.stagedFiles, tt.excludePatterns, tt.config, tt.apps)
@@ -260,7 +260,7 @@ func TestCheckChangelogPerApp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			os.Unsetenv("SKIP_CHANGELOG_CHECK")
+			_ = os.Unsetenv("SKIP_CHANGELOG_CHECK")
 
 			err := checkChangelog(tt.stagedFiles, tt.excludePatterns, tt.config, tt.apps)
 

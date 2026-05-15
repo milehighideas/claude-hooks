@@ -417,7 +417,7 @@ func block(reason string) {
 	resp.HookSpecificOutput.HookEventName = "PreToolUse"
 	resp.HookSpecificOutput.PermissionDecision = "deny"
 	resp.HookSpecificOutput.PermissionDecisionReason = reason
-	json.NewEncoder(os.Stdout).Encode(resp)
+	_ = json.NewEncoder(os.Stdout).Encode(resp)
 	fmt.Fprintln(os.Stderr, reason)
 	os.Exit(2)
 }

@@ -14,7 +14,7 @@ func TestCheckBranchProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to create temp dir: %v", err)
 	}
-	defer os.RemoveAll(tempDir)
+	defer func() { _ = os.RemoveAll(tempDir) }()
 
 	// Initialize git repo
 	if err := runGitCommand(tempDir, "init"); err != nil {
@@ -47,7 +47,7 @@ func TestCheckBranchProtection(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to get current dir: %v", err)
 	}
-	defer os.Chdir(originalDir)
+	defer func() { _ = os.Chdir(originalDir) }()
 
 	if err := os.Chdir(tempDir); err != nil {
 		t.Fatalf("Failed to change to temp dir: %v", err)
@@ -110,10 +110,10 @@ func TestCheckBranchProtection(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Set or unset the env var
 			if tt.skipEnvVar != "" {
-				os.Setenv("SKIP_BRANCH_PROTECTION", tt.skipEnvVar)
-				defer os.Unsetenv("SKIP_BRANCH_PROTECTION")
+				_ = os.Setenv("SKIP_BRANCH_PROTECTION", tt.skipEnvVar)
+				defer func() { _ = os.Unsetenv("SKIP_BRANCH_PROTECTION") }()
 			} else {
-				os.Unsetenv("SKIP_BRANCH_PROTECTION")
+				_ = os.Unsetenv("SKIP_BRANCH_PROTECTION")
 			}
 
 			err := checkBranchProtection(tt.protectedBranches)

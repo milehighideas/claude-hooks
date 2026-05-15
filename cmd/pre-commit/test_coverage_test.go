@@ -131,15 +131,15 @@ func TestTestCoverageChecker(t *testing.T) {
 
 	// Create app with proper structure
 	hooksDir := filepath.Join(tempDir, "app", "hooks")
-	os.MkdirAll(hooksDir, 0755)
+	_ = os.MkdirAll(hooksDir, 0755)
 
 	// Create a hook file without test
-	os.WriteFile(filepath.Join(hooksDir, "useUsers.ts"), []byte("export function useUsers() {}"), 0644)
-	os.WriteFile(filepath.Join(hooksDir, "index.ts"), []byte("export * from './useUsers'"), 0644)
+	_ = os.WriteFile(filepath.Join(hooksDir, "useUsers.ts"), []byte("export function useUsers() {}"), 0644)
+	_ = os.WriteFile(filepath.Join(hooksDir, "index.ts"), []byte("export * from './useUsers'"), 0644)
 
 	// Create a hook file with test
-	os.WriteFile(filepath.Join(hooksDir, "useSettings.ts"), []byte("export function useSettings() {}"), 0644)
-	os.WriteFile(filepath.Join(hooksDir, "useSettings.test.ts"), []byte("test('useSettings', () => {})"), 0644)
+	_ = os.WriteFile(filepath.Join(hooksDir, "useSettings.ts"), []byte("export function useSettings() {}"), 0644)
+	_ = os.WriteFile(filepath.Join(hooksDir, "useSettings.test.ts"), []byte("test('useSettings', () => {})"), 0644)
 
 	checker := NewTestCoverageChecker(TestCoverageConfig{
 		AppPaths:           []string{filepath.Join(tempDir, "app")},

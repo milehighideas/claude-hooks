@@ -91,22 +91,22 @@ func runLint(apps map[string]AppConfig, appFiles map[string][]string, sharedChan
 // in deterministic order after both have finished.
 func runLintTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, lintFilter LintFilter, fullLintOnCommit bool, packageManager string) error {
 	if !compactMode() {
-		fmt.Fprintln(w, "================================")
-		fmt.Fprintln(w, "  LINT (PARALLEL)")
-		fmt.Fprintln(w, "================================")
+		_, _ = fmt.Fprintln(w, "================================")
+		_, _ = fmt.Fprintln(w, "  LINT (PARALLEL)")
+		_, _ = fmt.Fprintln(w, "================================")
 	}
 
 	jobs := collectJobs(apps, appFiles, sharedChanged, fullLintOnCommit, func(a AppConfig) bool { return a.SkipLint })
 
 	if len(jobs) == 0 {
 		if !compactMode() {
-			fmt.Fprintln(w, "No apps to lint")
+			_, _ = fmt.Fprintln(w, "No apps to lint")
 		}
 		return nil
 	}
 
 	if !compactMode() {
-		fmt.Fprintf(w, "Linting %d app(s) in parallel...\n\n", len(jobs))
+		_, _ = fmt.Fprintf(w, "Linting %d app(s) in parallel...\n\n", len(jobs))
 	}
 
 	var wg sync.WaitGroup
@@ -209,22 +209,22 @@ func runTypecheck(apps map[string]AppConfig, appFiles map[string][]string, share
 // runTypecheckTo is the io.Writer-parameterized variant; see runLintTo.
 func runTypecheckTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]string, sharedChanged bool, typecheckFilter TypecheckFilter, fullLintOnCommit bool, packageManager string) error {
 	if !compactMode() {
-		fmt.Fprintln(w, "================================")
-		fmt.Fprintln(w, "  TYPECHECK (PARALLEL)")
-		fmt.Fprintln(w, "================================")
+		_, _ = fmt.Fprintln(w, "================================")
+		_, _ = fmt.Fprintln(w, "  TYPECHECK (PARALLEL)")
+		_, _ = fmt.Fprintln(w, "================================")
 	}
 
 	jobs := collectJobs(apps, appFiles, sharedChanged, fullLintOnCommit, func(a AppConfig) bool { return a.SkipTypecheck })
 
 	if len(jobs) == 0 {
 		if !compactMode() {
-			fmt.Fprintln(w, "No apps to typecheck")
+			_, _ = fmt.Fprintln(w, "No apps to typecheck")
 		}
 		return nil
 	}
 
 	if !compactMode() {
-		fmt.Fprintf(w, "Typechecking %d app(s) in parallel...\n\n", len(jobs))
+		_, _ = fmt.Fprintf(w, "Typechecking %d app(s) in parallel...\n\n", len(jobs))
 	}
 
 	var wg sync.WaitGroup
@@ -313,8 +313,8 @@ func finalizePhaseResults(w io.Writer, phaseName, reportSubdir string, results [
 			}
 		} else {
 			if result.Output != "" {
-				fmt.Fprint(w, result.Output)
-				fmt.Fprintln(w)
+				_, _ = fmt.Fprint(w, result.Output)
+				_, _ = fmt.Fprintln(w)
 			}
 			if result.Err != nil {
 				checksFailed = true
@@ -344,12 +344,12 @@ func finalizePhaseResults(w io.Writer, phaseName, reportSubdir string, results [
 	}
 
 	if checksFailed {
-		fmt.Fprintln(w, "================================")
-		fmt.Fprintf(w, "  %s FAILED\n", strings.ToUpper(phaseName))
-		fmt.Fprintln(w, "================================")
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, "Fix the errors above and try again")
-		fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "================================")
+		_, _ = fmt.Fprintf(w, "  %s FAILED\n", strings.ToUpper(phaseName))
+		_, _ = fmt.Fprintln(w, "================================")
+		_, _ = fmt.Fprintln(w)
+		_, _ = fmt.Fprintln(w, "Fix the errors above and try again")
+		_, _ = fmt.Fprintln(w)
 		return fmt.Errorf("%s failed", strings.ToLower(phaseName))
 	}
 	return nil

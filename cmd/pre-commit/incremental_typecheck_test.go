@@ -59,14 +59,14 @@ func TestIncrementalTypecheck_ToRelativePaths(t *testing.T) {
 	// Create a temporary directory structure
 	tmpDir := t.TempDir()
 	projectDir := filepath.Join(tmpDir, "project")
-	os.MkdirAll(projectDir, 0755)
+	_ = os.MkdirAll(projectDir, 0755)
 
 	// Create test files
 	testFile := filepath.Join(projectDir, "app.ts")
-	os.WriteFile(testFile, []byte(""), 0644)
+	_ = os.WriteFile(testFile, []byte(""), 0644)
 
 	outsideFile := filepath.Join(tmpDir, "outside.ts")
-	os.WriteFile(outsideFile, []byte(""), 0644)
+	_ = os.WriteFile(outsideFile, []byte(""), 0644)
 
 	it := NewIncrementalTypecheck(projectDir, nil, TypecheckFilter{})
 
@@ -111,8 +111,8 @@ func TestIncrementalTypecheck_FindTypeDefinitionFiles(t *testing.T) {
 	tmpDir := t.TempDir()
 
 	// Create type definition files
-	os.WriteFile(filepath.Join(tmpDir, "uniwind-types.d.ts"), []byte(""), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "expo-env.d.ts"), []byte(""), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "uniwind-types.d.ts"), []byte(""), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "expo-env.d.ts"), []byte(""), 0644)
 
 	it := NewIncrementalTypecheck(tmpDir, nil, TypecheckFilter{})
 	typeDefFiles := it.findTypeDefinitionFiles()

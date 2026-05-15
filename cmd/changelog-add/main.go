@@ -394,7 +394,7 @@ func main() {
 
 		case "required":
 			// Scope must match an app
-			if apps == nil || len(apps) == 0 {
+			if len(apps) == 0 {
 				fmt.Fprintln(os.Stderr, "Error: mode 'required' requires apps to be configured")
 				os.Exit(1)
 			}

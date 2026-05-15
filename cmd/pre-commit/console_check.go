@@ -101,12 +101,6 @@ func (c *ConsoleChecker) hasConsoleStatements(content []byte) bool {
 	return pattern.Match(content)
 }
 
-// checkConsoleStatements is the original function signature for backward compatibility
-func checkConsoleStatements(appName string, files []string, allowedFiles []string) error {
-	checker := NewConsoleChecker()
-	return checker.Check(appName, files, allowedFiles)
-}
-
 // ConsoleViolation represents a console statement violation
 type ConsoleViolation struct {
 	AppName string

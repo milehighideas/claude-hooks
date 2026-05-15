@@ -53,9 +53,6 @@ func (s *Scanner) ScanConvexDirectory() ([]ConvexFile, error) {
 	convexDir := s.config.Convex.Path
 
 	err := filepath.Walk(convexDir, func(path string, info os.FileInfo, err error) error {
-		// DEBUG: Log each file we encounter
-		if strings.HasSuffix(path, "projects.ts") {
-		}
 		if err != nil {
 			return err
 		}
@@ -89,27 +86,16 @@ func (s *Scanner) ScanConvexDirectory() ([]ConvexFile, error) {
 
 		fileName := info.Name()
 
-		// DEBUG: Check projects.ts specifically
-		if fileName == "projects.ts" {
-		}
-
 		// Check skip patterns
 		for _, pattern := range s.skipPatterns {
 			if pattern.MatchString(fileName) {
-				if fileName == "projects.ts" {
-				}
 				return nil
 			}
 		}
 
 		// Skip special files
 		if s.isSpecialFile(fileName) {
-			if fileName == "projects.ts" {
-			}
 			return nil
-		}
-
-		if fileName == "projects.ts" {
 		}
 
 		// Calculate namespace from relative path

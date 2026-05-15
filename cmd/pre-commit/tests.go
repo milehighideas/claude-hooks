@@ -230,7 +230,7 @@ func writeTestReport(appName, output string, testErr error, baseDir string) {
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 	sb.WriteString(output)
 
-	os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	_ = os.WriteFile(reportPath, []byte(sb.String()), 0644)
 }
 
 // determineAppsToTest returns the apps that should have tests run based on config and context

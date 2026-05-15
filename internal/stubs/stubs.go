@@ -159,7 +159,7 @@ func List(root string, out io.Writer) (int, error) {
 			return nil
 		}
 		if IsStubFile(path, string(data)) {
-			fmt.Fprintln(out, path)
+			_, _ = fmt.Fprintln(out, path)
 			count++
 		}
 		return nil

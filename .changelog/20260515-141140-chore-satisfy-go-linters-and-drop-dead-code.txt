@@ -1,0 +1,8 @@
+chore: satisfy go linters and drop dead code across cmd/
+
+Lint cleanups (errcheck, staticcheck) and dead-code removal sweep across
+the binaries: removed `runFilteredLint` indirection (eslint.go), unused
+`toHookName` helper (convex-gen/utils.go), stale debug-print stubs
+(convex-gen/scanner.go, main.go), and similar single-call wrappers.
+Error returns now use the `_ =` discard idiom where the result is
+intentionally ignored. Behaviour is unchanged.

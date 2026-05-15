@@ -110,8 +110,8 @@ func TestVitestAssertionsChecker(t *testing.T) {
 
 	// Create app with valid config
 	validApp := filepath.Join(tempDir, "valid-app")
-	os.MkdirAll(validApp, 0755)
-	os.WriteFile(filepath.Join(validApp, "vitest.config.ts"), []byte(`
+	_ = os.MkdirAll(validApp, 0755)
+	_ = os.WriteFile(filepath.Join(validApp, "vitest.config.ts"), []byte(`
 export default defineConfig({
   test: {
     expect: {
@@ -123,8 +123,8 @@ export default defineConfig({
 
 	// Create app with invalid config
 	invalidApp := filepath.Join(tempDir, "invalid-app")
-	os.MkdirAll(invalidApp, 0755)
-	os.WriteFile(filepath.Join(invalidApp, "vitest.config.ts"), []byte(`
+	_ = os.MkdirAll(invalidApp, 0755)
+	_ = os.WriteFile(filepath.Join(invalidApp, "vitest.config.ts"), []byte(`
 export default defineConfig({
   test: {
     globals: true,
@@ -134,7 +134,7 @@ export default defineConfig({
 
 	// Create app without vitest config (should be skipped)
 	noConfigApp := filepath.Join(tempDir, "no-config-app")
-	os.MkdirAll(noConfigApp, 0755)
+	_ = os.MkdirAll(noConfigApp, 0755)
 
 	apps := map[string]AppConfig{
 		"valid":    {Path: validApp},

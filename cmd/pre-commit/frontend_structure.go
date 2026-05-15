@@ -6,23 +6,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 )
 
 // runFrontendStructureCheck runs the frontend structure validation by shelling
 // out to the validate-frontend-structure binary (co-located in this monorepo).
 func runFrontendStructureCheck(apps map[string]AppConfig, stagedFiles []string) error {
-	if !compactMode() {
-		fmt.Println("================================")
-		fmt.Println("  FRONTEND STRUCTURE CHECK")
-		fmt.Println("================================")
-	}
-
-	return runFrontendStructureBinary()
-}
-
-// runFrontendStructureCheckStandalone runs the check for standalone mode
-func runFrontendStructureCheckStandalone(apps map[string]AppConfig, files []string) error {
 	if !compactMode() {
 		fmt.Println("================================")
 		fmt.Println("  FRONTEND STRUCTURE CHECK")
@@ -86,31 +74,3 @@ func runFrontendStructureBinary() error {
 	return nil
 }
 
-// getAllFilesForFrontendCheck gets all files in a directory for frontend structure checking
-func getAllFilesForFrontendCheck(dir, projectRoot string) ([]string, error) {
-	var files []string
-
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if info.IsDir() {
-			name := info.Name()
-			if strings.HasPrefix(name, ".") || name == "node_modules" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-
-		relPath, err := filepath.Rel(projectRoot, path)
-		if err != nil {
-			return err
-		}
-
-		files = append(files, relPath)
-		return nil
-	})
-
-	return files, err
-}

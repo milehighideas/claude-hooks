@@ -68,70 +68,6 @@ func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilte
 	}
 }
 
-// runFilteredTypecheck runs tsc and filters out configured errors
-func runFilteredTypecheck(appName, appPath, filter, packageManager string, tf TypecheckFilter, nodeMemoryMB int) error {
-	// Default filter patterns if none configured (nil = not set, use defaults; empty = explicitly no filtering)
-	errorCodes := tf.ErrorCodes
-	if errorCodes == nil {
-		errorCodes = DefaultErrorCodes
-	}
-	excludePaths := tf.ExcludePaths
-	if excludePaths == nil {
-		excludePaths = DefaultExcludePaths
-	}
-
-	// Build tsc command using configured package manager
-	cmd := buildTypecheckCmd(packageManager, filter, appPath, tf)
-
-	// Set NODE_OPTIONS for memory limit if configured
-	if nodeMemoryMB > 0 {
-		cmd.Env = append(os.Environ(), fmt.Sprintf("NODE_OPTIONS=--max-old-space-size=%d", nodeMemoryMB))
-	}
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	cmd.Run() // Ignore exit code, we'll determine success from filtered errors
-
-	// Combine stdout and stderr (tsc writes errors to stdout)
-	output := stdout.String() + stderr.String()
-
-	// Parse and filter errors
-	errors := parseTypeScriptErrors(output)
-	var realErrors []tsError
-
-	for _, err := range errors {
-		if shouldFilterError(err, errorCodes, excludePaths) {
-			continue
-		}
-		realErrors = append(realErrors, err)
-	}
-
-	// Print filtered count
-	filteredCount := len(errors) - len(realErrors)
-	if filteredCount > 0 {
-		fmt.Printf("   (filtered %d known errors)\n", filteredCount)
-	}
-
-	// Write report if reportDir is set
-	if reportDir != "" {
-		if err := writeTypecheckReport(appName, output, errors, realErrors, reportDir); err != nil {
-			fmt.Printf("   Warning: failed to write typecheck report: %v\n", err)
-		}
-	}
-
-	// Print real errors
-	if len(realErrors) > 0 {
-		fmt.Println()
-		for _, err := range realErrors {
-			fmt.Println(err.fullText)
-		}
-		return fmt.Errorf("found %d typecheck error(s)", len(realErrors))
-	}
-
-	return nil
-}
-
 // writeTypecheckReport writes typecheck findings to a report file
 func writeTypecheckReport(appName, rawOutput string, allErrors, realErrors []tsError, baseDir string) error {
 	typecheckDir := filepath.Join(baseDir, "typecheck")
@@ -279,7 +215,7 @@ func runFilteredTypecheckBuffered(appName, appPath, filter, packageManager strin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Run() // Ignore exit code, we'll determine success from filtered errors
+	_ = cmd.Run() // Ignore exit code, we'll determine success from filtered errors
 
 	// Combine stdout and stderr (tsc writes errors to stdout)
 	tscOutput := stdout.String() + stderr.String()

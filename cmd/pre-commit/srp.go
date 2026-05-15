@@ -839,11 +839,6 @@ func writeSRPReport(errors, warnings []SRPViolation, baseDir string) error {
 	return nil
 }
 
-// runSRPCheck is the entry point for SRP checking (uses default config)
-func runSRPCheck(stagedFiles []string) error {
-	return runSRPCheckWithFilter(SRPFilterResult{Files: stagedFiles}, SRPConfig{}, false, nil, nil)
-}
-
 // runSRPCheckWithFilter runs SRP check with filter information displayed.
 // newFiles is a set of newly added files (for testRequired scope:"new").
 // changedFiles is all staged files (for testRequired scope:"changed"); nil disables scope filtering.

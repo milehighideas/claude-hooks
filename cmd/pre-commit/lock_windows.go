@@ -43,7 +43,7 @@ func acquireLock() (*os.File, error) {
 		uintptr(unsafe.Pointer(ol)),
 	)
 	if r1 == 0 {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("lock already held: %w", err)
 	}
 
@@ -57,15 +57,15 @@ func releaseLock(f *os.File) {
 	}
 	handle := syscall.Handle(f.Fd())
 	ol := new(syscall.Overlapped)
-	unlockFileEx.Call(
+	_, _, _ = unlockFileEx.Call(
 		uintptr(handle),
 		0,
 		1, 0,
 		uintptr(unsafe.Pointer(ol)),
 	)
 	name := f.Name()
-	f.Close()
-	os.Remove(name)
+	_ = f.Close()
+	_ = os.Remove(name)
 }
 
 // acquireGlobalLockBlocking grabs a system-wide pre-commit lock at
@@ -110,14 +110,14 @@ func acquireGlobalLockBlocking(repoID string) (*os.File, error) {
 			uintptr(unsafe.Pointer(ol2)),
 		)
 		if r2 == 0 {
-			f.Close()
+			_ = f.Close()
 			return nil, fmt.Errorf("global lock blocking wait failed: %w", errno)
 		}
 	}
 
 	// We hold the lock — record our identity for the next waiter.
-	f.Truncate(0)
-	f.Seek(0, 0)
+	_ = f.Truncate(0)
+	_, _ = f.Seek(0, 0)
 	fmt.Fprintf(f, "%s pid=%d", repoID, os.Getpid())
 
 	return f, nil

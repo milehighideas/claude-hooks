@@ -136,7 +136,7 @@ func listViolations(roots []string, out io.Writer) (int, error) {
 			}
 			count := schemachecks.CountCreatedAt(string(data))
 			if count > 0 {
-				fmt.Fprintf(out, "%s\t%d\n", path, count)
+				_, _ = fmt.Fprintf(out, "%s\t%d\n", path, count)
 				total++
 			}
 			return nil

@@ -365,7 +365,7 @@ export default function SignIn() {
 
 	// Change to tmp so relative paths resolve cleanly
 	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
@@ -403,7 +403,7 @@ func TestRunMaestroValidationNoDrift(t *testing.T) {
 	writeFile(t, filepath.Join(srcDir, "card.tsx"), "<View testID={`card-${id}`} />")
 
 	origDir, _ := os.Getwd()
-	defer os.Chdir(origDir)
+	defer func() { _ = os.Chdir(origDir) }()
 	if err := os.Chdir(tmp); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}

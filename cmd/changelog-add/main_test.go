@@ -687,8 +687,8 @@ func TestFindProjectRoot(t *testing.T) {
 
 		// Change to subdirectory
 		oldWd, _ := os.Getwd()
-		defer os.Chdir(oldWd)
-		os.Chdir(subDir)
+		defer func() { _ = os.Chdir(oldWd) }()
+		_ = os.Chdir(subDir)
 
 		root, err := findProjectRoot()
 		if err != nil {
@@ -711,8 +711,8 @@ func TestFindProjectRoot(t *testing.T) {
 		}
 
 		oldWd, _ := os.Getwd()
-		defer os.Chdir(oldWd)
-		os.Chdir(subDir)
+		defer func() { _ = os.Chdir(oldWd) }()
+		_ = os.Chdir(subDir)
 
 		root, err := findProjectRoot()
 		if err != nil {
@@ -735,8 +735,8 @@ func TestFindProjectRoot(t *testing.T) {
 		}
 
 		oldWd, _ := os.Getwd()
-		defer os.Chdir(oldWd)
-		os.Chdir(subDir)
+		defer func() { _ = os.Chdir(oldWd) }()
+		_ = os.Chdir(subDir)
 
 		root, err := findProjectRoot()
 		if err != nil {

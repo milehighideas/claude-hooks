@@ -67,7 +67,7 @@ func (it *IncrementalTypecheck) Run() error {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Run() // Ignore exit code, we'll determine success from filtered errors
+	_ = cmd.Run() // Ignore exit code, we'll determine success from filtered errors
 
 	// Combine output
 	output := stdout.String() + stderr.String()
@@ -219,17 +219,7 @@ func (it *IncrementalTypecheck) isChangedFile(errorFile string, changedSet map[s
 
 	// Try normalizing paths
 	normalizedError := filepath.Clean(errorFile)
-	if changedSet[normalizedError] {
-		return true
-	}
-
-	return false
-}
-
-// runIncrementalTypecheck is a convenience function for running incremental typecheck
-func runIncrementalTypecheck(projectPath string, files []string, tf TypecheckFilter) error {
-	checker := NewIncrementalTypecheck(projectPath, files, tf)
-	return checker.Run()
+	return changedSet[normalizedError]
 }
 
 // RunBuffered executes incremental typecheck and returns buffered output (for parallel execution)
@@ -274,7 +264,7 @@ func (it *IncrementalTypecheck) RunBuffered() (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Run() // Ignore exit code, we'll determine success from filtered errors
+	_ = cmd.Run() // Ignore exit code, we'll determine success from filtered errors
 
 	// Combine output
 	tscOutput := stdout.String() + stderr.String()

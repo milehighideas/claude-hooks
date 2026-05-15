@@ -4,7 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"strings"
 )
 
 func main() {
@@ -70,12 +69,6 @@ func run(cliTypedReturns bool) error {
 		}
 
 		fmt.Printf("Found %d Convex files\n", len(files))
-
-		// DEBUG: Check if projects.ts is in the list
-		for _, file := range files {
-			if strings.Contains(file.Path, "projects.ts") && !strings.Contains(file.Path, "Internal") && !strings.Contains(file.Path, "test") {
-			}
-		}
 
 		for _, file := range files {
 			functions, err := parser.ParseConvexFile(file)

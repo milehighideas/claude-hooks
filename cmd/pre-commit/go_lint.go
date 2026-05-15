@@ -61,7 +61,7 @@ func checkGoLint(stagedFiles []string, config GoLintConfig) error {
 	}
 
 	if len(lintErrors) > 0 {
-		return fmt.Errorf("Go lint failed:\n  %s", strings.Join(lintErrors, "\n  "))
+		return fmt.Errorf("go lint failed:\n  %s", strings.Join(lintErrors, "\n  "))
 	}
 
 	return nil

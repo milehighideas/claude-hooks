@@ -25,81 +25,6 @@ type lintError struct {
 // DefaultLintExcludePaths are the path patterns excluded by default (empty - no filtering unless configured)
 var DefaultLintExcludePaths = []string{}
 
-// runFilteredLint runs the configured linter and filters out configured errors
-func runFilteredLint(appName, appPath string, lf LintFilter) error {
-	excludePaths := lf.ExcludePaths
-	if excludePaths == nil {
-		excludePaths = DefaultLintExcludePaths
-	}
-
-	// Determine which linter to use (default to eslint for backwards compatibility)
-	linter := lf.Linter
-	if linter == "" {
-		linter = "eslint"
-	}
-
-	var output string
-	var err error
-
-	if linter == "oxlint" {
-		output, err = runOxlint(appPath)
-	} else {
-		output, err = runEslint(appPath)
-	}
-
-	if err != nil {
-		return err
-	}
-
-	// Parse and filter errors
-	var errors []lintError
-	if linter == "oxlint" {
-		errors = parseOxlintErrors(output)
-	} else {
-		errors = parseEslintErrors(output)
-	}
-
-	var realErrors []lintError
-	for _, e := range errors {
-		if shouldFilterLintError(e, lf.Rules, excludePaths, lf.IgnoreWarnings) {
-			continue
-		}
-		realErrors = append(realErrors, e)
-	}
-
-	// Print filtered count
-	filteredCount := len(errors) - len(realErrors)
-	if filteredCount > 0 {
-		fmt.Printf("   (filtered %d lint errors)\n", filteredCount)
-	}
-
-	// Write report if reportDir is set
-	if reportDir != "" {
-		if err := writeLintReport(appName, linter, output, errors, realErrors, reportDir); err != nil {
-			fmt.Printf("   Warning: failed to write lint report: %v\n", err)
-		}
-	}
-
-	// Print real errors grouped by file
-	if len(realErrors) > 0 {
-		fmt.Println()
-		currentFile := ""
-		for _, e := range realErrors {
-			if e.filePath != currentFile {
-				if currentFile != "" {
-					fmt.Println()
-				}
-				fmt.Println(e.filePath)
-				currentFile = e.filePath
-			}
-			fmt.Printf("  %s:%s  %s  %s  %s\n", e.line, e.column, e.severity, e.message, e.rule)
-		}
-		return fmt.Errorf("found %d lint error(s)", len(realErrors))
-	}
-
-	return nil
-}
-
 // writeLintReport writes lint findings to a report file.
 // linterName is used in the report header (e.g., "oxlint", "eslint").
 func writeLintReport(appName, linterName, rawOutput string, allErrors, realErrors []lintError, baseDir string) error {
@@ -187,7 +112,7 @@ func runEslint(appPath string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Run() // Ignore exit code, we'll determine success from filtered errors
+	_ = cmd.Run() // Ignore exit code, we'll determine success from filtered errors
 
 	return stdout.String(), nil
 }
@@ -200,15 +125,15 @@ func runOxlint(appPath string) (string, error) {
 		return "", fmt.Errorf("failed to create temp file: %w", err)
 	}
 	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpPath)
+	_ = tmpFile.Close()
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	// Run oxlint via shell to avoid Go 1.19+ relative path issues
 	// Redirect both stdout and stderr to the temp file
 	shellCmd := fmt.Sprintf("oxlint --fix . > %s 2>&1", tmpPath)
 	cmd := exec.Command("bash", "-c", shellCmd)
 	cmd.Dir = appPath
-	cmd.Run() // Ignore exit code, oxlint returns non-zero when errors found
+	_ = cmd.Run() // Ignore exit code, oxlint returns non-zero when errors found
 
 	// Read the output file
 	output, err := os.ReadFile(tmpPath)
@@ -378,7 +303,7 @@ func runConvexEslint(pkgPath string) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	cmd.Run() // Ignore exit code, we parse output for findings
+	_ = cmd.Run() // Ignore exit code, we parse output for findings
 
 	return stdout.String(), nil
 }

@@ -305,16 +305,16 @@ func TestCheckTestRequired(t *testing.T) {
 	srcWithoutTest := filepath.Join(tmpDir, "Card.tsx")
 	testFile := filepath.Join(tmpDir, "Button.test.tsx")
 
-	os.WriteFile(srcWithTest, []byte("export function Button() {}"), 0644)
-	os.WriteFile(srcWithoutTest, []byte("export function Card() {}"), 0644)
-	os.WriteFile(testFile, []byte("test('Button', () => {})"), 0644)
+	_ = os.WriteFile(srcWithTest, []byte("export function Button() {}"), 0644)
+	_ = os.WriteFile(srcWithoutTest, []byte("export function Card() {}"), 0644)
+	_ = os.WriteFile(testFile, []byte("test('Button', () => {})"), 0644)
 
 	// Source in __tests__ dir
 	srcWithTestsDir := filepath.Join(tmpDir, "Modal.tsx")
 	testsDir := filepath.Join(tmpDir, "__tests__")
-	os.MkdirAll(testsDir, 0755)
-	os.WriteFile(srcWithTestsDir, []byte("export function Modal() {}"), 0644)
-	os.WriteFile(filepath.Join(testsDir, "Modal.test.tsx"), []byte("test('Modal', () => {})"), 0644)
+	_ = os.MkdirAll(testsDir, 0755)
+	_ = os.WriteFile(srcWithTestsDir, []byte("export function Modal() {}"), 0644)
+	_ = os.WriteFile(filepath.Join(testsDir, "Modal.test.tsx"), []byte("test('Modal', () => {})"), 0644)
 
 	tests := []struct {
 		name         string
@@ -611,17 +611,17 @@ func TestCheckTestRequired_TestDirs(t *testing.T) {
 
 	// Source file without co-located test
 	srcFile := filepath.Join(tmpDir, "src", "app", "search-results.tsx")
-	os.MkdirAll(filepath.Join(tmpDir, "src", "app"), 0755)
-	os.WriteFile(srcFile, []byte("export default function SearchResults() {}"), 0644)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "src", "app"), 0755)
+	_ = os.WriteFile(srcFile, []byte("export default function SearchResults() {}"), 0644)
 
 	// Test file in a testDir (basename match)
 	maestroDir := filepath.Join(tmpDir, ".maestro", "flows")
-	os.MkdirAll(maestroDir, 0755)
-	os.WriteFile(filepath.Join(maestroDir, "search-results.yaml"), []byte("appId: com.test"), 0644)
+	_ = os.MkdirAll(maestroDir, 0755)
+	_ = os.WriteFile(filepath.Join(maestroDir, "search-results.yaml"), []byte("appId: com.test"), 0644)
 
 	// Second testDir (empty — should still be searched)
 	altDir := filepath.Join(tmpDir, "e2e")
-	os.MkdirAll(altDir, 0755)
+	_ = os.MkdirAll(altDir, 0755)
 
 	tests := []struct {
 		name      string
@@ -683,7 +683,7 @@ func TestCheckTestRequired_TestDirs(t *testing.T) {
 func TestCheckTestRequired_PerProfileSeverity(t *testing.T) {
 	tmpDir := t.TempDir()
 	srcFile := filepath.Join(tmpDir, "Foo.tsx")
-	os.WriteFile(srcFile, []byte("export function Foo() {}"), 0644)
+	_ = os.WriteFile(srcFile, []byte("export function Foo() {}"), 0644)
 
 	tests := []struct {
 		name         string
@@ -761,12 +761,12 @@ func TestCheckTestRequired_MultipleProfiles(t *testing.T) {
 
 	// Source file with a unit test but no e2e test
 	srcFile := filepath.Join(tmpDir, "src", "Button.tsx")
-	os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
-	os.WriteFile(srcFile, []byte("export function Button() {}"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "src", "Button.test.tsx"), []byte("test('Button')"), 0644)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	_ = os.WriteFile(srcFile, []byte("export function Button() {}"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "src", "Button.test.tsx"), []byte("test('Button')"), 0644)
 
 	e2eDir := filepath.Join(tmpDir, "flows")
-	os.MkdirAll(e2eDir, 0755)
+	_ = os.MkdirAll(e2eDir, 0755)
 	// No Button.yaml in flows/
 
 	checker := &SRPChecker{
@@ -809,18 +809,18 @@ func TestHasTestFile_TestDirs(t *testing.T) {
 
 	// Source file
 	srcFile := filepath.Join(tmpDir, "src", "profile.tsx")
-	os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
-	os.WriteFile(srcFile, []byte("export function Profile() {}"), 0644)
+	_ = os.MkdirAll(filepath.Join(tmpDir, "src"), 0755)
+	_ = os.WriteFile(srcFile, []byte("export function Profile() {}"), 0644)
 
 	// Test in testDir
 	testDir := filepath.Join(tmpDir, "e2e")
-	os.MkdirAll(testDir, 0755)
-	os.WriteFile(filepath.Join(testDir, "profile.spec.ts"), []byte("test('profile')"), 0644)
+	_ = os.MkdirAll(testDir, 0755)
+	_ = os.WriteFile(filepath.Join(testDir, "profile.spec.ts"), []byte("test('profile')"), 0644)
 
 	// Co-located test (separate case)
 	colocatedSrc := filepath.Join(tmpDir, "src", "settings.tsx")
-	os.WriteFile(colocatedSrc, []byte("export function Settings() {}"), 0644)
-	os.WriteFile(filepath.Join(tmpDir, "src", "settings.test.tsx"), []byte("test('settings')"), 0644)
+	_ = os.WriteFile(colocatedSrc, []byte("export function Settings() {}"), 0644)
+	_ = os.WriteFile(filepath.Join(tmpDir, "src", "settings.test.tsx"), []byte("test('settings')"), 0644)
 
 	checker := &SRPChecker{statFunc: os.Stat}
 
@@ -842,7 +842,7 @@ func TestHasTestFile_TestDirs(t *testing.T) {
 
 	// nonexistent.tsx should not be found
 	noFile := filepath.Join(tmpDir, "src", "nonexistent.tsx")
-	os.WriteFile(noFile, []byte("export function X() {}"), 0644)
+	_ = os.WriteFile(noFile, []byte("export function X() {}"), 0644)
 	if checker.hasTestFile(noFile, cfg) {
 		t.Error("expected hasTestFile=false for nonexistent.tsx")
 	}
