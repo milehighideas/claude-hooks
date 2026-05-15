@@ -19,21 +19,21 @@ const (
 type ConvexFunction struct {
 	Name            string
 	Type            FunctionType
-	Namespace       string       // Full namespace path (e.g., "events/voting")
-	FileName        string       // Source file name
-	Args            []ArgInfo    // Parsed arguments
-	IsPaginated     bool         // Uses paginationOptsValidator
-	UseFunctionArgs bool         // Args too complex, use FunctionArgs type
+	Namespace       string    // Full namespace path (e.g., "events/voting")
+	FileName        string    // Source file name
+	Args            []ArgInfo // Parsed arguments
+	IsPaginated     bool      // Uses paginationOptsValidator
+	UseFunctionArgs bool      // Args too complex, use FunctionArgs type
 }
 
 // ArgInfo represents a function argument
 type ArgInfo struct {
-	Name       string
-	Type       string // TypeScript type
-	Optional   bool
-	IsID       bool   // Is v.id("table")
-	IsArrayID  bool   // Is v.array(v.id("table"))
-	TableName  string // For ID types, the table name
+	Name      string
+	Type      string // TypeScript type
+	Optional  bool
+	IsID      bool   // Is v.id("table")
+	IsArrayID bool   // Is v.array(v.id("table"))
+	TableName string // For ID types, the table name
 }
 
 // FieldInfo represents a field in a schema table
@@ -83,13 +83,11 @@ func (p *Parser) BuildValidatorCache(convexPath string) error {
 	// Limitation: validators with nested braces aren't fully supported (lazy match stops at first inner `}`).
 	validatorDefRe := regexp.MustCompile(`(?m)export\s+const\s+(\w+)\s*=\s*(v\.object\s*\(\s*\{[\s\S]*?\}\s*\)|\{[\s\S]*?\})\s*;?\s*$`)
 
-
 	// Walk through model directories looking for validators
 	entries, err := os.ReadDir(convexPath)
 	if err != nil {
 		return err
 	}
-
 
 	for _, entry := range entries {
 		if entry.IsDir() && entry.Name() == "model" {
@@ -199,9 +197,6 @@ var (
 
 	// Match defineTable in schema
 	defineTableRe = regexp.MustCompile(`(?:const\s+)?(\w+)\s*[:=]\s*defineTable\s*\(`)
-
-	// Match table name in schema spread: ...tableTables
-	spreadTableRe = regexp.MustCompile(`\.\.\.(\w+)Tables`)
 
 	// Fluent-convex patterns
 
@@ -945,11 +940,11 @@ func isValidIdentifier(s string) bool {
 	}
 	for i, ch := range s {
 		if i == 0 {
-			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || ch == '_' || ch == '$') {
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && ch != '_' && ch != '$' {
 				return false
 			}
 		} else {
-			if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '$') {
+			if (ch < 'a' || ch > 'z') && (ch < 'A' || ch > 'Z') && (ch < '0' || ch > '9') && ch != '_' && ch != '$' {
 				return false
 			}
 		}
@@ -967,7 +962,7 @@ func stripComments(text string) string {
 		if i+1 < len(text) && text[i] == '/' && text[i+1] == '*' {
 			// Skip until end of block comment
 			i += 2
-			for i+1 < len(text) && !(text[i] == '*' && text[i+1] == '/') {
+			for i+1 < len(text) && (text[i] != '*' || text[i+1] != '/') {
 				// Preserve newlines to maintain line structure
 				if text[i] == '\n' {
 					result.WriteByte('\n')
@@ -1049,46 +1044,56 @@ func (p *Parser) EnrichTablesWithFields(schemaFiles []SchemaFile, tables []Table
 
 // extractAllTableFields finds all defineTable blocks in text and extracts field info.
 // Returns a map of table variable name → field definitions.
+//
+// Supports three call shapes:
+//
+//	defineTable({ field: v.string(), ... })   // inline object literal
+//	defineTable(myValidator)                  // identifier passed directly (convex 1.13+)
+//	defineTable(myValidator.fields)           // schema-derived pattern; pairs with
+//	                                          //   export const myValidator = v.object({...})
+//
+// For the two identifier forms, the validator must be declared in the same file as
+// `(export )?const IDENT = v.object({...})`. Cross-file resolution is not supported.
+//
+// The previous implementation naively scanned for the first `{` after `defineTable(`,
+// which silently picked up `{...}` literals from chained calls like
+// `.searchIndex({ searchField, filterFields })` when the defineTable arg was not itself
+// a brace literal. That caused the events table to be parsed as just `searchField` +
+// `filterFields` once `defineTable(eventsValidator.fields)` was introduced.
 func (p *Parser) extractAllTableFields(text string) map[string][]FieldInfo {
 	result := make(map[string][]FieldInfo)
 
-	// Find all defineTable occurrences
 	matches := defineTableRe.FindAllStringSubmatchIndex(text, -1)
 
 	for _, match := range matches {
 		tableName := text[match[2]:match[3]]
 
-		// Find the opening { after defineTable(
-		searchStart := match[1]
-		braceIdx := -1
-		for i := searchStart; i < len(text); i++ {
-			if text[i] == '{' {
-				braceIdx = i
-				break
-			}
+		// match[1] is the position right after `defineTable(`, i.e., the first
+		// char inside the parens of the call.
+		argStart := match[1]
+		argEnd := findMatchingCloseParen(text, argStart)
+		if argEnd == -1 {
+			continue
 		}
-		if braceIdx == -1 {
+		argExpr := strings.TrimSpace(text[argStart:argEnd])
+
+		var bodyContent string
+		if strings.HasPrefix(argExpr, "{") {
+			// Inline literal — extract content between the arg's outer braces.
+			bodyContent = extractOuterBraceBody(argExpr)
+		} else {
+			// Identifier reference; tolerate a trailing `.fields` access.
+			ident := strings.TrimSpace(strings.TrimSuffix(argExpr, ".fields"))
+			if !isValidIdentifier(ident) {
+				continue
+			}
+			bodyContent = extractLocalValidatorBody(text, ident)
+		}
+
+		if bodyContent == "" {
 			continue
 		}
 
-		// Extract content between braces using depth tracking
-		depth := 1
-		endIdx := braceIdx + 1
-		for endIdx < len(text) && depth > 0 {
-			switch text[endIdx] {
-			case '{':
-				depth++
-			case '}':
-				depth--
-			}
-			endIdx++
-		}
-
-		if depth != 0 {
-			continue
-		}
-
-		bodyContent := text[braceIdx+1 : endIdx-1]
 		fields := parseTableFields(bodyContent)
 		if len(fields) > 0 {
 			result[tableName] = fields
@@ -1096,6 +1101,61 @@ func (p *Parser) extractAllTableFields(text string) map[string][]FieldInfo {
 	}
 
 	return result
+}
+
+// findMatchingCloseParen returns the index of the close paren that matches the
+// implicit open paren immediately before startIdx. Returns -1 if not found.
+func findMatchingCloseParen(text string, startIdx int) int {
+	depth := 1
+	for i := startIdx; i < len(text); i++ {
+		switch text[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return i
+			}
+		}
+	}
+	return -1
+}
+
+// extractOuterBraceBody finds the first `{` in s and returns the content between
+// it and its matching `}`. Returns "" if the braces are unbalanced or absent.
+func extractOuterBraceBody(s string) string {
+	braceIdx := strings.Index(s, "{")
+	if braceIdx == -1 {
+		return ""
+	}
+	depth := 1
+	endIdx := braceIdx + 1
+	for endIdx < len(s) && depth > 0 {
+		switch s[endIdx] {
+		case '{':
+			depth++
+		case '}':
+			depth--
+		}
+		endIdx++
+	}
+	if depth != 0 {
+		return ""
+	}
+	return s[braceIdx+1 : endIdx-1]
+}
+
+// extractLocalValidatorBody searches text for `(export )?const IDENT = v.object({...})`
+// (or `= v.object(\s*{...})`) and returns the content between the outer braces of
+// the object literal. Returns "" if the identifier is not defined locally.
+func extractLocalValidatorBody(text, ident string) string {
+	pattern := `(?:export\s+)?const\s+` + regexp.QuoteMeta(ident) + `\s*=\s*v\.object\s*\(`
+	re := regexp.MustCompile(pattern)
+	loc := re.FindStringIndex(text)
+	if loc == nil {
+		return ""
+	}
+	return extractOuterBraceBody(text[loc[1]:])
 }
 
 // parseTableFields splits a defineTable body into individual field entries and classifies each.
@@ -1201,9 +1261,7 @@ func unwrapValidatorCall(prefix, validator string) (string, bool) {
 	}
 	// Fallback
 	inner := validator[start:]
-	if strings.HasSuffix(inner, ")") {
-		inner = inner[:len(inner)-1]
-	}
+	inner = strings.TrimSuffix(inner, ")")
 	return strings.TrimSpace(inner), true
 }
 
@@ -1273,12 +1331,12 @@ func classifyValidator(name, validator string) FieldInfo {
 	if inner, ok := unwrapValidatorCall("v.array(", validator); ok {
 		field.Type = "array"
 		field.IsArray = true
-		switch {
-		case inner == "v.string()":
+		switch inner {
+		case "v.string()":
 			field.ArrayType = "string"
-		case inner == "v.number()" || inner == "v.float64()":
+		case "v.number()", "v.float64()":
 			field.ArrayType = "number"
-		case inner == "v.boolean()":
+		case "v.boolean()":
 			field.ArrayType = "boolean"
 		default:
 			if idMatch := idRe.FindStringSubmatch(inner); idMatch != nil {

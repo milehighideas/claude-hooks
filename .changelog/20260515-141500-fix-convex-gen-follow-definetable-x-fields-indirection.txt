@@ -1,0 +1,21 @@
+fix(convex-gen): follow defineTable(X.fields) and defineTable(X) indirection
+
+The parser scanned for the first `{` after `defineTable(`, which broke on
+the schema-derived returns-validator pattern:
+
+    const eventsValidator = v.object({...});
+    const events = defineTable(eventsValidator.fields)
+      .searchIndex("...", { searchField, filterFields });
+
+The `{` it landed on was inside the chained `.searchIndex({...})` config,
+so the generated schemaMetadata for `events` collapsed to two fields
+(`searchField`, `filterFields`) instead of the real ~140-field row.
+
+The parser now finds the matching `)` first, inspects the arg expression,
+and resolves an `IDENT.fields` or bare `IDENT` arg to its sibling
+`(export )?const IDENT = v.object({...})` declaration in the same file.
+Inline `defineTable({...})` is unchanged.
+
+Adds four parser tests covering inline literal, `.fields` indirection
+(the regression itself), validator passed directly, and a mixed-shape
+file. dashtag's data-layer regenerates clean against the fixed binary.
