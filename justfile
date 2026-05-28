@@ -112,11 +112,16 @@ test:
     go test ./...
 
 # Clean all binaries (bin/ and any stray root binaries from misguided `go build`s)
-clean:
+clean: clean-strays
     #!/usr/bin/env bash
     set -euo pipefail
     shopt -s nullglob
     rm -rf {{bindir}}/*
+
+# Remove only stray root binaries from misguided `go build ./cmd/<name>` runs, leaving bin/ intact
+clean-strays:
+    #!/usr/bin/env bash
+    set -euo pipefail
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
         if [ -f "$name" ]; then
