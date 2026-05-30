@@ -1,0 +1,1 @@
+feat: add auto-lingui-extract PostToolUse hook for Lingui catalogs
