@@ -12,36 +12,38 @@ import (
 
 // Config represents the .pre-commit.json configuration
 type Config struct {
-	PackageManager     string                `json:"packageManager"`     // Global package manager: "pnpm" (default), "bun", "npm", "yarn"
-	Env                map[string]string     `json:"env"`                // Global environment variables for all commands
-	Apps               map[string]AppConfig  `json:"apps"`
-	SharedPaths        []string              `json:"sharedPaths"`
-	ReportDir          string                `json:"reportDir"` // Directory to write analysis reports
-	Features           Features              `json:"features"`
-	ProtectedBranches  []string              `json:"protectedBranches"`
-	ChangelogExclude   []string              `json:"changelogExclude"`
-	ChangelogConfig    ChangelogConfig       `json:"changelog"`
-	ConsoleAllowed     []string              `json:"consoleAllowed"`
-	TypecheckFilter    TypecheckFilter       `json:"typecheckFilter"`
-	LintFilter         LintFilter            `json:"lintFilter"`
-	LintStagedConfig   LintStagedConfig      `json:"lintStagedConfig"`
-	GoLint             GoLintConfig          `json:"goLint"`
-	NativeBuild        NativeBuildConfig     `json:"nativeBuild"`
-	Convex             ConvexConfig          `json:"convex"`
-	Build              BuildConfig           `json:"build"`
-	BundleCheck        BundleCheckConfig     `json:"bundleCheckConfig"`
-	MockCheck          MockCheckConfig       `json:"mockCheck"`
-	TestConfig         TestConfig            `json:"testConfig"`
-	TestCoverageConfig TestCoverageConfig    `json:"testCoverageConfig"`
-	TestQualityConfig  TestQualityConfig     `json:"testQualityConfig"`
-	SRPConfig          SRPConfig             `json:"srpConfig"`
-	DataLayerAllowed   []string              `json:"dataLayerAllowed"`
-	MaestroValidation  MaestroValidationConfig `json:"maestroValidation"`
-	StubTestCheckConfig StubTestCheckConfig    `json:"stubTestCheckConfig"`
-	MissingTestsCheckConfig MissingTestsCheckConfig `json:"missingTestsCheckConfig"`
-	TestSubstanceCheckConfig TestSubstanceCheckConfig `json:"testSubstanceCheckConfig"`
+	PackageManager                string                        `json:"packageManager"` // Global package manager: "pnpm" (default), "bun", "npm", "yarn"
+	Env                           map[string]string             `json:"env"`            // Global environment variables for all commands
+	Apps                          map[string]AppConfig          `json:"apps"`
+	SharedPaths                   []string                      `json:"sharedPaths"`
+	ReportDir                     string                        `json:"reportDir"` // Directory to write analysis reports
+	Features                      Features                      `json:"features"`
+	ProtectedBranches             []string                      `json:"protectedBranches"`
+	ChangelogExclude              []string                      `json:"changelogExclude"`
+	ChangelogConfig               ChangelogConfig               `json:"changelog"`
+	ConsoleAllowed                []string                      `json:"consoleAllowed"`
+	TypecheckFilter               TypecheckFilter               `json:"typecheckFilter"`
+	LintFilter                    LintFilter                    `json:"lintFilter"`
+	LintStagedConfig              LintStagedConfig              `json:"lintStagedConfig"`
+	GoLint                        GoLintConfig                  `json:"goLint"`
+	NativeBuild                   NativeBuildConfig             `json:"nativeBuild"`
+	Convex                        ConvexConfig                  `json:"convex"`
+	Build                         BuildConfig                   `json:"build"`
+	BundleCheck                   BundleCheckConfig             `json:"bundleCheckConfig"`
+	MockCheck                     MockCheckConfig               `json:"mockCheck"`
+	TestConfig                    TestConfig                    `json:"testConfig"`
+	TestCoverageConfig            TestCoverageConfig            `json:"testCoverageConfig"`
+	TestQualityConfig             TestQualityConfig             `json:"testQualityConfig"`
+	SRPConfig                     SRPConfig                     `json:"srpConfig"`
+	DataLayerAllowed              []string                      `json:"dataLayerAllowed"`
+	NextImageCheck                NextImageCheckConfig          `json:"nextImageCheck"`
+	NextLinkCheck                 NextLinkCheckConfig           `json:"nextLinkCheck"`
+	MaestroValidation             MaestroValidationConfig       `json:"maestroValidation"`
+	StubTestCheckConfig           StubTestCheckConfig           `json:"stubTestCheckConfig"`
+	MissingTestsCheckConfig       MissingTestsCheckConfig       `json:"missingTestsCheckConfig"`
+	TestSubstanceCheckConfig      TestSubstanceCheckConfig      `json:"testSubstanceCheckConfig"`
 	RedundantCreatedAtCheckConfig RedundantCreatedAtCheckConfig `json:"redundantCreatedAtCheckConfig"`
-	WarningChecks      []string              `json:"warningChecks"`    // Checks listed here run but don't block commits
+	WarningChecks                 []string                      `json:"warningChecks"` // Checks listed here run but don't block commits
 }
 
 // RedundantCreatedAtCheckConfig configures the Convex schema `createdAt`
@@ -181,51 +183,58 @@ type Features struct {
 	// ran both together; it was split so each can be toggled, gated, and
 	// reported on separately. Keep these two flags in sync in .pre-commit.json
 	// if you want the old combined behavior.
-	Lint               bool `json:"lint"`
-	Typecheck          bool `json:"typecheck"`
-	LintStaged         bool `json:"lintStaged"`
-	FullLintOnCommit   bool `json:"fullLintOnCommit"`
-	Tests              bool `json:"tests"`
-	Changelog          bool `json:"changelog"`
-	ConsoleCheck       bool `json:"consoleCheck"`
-	BranchProtection   bool `json:"branchProtection"`
-	GoLint             bool `json:"goLint"`
-	ConvexValidation   bool `json:"convexValidation"`
-	BuildCheck         bool `json:"buildCheck"`
+	Lint             bool `json:"lint"`
+	Typecheck        bool `json:"typecheck"`
+	LintStaged       bool `json:"lintStaged"`
+	FullLintOnCommit bool `json:"fullLintOnCommit"`
+	Tests            bool `json:"tests"`
+	Changelog        bool `json:"changelog"`
+	ConsoleCheck     bool `json:"consoleCheck"`
+	BranchProtection bool `json:"branchProtection"`
+	GoLint           bool `json:"goLint"`
+	ConvexValidation bool `json:"convexValidation"`
+	BuildCheck       bool `json:"buildCheck"`
 	// BundleCheck runs Metro/Webpack bundle-only validation per app
 	// (typically `expo export` for RN apps). Catches missing-dependency and
 	// bad-import errors that pass typecheck and lint but break the bundler.
 	// See bundleCheckConfig for which apps to bundle and the npm script name.
-	BundleCheck        bool `json:"bundleCheck"`
-	FrontendStructure  bool `json:"frontendStructure"`
-	SRP                bool `json:"srp"`
-	FullSRPOnCommit    bool `json:"fullSRPOnCommit"`
+	BundleCheck       bool `json:"bundleCheck"`
+	FrontendStructure bool `json:"frontendStructure"`
+	SRP               bool `json:"srp"`
+	FullSRPOnCommit   bool `json:"fullSRPOnCommit"`
 	// SrpStrictOnStaged makes SRP block the commit on any violation in a
 	// staged file (git diff-filter=ACMR), regardless of warnOnly. The
 	// full-repo audit and per-app report are unaffected — they keep
 	// surfacing legacy debt as warnings. Equivalent to setting
 	// srpConfig.errorScopes: ["changed"] but expressed as a single feature
 	// flag for the common "ratchet new work, audit existing code" workflow.
-	SrpStrictOnStaged  bool `json:"srpStrictOnStaged"`
-	TestFiles          bool `json:"testFiles"`
-	MockCheck          bool `json:"mockCheck"`
-	VitestAssertions   bool `json:"vitestAssertions"`
-	TestCoverage       bool `json:"testCoverage"`
-	TestQuality        bool `json:"testQuality"`
-	NativeBuild        bool `json:"nativeBuild"`
-	DataLayerCheck     bool `json:"dataLayerCheck"`
-	MaestroValidation  bool `json:"maestroValidation"`
-	StubTestCheck      bool `json:"stubTestCheck"`
-	MissingTestsCheck  bool `json:"missingTestsCheck"`
+	SrpStrictOnStaged       bool `json:"srpStrictOnStaged"`
+	TestFiles               bool `json:"testFiles"`
+	MockCheck               bool `json:"mockCheck"`
+	VitestAssertions        bool `json:"vitestAssertions"`
+	TestCoverage            bool `json:"testCoverage"`
+	TestQuality             bool `json:"testQuality"`
+	NativeBuild             bool `json:"nativeBuild"`
+	DataLayerCheck          bool `json:"dataLayerCheck"`
+	MaestroValidation       bool `json:"maestroValidation"`
+	StubTestCheck           bool `json:"stubTestCheck"`
+	MissingTestsCheck       bool `json:"missingTestsCheck"`
 	RedundantCreatedAtCheck bool `json:"redundantCreatedAtCheck"`
-	TiersGen           bool `json:"tiersGen"`
-	LinguiExtract      bool `json:"linguiExtract"`
+	TiersGen                bool `json:"tiersGen"`
+	LinguiExtract           bool `json:"linguiExtract"`
 	// TestSubstanceCheck runs substance gates against test files for staged
 	// source files: LOC ratio, UI-interaction requirement, branch-proportional
 	// it() count, plus tautological-assertion detection. Catches "minimal
 	// tests" that satisfy the missingTestsCheck file-existence gate but don't
 	// actually exercise the source. Configured via testSubstanceCheckConfig.
 	TestSubstanceCheck bool `json:"testSubstanceCheck"`
+	// NextImageCheck verifies every public-relative asset reference resolves to
+	// a real file under the app's public/ dir (next build does not). Static.
+	NextImageCheck bool `json:"nextImageCheck"`
+	// NextLinkCheck verifies internal links resolve to a real route (static
+	// route analysis) and/or that a running site has no 4xx links (crawl);
+	// mode is set in nextLinkCheck.mode.
+	NextLinkCheck bool `json:"nextLinkCheck"`
 }
 
 // AppConfig represents configuration for a single app

@@ -1,0 +1,1 @@
+feat(pre-commit): add opt-in nextImageCheck + nextLinkCheck (and validate-next binary) for Next.js asset/link validation

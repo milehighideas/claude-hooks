@@ -45,6 +45,7 @@ These hooks run after Claude executes a tool, automating follow-up tasks.
 | [validate-frontend-structure](docs/validate-frontend-structure.md) | Enforces CRUD folder organization |
 | [validate-srp](docs/validate-srp.md) | Validates Single Responsibility Principle |
 | [validate-test-files](docs/validate-test-files.md) | Ensures components have required tests |
+| [validate-next](docs/validate-next.md) | Validates Next.js public/ asset references and internal links resolve |
 
 ## Installation
 

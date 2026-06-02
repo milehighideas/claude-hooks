@@ -6,7 +6,36 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/milehighideas/claude-hooks/internal/srp"
 )
+
+// Test-only compatibility shims. Detection moved to internal/srp (tree-sitter
+// AST); these route the orchestration tests through the same flow CheckFiles
+// uses, so the severity-resolution / rule-enablement coverage is preserved
+// without re-asserting detector internals (those are tested in internal/srp).
+
+func (c *SRPChecker) analyzeCode(code, filePath string) *srp.Analysis {
+	return srp.Analyze(code, filePath)
+}
+
+func (c *SRPChecker) validateSRPCompliance(a *srp.Analysis, filePath string) []SRPViolation {
+	opts := srp.Options{ScreenHooks: c.config.resolvedScreenHooks(), EnabledRules: c.enabledRuleSet()}
+	var out []SRPViolation
+	for _, v := range srp.RunDetectors(a, filePath, opts) {
+		out = append(out, c.resolveSeverity(SRPViolation(v)))
+	}
+	return out
+}
+
+func (c *SRPChecker) checkStateInScreens(a *srp.Analysis, filePath string) []SRPViolation {
+	opts := srp.Options{ScreenHooks: c.config.resolvedScreenHooks(), EnabledRules: map[string]bool{"stateInScreens": true}}
+	var out []SRPViolation
+	for _, v := range srp.RunDetectors(a, filePath, opts) {
+		out = append(out, SRPViolation(v))
+	}
+	return out
+}
 
 func TestResolvedScreenHooks(t *testing.T) {
 	tests := []struct {
@@ -29,7 +58,7 @@ func TestResolvedScreenHooks(t *testing.T) {
 			expected: map[string]bool{
 				"useState":    true,
 				"useReducer":  true,
-				"useContext":   true,
+				"useContext":  true,
 				"useCallback": true,
 				"useEffect":   true,
 				"useMemo":     true,

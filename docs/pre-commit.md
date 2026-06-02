@@ -98,6 +98,11 @@ Run `pre-commit --list` to see all available checks. Currently supported:
 | `goLint`            | Go linting (when enabled)                             |
 | `convexValidation`  | Convex schema validation (when enabled)               |
 | `buildCheck`        | Build verification (when enabled)                     |
+| `nextImageCheck`    | Verify Next.js `public/` asset references resolve (static) |
+| `nextLinkCheck`     | Verify Next.js internal links resolve (static / crawl / both) |
+
+See [validate-next](validate-next.md) for the Next.js checks, which are also
+available as a standalone binary.
 
 ## Configuration
 

@@ -1,0 +1,1 @@
+refactor(pre-commit): unify SRP detection into AST-backed internal/srp shared by pre-commit and validate-srp (validate-srp now matches canonical behavior; catches @dashtag/ui mixed-concerns it previously missed)

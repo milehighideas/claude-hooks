@@ -16,15 +16,15 @@ import (
 
 // CLI flags
 var (
-	standalone    bool
-	targetPath    string
-	checkName     string
-	listChecks    bool
-	verboseFlag   bool
-	configPath    string
-	reportDir     string
-	noLock        bool
-	globalLock    bool
+	standalone  bool
+	targetPath  string
+	checkName   string
+	listChecks  bool
+	verboseFlag bool
+	configPath  string
+	reportDir   string
+	noLock      bool
+	globalLock  bool
 )
 
 func init() {
@@ -59,6 +59,8 @@ var checkKeyToDisplay = map[string]string{
 	"lintStaged":              "Formatting",
 	"consoleCheck":            "Console check",
 	"dataLayerCheck":          "Data layer check",
+	"nextImageCheck":          "Next image refs",
+	"nextLinkCheck":           "Next link check",
 	"changelog":               "Changelog",
 	"goLint":                  "Go linting",
 	"nativeBuild":             "Native build",
@@ -376,6 +378,8 @@ func printAvailableChecks() {
 	fmt.Println("  redundantCreatedAtCheck - Ban createdAt fields inside Convex defineTable (use _creationTime)")
 	fmt.Println("  dataLayerCheck     - Check for direct Convex imports (should use data-layer)")
 	fmt.Println("  maestroValidation  - Validate Maestro flow id: selectors resolve to source testIDs")
+	fmt.Println("  nextImageCheck     - Verify Next.js public/ asset references resolve (static)")
+	fmt.Println("  nextLinkCheck      - Verify Next.js internal links resolve (static/crawl/both)")
 }
 
 func run() error {
@@ -621,6 +625,18 @@ func run() error {
 	if config.Features.MaestroValidation {
 		asyncCheck("Maestro validation", "maestroValidation", func() error {
 			return runMaestroValidation(config.MaestroValidation)
+		})
+	}
+
+	if config.Features.NextImageCheck {
+		asyncCheck("Next image refs", "nextImageCheck", func() error {
+			return runNextImageCheck(config.NextImageCheck, config.Apps)
+		})
+	}
+
+	if config.Features.NextLinkCheck {
+		asyncCheck("Next link check", "nextLinkCheck", func() error {
+			return runNextLinkCheck(config.NextLinkCheck, config.Apps)
 		})
 	}
 
@@ -1175,6 +1191,10 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 		return runDataLayerCheck(appFiles, config.DataLayerAllowed)
 	case "maestroValidation":
 		return runMaestroValidation(config.MaestroValidation)
+	case "nextImageCheck":
+		return runNextImageCheck(config.NextImageCheck, config.Apps)
+	case "nextLinkCheck":
+		return runNextLinkCheck(config.NextLinkCheck, config.Apps)
 	default:
 		return fmt.Errorf("unknown check: %s (use --list to see available checks)", name)
 	}
@@ -1233,6 +1253,16 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 	// Data layer check
 	if config.Features.DataLayerCheck {
 		collectResult("dataLayerCheck", runDataLayerCheck(appFiles, config.DataLayerAllowed))
+	}
+
+	// Next.js public-asset reference check
+	if config.Features.NextImageCheck {
+		collectResult("nextImageCheck", runNextImageCheck(config.NextImageCheck, config.Apps))
+	}
+
+	// Next.js internal-link check
+	if config.Features.NextLinkCheck {
+		collectResult("nextLinkCheck", runNextLinkCheck(config.NextLinkCheck, config.Apps))
 	}
 
 	// Maestro flow validation

@@ -5,10 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/milehighideas/claude-hooks/internal/srp"
 )
 
 // SRPViolation represents a Single Responsibility Principle violation
@@ -20,36 +21,6 @@ type SRPViolation struct {
 	RuleID     string // e.g. "directConvexImports", "testRequired"
 }
 
-// SRPAnalysis represents the analysis of a TypeScript/TSX file
-type SRPAnalysis struct {
-	FilePath                 string
-	Imports                  []SRPImportInfo
-	Exports                  []SRPExportInfo
-	StateManagement          []SRPStateInfo
-	LineCount                int
-	HasResponsibilityComment bool
-}
-
-// SRPImportInfo represents an import statement
-type SRPImportInfo struct {
-	Source string
-	Names  []string
-}
-
-// SRPExportInfo represents an export statement
-type SRPExportInfo struct {
-	Name       string
-	Type       string
-	IsTypeOnly bool
-	Source     string // For re-exports: the source module (e.g., "./types/foo")
-}
-
-// SRPStateInfo represents state management usage
-type SRPStateInfo struct {
-	Hook string
-	Line int
-}
-
 // SRPChecker validates Single Responsibility Principle compliance
 type SRPChecker struct {
 	gitShowFunc   func(file string) ([]byte, error)
@@ -57,8 +28,8 @@ type SRPChecker struct {
 	statFunc      func(file string) (os.FileInfo, error) // for test file existence checks
 	useFilesystem bool
 	config        SRPConfig
-	newFiles      map[string]bool     // newly added files (git diff --diff-filter=A)
-	changedFiles  map[string]bool     // all staged files (git diff --cached --diff-filter=ACMR)
+	newFiles      map[string]bool // newly added files (git diff --diff-filter=A)
+	changedFiles  map[string]bool // all staged files (git diff --cached --diff-filter=ACMR)
 }
 
 // NewSRPChecker creates a new SRP checker that reads from git staged content
@@ -93,9 +64,33 @@ func NewSRPCheckerFullMode(config SRPConfig) *SRPChecker {
 	}
 }
 
-// CheckFiles validates SRP compliance for TypeScript files
+// contentRules are the six structural detectors that operate on parsed file
+// content. testRequired is handled separately (it works off the file list).
+var contentRules = []string{
+	"directConvexImports", "stateInScreens", "multipleExports",
+	"fileSize", "typeExportsLocation", "mixedConcerns",
+}
+
+// enabledRuleSet resolves which content detectors run, per srpConfig.enabledRules.
+func (c *SRPChecker) enabledRuleSet() map[string]bool {
+	m := make(map[string]bool, len(contentRules))
+	for _, r := range contentRules {
+		m[r] = c.config.isRuleEnabled(r)
+	}
+	return m
+}
+
+// CheckFiles validates SRP compliance for TypeScript files. Structural
+// detection is delegated to internal/srp (tree-sitter AST, shared with the
+// standalone validate-srp binary); this method owns file selection, severity
+// resolution, and the testRequired rule.
 func (c *SRPChecker) CheckFiles(files []string) ([]SRPViolation, error) {
 	var allViolations []SRPViolation
+
+	opts := srp.Options{
+		ScreenHooks:  c.config.resolvedScreenHooks(),
+		EnabledRules: c.enabledRuleSet(),
+	}
 
 	for _, file := range files {
 		if !c.isTypeScriptFile(file) {
@@ -113,9 +108,10 @@ func (c *SRPChecker) CheckFiles(files []string) ([]SRPViolation, error) {
 			continue
 		}
 
-		analysis := c.analyzeCode(string(content), file)
-		violations := c.validateSRPCompliance(analysis, file)
-		allViolations = append(allViolations, violations...)
+		analysis := srp.Analyze(string(content), file)
+		for _, v := range srp.RunDetectors(analysis, file, opts) {
+			allViolations = append(allViolations, c.resolveSeverity(SRPViolation(v)))
+		}
 	}
 
 	// testRequired runs on the file list directly (doesn't need content analysis)
@@ -126,6 +122,26 @@ func (c *SRPChecker) CheckFiles(files []string) ([]SRPViolation, error) {
 	return allViolations, nil
 }
 
+// resolveSeverity applies the project's severity policy to a raw detector
+// violation. Precedence (highest first):
+//  1. WarningOnlyPaths — exemption, force "warning"
+//  2. ErrorPaths       — keep original severity
+//  3. ErrorScopes      — keep original severity for new/changed files
+//  4. WarnOnly         — downgrade to "warning" when the rule is listed
+func (c *SRPChecker) resolveSeverity(v SRPViolation) SRPViolation {
+	switch {
+	case c.config.isWarningOnlyPath(v.File):
+		v.Severity = "warning"
+	case c.config.isErrorPath(v.File):
+		// keep
+	case c.isInErrorScope(v.File):
+		// keep
+	case c.config.isWarnOnly(v.RuleID):
+		v.Severity = "warning"
+	}
+	return v
+}
+
 func (c *SRPChecker) isTypeScriptFile(filePath string) bool {
 	return (strings.HasSuffix(filePath, ".tsx") || strings.HasSuffix(filePath, ".ts")) &&
 		!strings.HasSuffix(filePath, ".d.ts") &&
@@ -133,147 +149,6 @@ func (c *SRPChecker) isTypeScriptFile(filePath string) bool {
 		!strings.HasSuffix(filePath, ".test.tsx") &&
 		!strings.HasSuffix(filePath, ".spec.ts") &&
 		!strings.HasSuffix(filePath, ".spec.tsx")
-}
-
-func (c *SRPChecker) analyzeCode(code, filePath string) *SRPAnalysis {
-	analysis := &SRPAnalysis{
-		FilePath:  filePath,
-		Imports:   []SRPImportInfo{},
-		Exports:   []SRPExportInfo{},
-		LineCount: strings.Count(code, "\n") + 1,
-	}
-
-	lines := strings.Split(code, "\n")
-
-	importRe := regexp.MustCompile(`^import\s+(?:{([^}]+)}|(\w+))?\s*(?:,\s*{([^}]+)})?\s*from\s+['"]([^'"]+)['"]`)
-	exportRe := regexp.MustCompile(`^export\s+(?:(type|interface)\s+)?(?:(const|let|var|function|class|default)\s+)?(\w+)`)
-	exportTypeRe := regexp.MustCompile(`^export\s+type\s+`)
-	exportFromRe := regexp.MustCompile(`from\s+['"]([^'"]+)['"]`)
-	stateHookRe := regexp.MustCompile(`\b(useState|useReducer|useContext|useCallback|useEffect|useMemo)\s*\(`)
-
-	for i, line := range lines {
-		trimmed := strings.TrimSpace(line)
-
-		// Check for imports
-		if matches := importRe.FindStringSubmatch(trimmed); matches != nil {
-			source := matches[4]
-			var names []string
-
-			if matches[1] != "" {
-				parts := strings.Split(matches[1], ",")
-				for _, part := range parts {
-					name := strings.TrimSpace(part)
-					if name != "" {
-						names = append(names, name)
-					}
-				}
-			}
-
-			if matches[2] != "" {
-				names = append(names, strings.TrimSpace(matches[2]))
-			}
-
-			if matches[3] != "" {
-				parts := strings.Split(matches[3], ",")
-				for _, part := range parts {
-					name := strings.TrimSpace(part)
-					if name != "" {
-						names = append(names, name)
-					}
-				}
-			}
-
-			analysis.Imports = append(analysis.Imports, SRPImportInfo{
-				Source: source,
-				Names:  names,
-			})
-		}
-
-		// Check for exports
-		if strings.HasPrefix(trimmed, "export ") {
-			isTypeOnly := exportTypeRe.MatchString(trimmed)
-
-			// Check if this is a re-export (export ... from '...')
-			var source string
-			if fromMatches := exportFromRe.FindStringSubmatch(trimmed); fromMatches != nil {
-				source = fromMatches[1]
-			}
-
-			if matches := exportRe.FindStringSubmatch(trimmed); matches != nil {
-				exportType := matches[1]
-				if exportType == "" {
-					exportType = matches[2]
-				}
-				name := matches[3]
-
-				analysis.Exports = append(analysis.Exports, SRPExportInfo{
-					Name:       name,
-					Type:       exportType,
-					IsTypeOnly: isTypeOnly,
-					Source:     source,
-				})
-			}
-		}
-
-		// Check for state management hooks
-		if stateHookRe.MatchString(trimmed) {
-			matches := stateHookRe.FindStringSubmatch(trimmed)
-			if len(matches) > 1 {
-				analysis.StateManagement = append(analysis.StateManagement, SRPStateInfo{
-					Hook: matches[1],
-					Line: i + 1,
-				})
-			}
-		}
-	}
-
-	return analysis
-}
-
-func (c *SRPChecker) validateSRPCompliance(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	if c.config.isRuleEnabled("directConvexImports") {
-		violations = append(violations, c.checkDirectConvexImports(analysis, filePath)...)
-	}
-	if c.config.isRuleEnabled("stateInScreens") {
-		violations = append(violations, c.checkStateInScreens(analysis, filePath)...)
-	}
-	if c.config.isRuleEnabled("multipleExports") {
-		violations = append(violations, c.checkMultipleExports(analysis, filePath)...)
-	}
-	if c.config.isRuleEnabled("fileSize") {
-		violations = append(violations, c.checkFileSize(analysis, filePath)...)
-	}
-	if c.config.isRuleEnabled("typeExportsLocation") {
-		violations = append(violations, c.checkTypeExportsLocation(analysis, filePath)...)
-	}
-	if c.config.isRuleEnabled("mixedConcerns") {
-		violations = append(violations, c.checkMixedConcerns(analysis, filePath)...)
-	}
-
-	// Severity resolution precedence (highest priority first):
-	//   1. WarningOnlyPaths — exemption, force "warning"
-	//   2. ErrorPaths       — keep original severity (typically error)
-	//   3. ErrorScopes      — keep original severity for new/changed files
-	//   4. WarnOnly         — downgrade to "warning" when rule is listed
-	for i := range violations {
-		if c.config.isWarningOnlyPath(violations[i].File) {
-			violations[i].Severity = "warning"
-			continue
-		}
-		if c.config.isErrorPath(violations[i].File) {
-			continue
-		}
-		if c.isInErrorScope(violations[i].File) {
-			continue
-		}
-		if c.config.isWarnOnly(violations[i].RuleID) {
-			violations[i].Severity = "warning"
-		}
-	}
-
-	return violations
 }
 
 // isInErrorScope returns true when the file's git-change status matches one of
@@ -288,289 +163,6 @@ func (c *SRPChecker) isInErrorScope(file string) bool {
 		return true
 	}
 	return false
-}
-
-func (c *SRPChecker) checkDirectConvexImports(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	// Skip allowed paths
-	if strings.Contains(filePath, "/data-layer/") ||
-		strings.Contains(filePath, "/backend/") ||
-		strings.Contains(filePath, "/convex/") ||
-		strings.Contains(filePath, "/scripts/") ||
-		strings.Contains(filePath, "/providers/") ||
-		strings.HasSuffix(filePath, "_layout.tsx") {
-		return violations
-	}
-
-	allowedImports := map[string]bool{
-		"Preloaded":         true,
-		"usePreloadedQuery": true,
-	}
-
-	// Allowed types from dataModel (these have no data-layer alternatives)
-	allowedDataModelTypes := map[string]bool{
-		"Id":  true,
-		"Doc": true,
-	}
-
-	for _, imp := range analysis.Imports {
-		if imp.Source == "convex/react" {
-			for _, name := range imp.Names {
-				if !allowedImports[name] {
-					violations = append(violations, SRPViolation{
-						File:       filePath,
-						Severity:   "error",
-						Message:    "Direct Convex imports forbidden outside data-layer",
-						Suggestion: "Use data-layer hooks instead",
-						RuleID:     "directConvexImports",
-					})
-					break
-				}
-			}
-		}
-
-		if strings.Contains(imp.Source, "_generated/api") {
-			violations = append(violations, SRPViolation{
-				File:       filePath,
-				Severity:   "error",
-				Message:    "Direct Convex API imports forbidden outside data-layer",
-				Suggestion: "Use data-layer hooks instead",
-				RuleID:     "directConvexImports",
-			})
-		}
-
-		// Check _generated/dataModel imports - only allow Id and Doc
-		if strings.Contains(imp.Source, "_generated/dataModel") {
-			for _, name := range imp.Names {
-				// Strip "type " prefix if present
-				cleanName := strings.TrimPrefix(name, "type ")
-				if !allowedDataModelTypes[cleanName] {
-					violations = append(violations, SRPViolation{
-						File:       filePath,
-						Severity:   "error",
-						Message:    fmt.Sprintf("Only Id and Doc types allowed from _generated/dataModel, found: %s", name),
-						Suggestion: "Use data-layer types instead, or import only Id/Doc",
-						RuleID:     "directConvexImports",
-					})
-					break
-				}
-			}
-		}
-	}
-
-	return violations
-}
-
-// isScreenOrPage returns true if the file is a mobile screen or Next.js page
-// These should be thin routing layers without state management
-func (c *SRPChecker) isScreenOrPage(filePath string) bool {
-	return strings.Contains(filePath, "/screens/") || strings.HasSuffix(filePath, "page.tsx")
-}
-
-func (c *SRPChecker) checkStateInScreens(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	if !c.isScreenOrPage(filePath) {
-		return violations
-	}
-
-	allowedHooks := c.config.resolvedScreenHooks()
-
-	var flaggedHooks []string
-	for _, s := range analysis.StateManagement {
-		if allowedHooks[s.Hook] {
-			flaggedHooks = append(flaggedHooks, s.Hook)
-		}
-	}
-
-	if len(flaggedHooks) > 0 {
-		fileType := "Screen"
-		if strings.HasSuffix(filePath, "page.tsx") {
-			fileType = "Page"
-		}
-
-		violations = append(violations, SRPViolation{
-			File:       filePath,
-			Severity:   "error",
-			Message:    fmt.Sprintf("%s has state management (%s)", fileType, strings.Join(flaggedHooks, ", ")),
-			Suggestion: "Move state to content component or hook - screens are navigation-only",
-			RuleID:     "stateInScreens",
-		})
-	}
-
-	return violations
-}
-
-func (c *SRPChecker) checkMultipleExports(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	crudFolders := []string{"/create/", "/read/", "/update/", "/delete/"}
-	hasCRUD := false
-	for _, folder := range crudFolders {
-		if strings.Contains(filePath, folder) {
-			hasCRUD = true
-			break
-		}
-	}
-
-	if !hasCRUD {
-		return violations
-	}
-
-	// Count non-type exports
-	nonTypeExports := 0
-	for _, exp := range analysis.Exports {
-		if !exp.IsTypeOnly && exp.Type != "type" && exp.Type != "interface" {
-			nonTypeExports++
-		}
-	}
-
-	if nonTypeExports > 1 {
-		violations = append(violations, SRPViolation{
-			File:       filePath,
-			Severity:   "error",
-			Message:    fmt.Sprintf("Multiple exports (%d) in CRUD component", nonTypeExports),
-			Suggestion: "Split into separate files (one component per file)",
-			RuleID:     "multipleExports",
-		})
-	}
-
-	return violations
-}
-
-func (c *SRPChecker) checkFileSize(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	if strings.Contains(filePath, "/scripts/") {
-		return violations
-	}
-
-	limits := map[string]int{
-		"screen":    100,
-		"hook":      150,
-		"component": 200,
-	}
-
-	lineCount := analysis.LineCount
-
-	if c.isScreenOrPage(filePath) && lineCount > limits["screen"] {
-		fileType := "Screen"
-		if strings.HasSuffix(filePath, "page.tsx") {
-			fileType = "Page"
-		}
-		violations = append(violations, SRPViolation{
-			File:       filePath,
-			Severity:   "warning",
-			Message:    fmt.Sprintf("%s file is %d lines (limit: %d)", fileType, lineCount, limits["screen"]),
-			Suggestion: "Move logic to content component",
-			RuleID:     "fileSize",
-		})
-	} else if strings.Contains(filePath, "/hooks/") && lineCount > limits["hook"] {
-		violations = append(violations, SRPViolation{
-			File:       filePath,
-			Severity:   "warning",
-			Message:    fmt.Sprintf("Hook file is %d lines (limit: %d)", lineCount, limits["hook"]),
-			Suggestion: "Split into smaller hooks",
-			RuleID:     "fileSize",
-		})
-	} else if lineCount > limits["component"] {
-		violations = append(violations, SRPViolation{
-			File:       filePath,
-			Severity:   "warning",
-			Message:    fmt.Sprintf("File is %d lines (limit: %d)", lineCount, limits["component"]),
-			Suggestion: "Consider splitting",
-			RuleID:     "fileSize",
-		})
-	}
-
-	return violations
-}
-
-func (c *SRPChecker) checkTypeExportsLocation(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	// Skip type definition folders, declaration files, auto-generated data-layer files,
-	// and shared UI packages (which commonly export props types alongside components)
-	if strings.Contains(filePath, "/types/") ||
-		strings.HasSuffix(filePath, ".d.ts") ||
-		strings.Contains(filePath, "/generated-types/") ||
-		strings.Contains(filePath, "/data-layer/") ||
-		strings.Contains(filePath, "packages/ui/") ||
-		strings.Contains(filePath, "packages/mobile-ui/") {
-		return violations
-	}
-
-	for _, exp := range analysis.Exports {
-		if exp.IsTypeOnly || exp.Type == "type" || exp.Type == "interface" {
-			// Skip Props types - these are idiomatic to export alongside React components
-			if strings.HasSuffix(exp.Name, "Props") {
-				continue
-			}
-			violations = append(violations, SRPViolation{
-				File:       filePath,
-				Severity:   "error",
-				Message:    fmt.Sprintf("Type export '%s' found outside types/ folder", exp.Name),
-				Suggestion: "Move type definitions to types/ folder",
-				RuleID:     "typeExportsLocation",
-			})
-		}
-	}
-
-	return violations
-}
-
-func (c *SRPChecker) checkMixedConcerns(analysis *SRPAnalysis, filePath string) []SRPViolation {
-	var violations []SRPViolation
-
-	hasDataLayer := false
-	hasUI := false
-	// Mixed concerns uses the original 3 state hooks (useState/useReducer/useContext)
-	// regardless of screenHooks config — useCallback/useEffect/useMemo aren't "state"
-	stateHooks := map[string]bool{"useState": true, "useReducer": true, "useContext": true}
-	hasState := false
-	for _, s := range analysis.StateManagement {
-		if stateHooks[s.Hook] {
-			hasState = true
-			break
-		}
-	}
-
-	for _, imp := range analysis.Imports {
-		if strings.Contains(imp.Source, "data-layer") {
-			hasDataLayer = true
-		}
-		if strings.Contains(imp.Source, "@/components/ui") ||
-			strings.Contains(imp.Source, "../ui/") ||
-			strings.Contains(imp.Source, "@dashtag/ui") ||
-			strings.Contains(imp.Source, "@dashtag/mobile-ui") {
-			hasUI = true
-		}
-	}
-
-	// If file has all three: data fetching, UI, and state = mixed concerns
-	var concerns []string
-	if hasDataLayer {
-		concerns = append(concerns, "data fetching")
-	}
-	if hasUI {
-		concerns = append(concerns, "UI components")
-	}
-	if hasState {
-		concerns = append(concerns, "state management")
-	}
-
-	if len(concerns) >= 3 {
-		violations = append(violations, SRPViolation{
-			File:       filePath,
-			Severity:   "error",
-			Message:    fmt.Sprintf("File mixes multiple concerns: %s", strings.Join(concerns, ", ")),
-			Suggestion: "Separate data fetching (hooks), state (hooks/content), and UI (components)",
-			RuleID:     "mixedConcerns",
-		})
-	}
-
-	return violations
 }
 
 // checkTestRequired checks that component/feature files have corresponding test files.
