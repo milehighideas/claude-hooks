@@ -25,15 +25,16 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v4
 
-      - name: Build all platforms
-        run: just build-all
+      # zig is the C cross-compiler for the tree-sitter (CGO) binaries.
+      # One tool builds every release target (linux-amd64, linux-arm64,
+      # windows-amd64). darwin is not released — it needs the Apple SDK.
+      - name: Install zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
 
-      - name: Package archives
-        run: |
-          cd bin
-          for platform in darwin-arm64 linux-amd64 linux-arm64 windows-amd64; do
-            tar -czf "claude-hooks-${platform}.tar.gz" -C "$platform" .
-          done
+      - name: Build and package release platforms
+        run: just package
 
       - name: Create release
         # Still on v2 (Node 20) — softprops/action-gh-release#670 tracks the
@@ -42,7 +43,6 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            bin/claude-hooks-darwin-arm64.tar.gz
             bin/claude-hooks-linux-amd64.tar.gz
             bin/claude-hooks-linux-arm64.tar.gz
             bin/claude-hooks-windows-amd64.tar.gz

@@ -144,20 +144,30 @@ install: build
         [ -f "$bin" ] && cp "$bin" /usr/local/bin/
     done
 
-# Cross-compile for all platforms.
+# Cross-compile the released platforms using zig as the C cross-compiler.
 #
-# NOTE: validate-test-files and pre-commit depend on tree-sitter (CGO) for
-# AST-based stub detection. Cross-compiling CGO code requires platform-
-# specific C toolchains on the build host:
+# pre-commit, validate-srp, and validate-test-files depend on tree-sitter
+# (CGO) for AST-based stub detection, so cross-compiling needs a C toolchain
+# per target. A single tool — zig — covers every released target, replacing
+# the old musl-cross / mingw-w64 / aarch64 toolchains:
 #
-#   macOS -> Linux:    brew install FiloSottile/musl-cross/musl-cross
-#   macOS -> Windows:  brew install mingw-w64
-#   macOS -> arm64:    brew install aarch64-unknown-linux-gnu  (or zig cc)
+#   brew install zig          (macOS)
+#   snap install zig --classic / mlugg/setup-zig action  (Linux / CI)
 #
-# If those aren't installed the respective platform build will fail with
-# "cgo: C compiler not available". Native builds (`just <cmdname>`) work
-# out of the box on the host platform.
-build-all: check-workspace build-darwin build-linux build-linux-arm64 build-windows
+# Released targets are static and self-contained: linux-amd64 + linux-arm64
+# are statically linked musl binaries; windows-amd64 depends only on the OS
+# (KERNEL32 + Universal CRT). Override the per-target compiler with the
+# CC_LINUX_AMD64 / CC_LINUX_ARM64 / CC_WINDOWS_AMD64 env vars if needed.
+#
+# darwin-arm64 is intentionally NOT a release target: Go's darwin runtime
+# links CoreFoundation + libresolv, which require the Apple macOS SDK
+# (license-restricted, non-redistributable) and so cannot be cross-compiled
+# from a non-macOS host. Build it natively on a Mac with `just build-darwin`
+# or `just <cmdname>`.
+build-release: check-workspace build-linux build-linux-arm64 build-windows
+
+# Build every platform including native darwin (local convenience; macOS host only)
+build-all: check-workspace build-darwin build-release
 
 # Build for macOS (Apple Silicon)
 build-darwin:
@@ -168,46 +178,49 @@ build-darwin:
         CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 go build -o {{bindir}}/darwin-arm64/$name ./cmd/$name
     done
 
-# Build for Linux (amd64) — requires musl-cross or equivalent for CGO
+# Build for Linux (amd64) — statically linked musl binary via zig
 build-linux:
     #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p {{bindir}}/linux-amd64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        CGO_ENABLED=1 CC=${CC_LINUX_AMD64:-x86_64-linux-musl-gcc} \
-          GOOS=linux GOARCH=amd64 go build -o {{bindir}}/linux-amd64/$name ./cmd/$name
+        CGO_ENABLED=1 CC="${CC_LINUX_AMD64:-zig cc -target x86_64-linux-musl}" \
+          GOOS=linux GOARCH=amd64 go build -tags "netgo osusergo" -o {{bindir}}/linux-amd64/$name ./cmd/$name
     done
 
-# Build for Linux (arm64 — Docker on Apple Silicon) — requires aarch64 cross-compiler for CGO
+# Build for Linux (arm64 — Docker on Apple Silicon) — statically linked musl binary via zig
 build-linux-arm64:
     #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p {{bindir}}/linux-arm64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        CGO_ENABLED=1 CC=${CC_LINUX_ARM64:-aarch64-linux-musl-gcc} \
-          GOOS=linux GOARCH=arm64 go build -o {{bindir}}/linux-arm64/$name ./cmd/$name
+        CGO_ENABLED=1 CC="${CC_LINUX_ARM64:-zig cc -target aarch64-linux-musl}" \
+          GOOS=linux GOARCH=arm64 go build -tags "netgo osusergo" -o {{bindir}}/linux-arm64/$name ./cmd/$name
     done
 
-# Build for Windows (amd64) — requires mingw-w64 for CGO
+# Build for Windows (amd64) — self-contained .exe via zig
 build-windows:
     #!/usr/bin/env bash
+    set -euo pipefail
     mkdir -p {{bindir}}/windows-amd64
     for cmd in cmd/*/; do
         name=$(basename "$cmd")
-        CGO_ENABLED=1 CC=${CC_WINDOWS_AMD64:-x86_64-w64-mingw32-gcc} \
-          GOOS=windows GOARCH=amd64 go build -o {{bindir}}/windows-amd64/$name.exe ./cmd/$name
+        CGO_ENABLED=1 CC="${CC_WINDOWS_AMD64:-zig cc -target x86_64-windows-gnu}" \
+          GOOS=windows GOARCH=amd64 go build -tags "netgo osusergo" -o {{bindir}}/windows-amd64/$name.exe ./cmd/$name
     done
 
-# Package archives (mirrors release.yml packaging step)
-package: build-all
+# Package release archives (mirrors release.yml packaging step)
+package: build-release
     cd bin && \
-    for platform in darwin-arm64 linux-amd64 linux-arm64 windows-amd64; do \
+    for platform in linux-amd64 linux-arm64 windows-amd64; do \
         tar -czf "claude-hooks-${platform}.tar.gz" -C "$platform" . ; \
     done
     @echo "Archives created in bin/"
     @ls -lh bin/*.tar.gz
 
-# Run the full CI pipeline locally (test + build-all + package)
+# Run the full CI pipeline locally (test + build-release + package)
 ci: test package
     @echo ""
-    @echo "CI simulation passed — all platforms built and packaged."
+    @echo "CI simulation passed — release platforms built and packaged."
