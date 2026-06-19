@@ -4,7 +4,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -135,7 +134,11 @@ func checkPerAppChangelog(stagedFiles, relevantFiles []string, apps map[string]A
 
 	for appName := range affectedApps {
 		appConfig := apps[appName]
-		changelogDir := filepath.Join(appConfig.Path, ".changelog")
+		// Build with "/" (NOT filepath.Join): stagedFiles come from `git diff`
+		// which always emits forward slashes, even on Windows. filepath.Join
+		// would produce backslashes on Windows, so the HasPrefix below would
+		// never match and the check would wrongly demand a fragment.
+		changelogDir := appConfig.Path + "/.changelog"
 
 		found := false
 		for _, file := range stagedFiles {
@@ -186,7 +189,8 @@ func checkPerAppChangelog(stagedFiles, relevantFiles []string, apps map[string]A
 // Used when changes are in shared paths (per-app mode with global fallback)
 func checkAnyAppChangelog(stagedFiles []string, apps map[string]AppConfig) error {
 	for _, appConfig := range apps {
-		changelogDir := filepath.Join(appConfig.Path, ".changelog")
+		// "/" not filepath.Join — git paths are always forward-slash (see checkPerAppChangelog).
+		changelogDir := appConfig.Path + "/.changelog"
 		for _, file := range stagedFiles {
 			if strings.HasPrefix(file, changelogDir+"/") && strings.HasSuffix(file, ".txt") {
 				return nil // Found at least one
@@ -220,7 +224,8 @@ func checkAnyAppChangelog(stagedFiles []string, apps map[string]AppConfig) error
 // Used when changes are in shared paths (required mode - no global fallback)
 func checkAnyAppChangelogStrict(stagedFiles []string, apps map[string]AppConfig) error {
 	for _, appConfig := range apps {
-		changelogDir := filepath.Join(appConfig.Path, ".changelog")
+		// "/" not filepath.Join — git paths are always forward-slash (see checkPerAppChangelog).
+		changelogDir := appConfig.Path + "/.changelog"
 		for _, file := range stagedFiles {
 			if strings.HasPrefix(file, changelogDir+"/") && strings.HasSuffix(file, ".txt") {
 				return nil // Found at least one
