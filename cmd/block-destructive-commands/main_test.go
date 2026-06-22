@@ -281,6 +281,16 @@ func TestGitWhitelist(t *testing.T) {
 		{"git push origin", "git push origin main", false},
 		{"git pull", "git pull origin main", false},
 
+		// === Allowed: git-lfs (large file storage) ===
+		{"git lfs version", "git lfs version", false},
+		{"git lfs install", "git lfs install", false},
+		{"git lfs track", "git lfs track '*.ai'", false},
+		{"git lfs untrack", "git lfs untrack '*.ai'", false},
+		{"git lfs ls-files", "git lfs ls-files", false},
+		{"git lfs status", "git lfs status", false},
+		{"git lfs migrate import", "git lfs migrate import --include='events/*/output/*.ai'", false},
+		{"git lfs push", "git lfs push origin main", false},
+
 		// === Allowed: read-only informational ===
 		{"git status", "git status", false},
 		{"git diff", "git diff", false},

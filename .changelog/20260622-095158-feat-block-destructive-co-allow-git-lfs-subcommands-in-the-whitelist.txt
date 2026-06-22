@@ -1,0 +1,1 @@
+feat(block-destructive-commands): allow git lfs subcommands in the whitelist

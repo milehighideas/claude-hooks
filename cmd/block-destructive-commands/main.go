@@ -347,6 +347,10 @@ var allowedGitSubcommands = map[string]bool{
 	"push":   true,
 	"pull":   true,
 
+	// git-lfs: large file storage. Enables all `git lfs` subcommands
+	// (install, track, untrack, migrate, ls-files, push, pull, status).
+	"lfs": true,
+
 	// Read-only / informational
 	"status":       true,
 	"diff":         true,
