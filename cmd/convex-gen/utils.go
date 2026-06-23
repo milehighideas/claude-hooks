@@ -1,11 +1,19 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+// jsonMarshalString returns a JSON-encoded (safely-quoted) string literal.
+// JSON string encoding is valid TypeScript, so callers can use it directly.
+func jsonMarshalString(s string) (string, error) {
+	b, err := json.Marshal(s)
+	return string(b), err
+}
 
 // cleanDirectory removes all .ts files from a directory
 func cleanDirectory(dir string) error {
@@ -46,6 +54,36 @@ func generateIndexFile(dir string, files []string) error {
 	}
 
 	return os.WriteFile(filepath.Join(dir, "index.ts"), []byte(sb.String()), 0644)
+}
+
+// toSnakeCase converts camelCase/PascalCase to snake_case (forSale → for_sale).
+func toSnakeCase(s string) string {
+	var b strings.Builder
+	for i, r := range s {
+		if r >= 'A' && r <= 'Z' {
+			if i > 0 {
+				b.WriteByte('_')
+			}
+			b.WriteRune(r - 'A' + 'a')
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// singularize converts a plural table name to its singular form (vehicles →
+// vehicle). Naive: strips a trailing "s", with an "-ies" → "-y" special case
+// (companies → company). Returns the input unchanged when it does not end in
+// "s".
+func singularize(s string) string {
+	if strings.HasSuffix(s, "ies") && len(s) > 3 {
+		return s[:len(s)-3] + "y"
+	}
+	if strings.HasSuffix(s, "s") && len(s) > 1 {
+		return s[:len(s)-1]
+	}
+	return s
 }
 
 // capitalize capitalizes the first letter

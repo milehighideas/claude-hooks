@@ -60,7 +60,7 @@ func run(cliTypedReturns bool) error {
 
 	// Scan and parse Convex functions
 	var allFunctions []ConvexFunction
-	if config.Generators.Hooks || config.Generators.API {
+	if config.Generators.Hooks || config.Generators.API || config.Generators.AICatalog {
 		fmt.Println("Scanning Convex functions...")
 
 		files, err := scanner.ScanConvexDirectory()
@@ -214,6 +214,45 @@ func run(cliTypedReturns bool) error {
 		}
 		fmt.Printf("  %d tables with field metadata\n", len(allTables))
 		fmt.Printf("  Output: %s\n", config.GetMetadataOutputDir())
+		fmt.Println()
+	}
+
+	// Generate Terraform/public-API surface (opt-in). Resolves the curated
+	// resources from convex-terraform-gen.json against the parsed schema and
+	// emits <res>Api.ts, <res>Routes.ts, and the tfplugingen-openapi config.
+	if config.Generators.Terraform {
+		fmt.Println("Generating Terraform/public-API surface...")
+		parser.EnrichTablesWithFields(schemaFiles, allTables)
+		tfGen := NewTerraformGenerator(config)
+		if err := tfGen.Generate(allTables); err != nil {
+			return fmt.Errorf("failed to generate terraform surface: %w", err)
+		}
+		fmt.Println("  Output: curated *Api.ts + *Routes.ts + generator_config.yml")
+		fmt.Println()
+	}
+
+	// Generate AI tool catalog
+	if config.Generators.AICatalog {
+		fmt.Println("Generating AI tool catalog...")
+		aiGen := NewAICatalogGenerator(config)
+		if err := aiGen.Generate(allFunctions); err != nil {
+			return fmt.Errorf("failed to generate AI catalog: %w", err)
+		}
+		fmt.Printf("  Output: %s\n", config.GetAICatalogOutputDir())
+		fmt.Println()
+	}
+
+	// Generate OpenAPI spec (opt-in). Self-contained: scans the Convex tree for
+	// `*Api.ts` modules itself, independent of the public-function scan above.
+	if config.Generators.OpenAPI {
+		fmt.Println("Generating OpenAPI spec...")
+		openapiGen := NewOpenAPIGenerator(config)
+		resources, err := openapiGen.Generate()
+		if err != nil {
+			return fmt.Errorf("failed to generate OpenAPI spec: %w", err)
+		}
+		fmt.Printf("  %d resource(s)\n", resources)
+		fmt.Printf("  Output: %s\n", config.GetOpenAPISpecPath())
 		fmt.Println()
 	}
 

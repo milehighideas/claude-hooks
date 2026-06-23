@@ -12,6 +12,7 @@ import (
 
 	"github.com/milehighideas/claude-hooks/internal/jsonc"
 	"github.com/milehighideas/claude-hooks/internal/stubs"
+	"github.com/milehighideas/claude-hooks/internal/substance"
 )
 
 // E2E test extensions by app type
@@ -381,10 +382,28 @@ func findProjectRoot(filePath string) string {
 // rejection for backward compatibility with earlier behavior.
 type projectConfig struct {
 	Features struct {
-		TestFiles     bool `json:"testFiles"`
-		StubTestCheck bool `json:"stubTestCheck"`
+		TestFiles          bool `json:"testFiles"`
+		StubTestCheck      bool `json:"stubTestCheck"`
+		TestSubstanceCheck bool `json:"testSubstanceCheck"`
 	} `json:"features"`
-	TestFilesConfig testFilesConfig `json:"testFilesConfig"`
+	TestFilesConfig          testFilesConfig     `json:"testFilesConfig"`
+	TestSubstanceCheckConfig testSubstanceConfig `json:"testSubstanceCheckConfig"`
+}
+
+// testSubstanceConfig is the edit-time view of testSubstanceCheckConfig. It
+// mirrors the fields the commit-time gate reads (cmd/pre-commit/config.go) so a
+// test that would fail at commit is also blocked the moment Claude writes it.
+type testSubstanceConfig struct {
+	AppPaths             []string `json:"appPaths"`
+	ExcludePaths         []string `json:"excludePaths"`
+	MinTestSourceRatio   float64  `json:"minTestSourceRatio"`
+	BranchToItRatio      int      `json:"branchToItRatio"`
+	RequireInteraction   *bool    `json:"requireInteraction"`
+	MinSourceLOCForCheck int      `json:"minSourceLOCForCheck"`
+	// AllowTautological is parsed for parity with the commit-time config but
+	// not used here — the stub gate above already rejects tautological and
+	// majority-weak assertions at edit time.
+	AllowTautological bool `json:"allowTautological"`
 }
 
 // testFilesConfig controls which files inside an opted-in project are
@@ -452,6 +471,107 @@ func isFileInScope(projectRoot, filePath string, cfg projectConfig) bool {
 	return false
 }
 
+// siblingSourceForTest maps a test path to its sibling source path by
+// stripping the .test/.spec marker before the extension. Returns "" when the
+// path isn't a recognized test file.
+func siblingSourceForTest(testPath string) string {
+	ext := filepath.Ext(testPath)
+	if ext != ".ts" && ext != ".tsx" {
+		return ""
+	}
+	base := strings.TrimSuffix(testPath, ext)
+	for _, marker := range []string{".test", ".spec"} {
+		if strings.HasSuffix(base, marker) {
+			return strings.TrimSuffix(base, marker) + ext
+		}
+	}
+	return ""
+}
+
+// substanceCfgFrom builds an internal substance.Config from the project's
+// edit-time config, falling back to the same defaults as the commit-time gate.
+func substanceCfgFrom(c testSubstanceConfig) substance.Config {
+	out := substance.DefaultConfig
+	if c.MinTestSourceRatio != 0 {
+		out.MinTestSourceRatio = c.MinTestSourceRatio
+	}
+	if c.BranchToItRatio != 0 {
+		out.BranchToItRatio = c.BranchToItRatio
+	}
+	if c.RequireInteraction != nil {
+		out.RequireInteraction = *c.RequireInteraction
+	}
+	if c.MinSourceLOCForCheck != 0 {
+		out.MinSourceLOCForCheck = c.MinSourceLOCForCheck
+	}
+	return out
+}
+
+// inSubstanceScope applies testSubstanceCheckConfig's own appPaths/excludePaths
+// (independent of testFilesConfig) as project-relative substring matches.
+func inSubstanceScope(projectRoot, filePath string, c testSubstanceConfig) bool {
+	rel, err := filepath.Rel(projectRoot, filePath)
+	if err != nil {
+		return true
+	}
+	rel = filepath.ToSlash(rel)
+	for _, p := range c.ExcludePaths {
+		if strings.Contains(rel, p) {
+			return false
+		}
+	}
+	if len(c.AppPaths) == 0 {
+		return true
+	}
+	for _, p := range c.AppPaths {
+		if strings.Contains(rel, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// checkSubstanceGate blocks an edit-time write of a hollow test — one that
+// passes the stub gate (uses "real" matchers) but doesn't meaningfully cover
+// its sibling source (too few lines for the surface, render-only UI test, or
+// too few it() blocks for the branch count). Returns 2 to block, 0 to allow.
+// It degrades to "allow" whenever it can't confidently evaluate the pair
+// (non-test write, out of scope, no resolvable/readable sibling source).
+func checkSubstanceGate(projectRoot, filePath string, data HookData, cfg projectConfig, stderr io.Writer) int {
+	isTestOp, testPath := isTestFileWriteOperation(data)
+	if !isTestOp {
+		return 0
+	}
+	if !inSubstanceScope(projectRoot, testPath, cfg.TestSubstanceCheckConfig) {
+		return 0
+	}
+	srcPath := siblingSourceForTest(testPath)
+	if srcPath == "" {
+		return 0
+	}
+	srcBytes, err := os.ReadFile(srcPath)
+	if err != nil {
+		// No resolvable sibling source (aggregate/util/external) — don't block.
+		return 0
+	}
+	content, err := getResultingTestContent(data)
+	if err != nil {
+		return 0
+	}
+	violations := substance.Check(string(srcBytes), content, substanceCfgFrom(cfg.TestSubstanceCheckConfig))
+	if len(violations) == 0 {
+		return 0
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "BLOCKED: Hollow test rejected (substance check)\n\nFile: %s\n\nThis test uses real matchers (so it passes the stub gate) but does not\nmeaningfully exercise %s:\n", filepath.Base(testPath), filepath.Base(srcPath))
+	for _, v := range violations {
+		fmt.Fprintf(&b, "  - %s\n", v.Message)
+	}
+	b.WriteString("\nWrite assertions that verify real behavior: render multiple prop/state\nvariants, drive interactions (fireEvent/userEvent/act), and assert concrete\noutput — at least one it() per ~4 source branches. If the component is\ngenuinely hard to test, ask the user how much mocking to build rather than\nshipping a hollow test.\n\n")
+	_, _ = io.WriteString(stderr, b.String())
+	return 2
+}
+
 // run applies all gates and runs validation, returning an exit code.
 // stderr receives any block messages. It is extracted from main() so the
 // full path is testable without stdin/exit plumbing.
@@ -480,8 +600,18 @@ func run(data HookData, stderr io.Writer) int {
 	}
 	stubGateOn := cfg.Features.StubTestCheck || cfg.Features.TestFiles
 	componentGateOn := cfg.Features.TestFiles
-	if !stubGateOn && !componentGateOn {
+	substanceGateOn := cfg.Features.TestSubstanceCheck
+	if !stubGateOn && !componentGateOn && !substanceGateOn {
 		return 0
+	}
+
+	// Substance gate runs first with its OWN scope (testSubstanceCheckConfig),
+	// independent of testFilesConfig, so it applies even when the other gates
+	// are scoped out. Blocks edit-time writes of hollow tests.
+	if substanceGateOn {
+		if code := checkSubstanceGate(projectRoot, filePath, data, cfg, stderr); code != 0 {
+			return code
+		}
 	}
 
 	// Apply per-app scope (testFilesConfig.appPaths / excludePaths). Files

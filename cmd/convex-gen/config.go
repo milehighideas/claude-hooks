@@ -15,6 +15,38 @@ type Config struct {
 	Imports    ImportsConfig    `json:"imports"`    // Import path configuration
 	Generators GeneratorsConfig `json:"generators"` // Which generators to run
 	Skip       SkipConfig       `json:"skip"`       // Files/patterns to skip
+	AI         AIConfig         `json:"ai"`         // AI tool catalog generator policy (opt-in)
+	OpenAPI    OpenAPIConfig    `json:"openapi"`    // OpenAPI spec generator policy (opt-in)
+	Terraform  TerraformConfig  `json:"terraform"`  // Terraform/public-API emitter policy (opt-in)
+}
+
+// TerraformConfig controls the Terraform/public-API emitter (opt-in). It points
+// at a separate convex-terraform-gen.json that holds the per-resource curation
+// overlay. Off unless `generators.terraform` is true.
+type TerraformConfig struct {
+	ConfigPath string `json:"config"` // repo-root-relative path to convex-terraform-gen.json
+}
+
+// OpenAPIConfig controls the OpenAPI spec generator (opt-in). The generator
+// scans the Convex tree for `*Api.ts` files and emits an OpenAPI 3.1 spec from
+// the exported `<resource>ApiInput` / `<resource>ApiPatch` / `<resource>ApiOutput`
+// validators in each. Off unless `generators.openapi` is true.
+type OpenAPIConfig struct {
+	OutputDir string `json:"outputDir"` // repo-root-relative dir for the spec; default "<dataLayer.path>/generated-openapi"
+	FileName  string `json:"fileName"`  // spec filename; default "openapi.yaml"
+	Title     string `json:"title"`     // info.title; default "<org> API"
+	Version   string `json:"version"`   // info.version; default "1.0.0"
+	ServerURL string `json:"serverUrl"` // servers[0].url
+	BasePath  string `json:"basePath"`  // path prefix; default "/api/v1"
+}
+
+// AIConfig controls the AI tool catalog generator (opt-in).
+type AIConfig struct {
+	OutputDir         string            `json:"outputDir"`         // default "generated-ai"
+	Deny              []string          `json:"deny"`              // glob patterns excluded from the catalog
+	ForceRead         []string          `json:"forceRead"`         // query-like actions/mutations to classify as read
+	DescriptionSource string            `json:"descriptionSource"` // "fallback" (default) | "jsdoc" (Phase 3)
+	Descriptions      map[string]string `json:"descriptions"`      // fnPath -> override description
 }
 
 // ConvexConfig configures where to find Convex functions
@@ -48,10 +80,13 @@ type ImportsConfig struct {
 
 // GeneratorsConfig controls which generators run
 type GeneratorsConfig struct {
-	Hooks    bool `json:"hooks"`
-	API      bool `json:"api"`
-	Types    bool `json:"types"`
-	Metadata bool `json:"metadata"`
+	Hooks     bool `json:"hooks"`
+	API       bool `json:"api"`
+	Types     bool `json:"types"`
+	Metadata  bool `json:"metadata"`
+	AICatalog bool `json:"aiCatalog"`
+	OpenAPI   bool `json:"openapi"`
+	Terraform bool `json:"terraform"`
 }
 
 // SkipConfig configures files/directories to skip
@@ -143,6 +178,39 @@ func applyConfigDefaults(config *Config) {
 		config.DataLayer.HookNaming = "flat" // default to flat for backward compatibility
 	}
 
+	// AI tool catalog defaults
+	if config.AI.OutputDir == "" {
+		config.AI.OutputDir = "generated-ai"
+	}
+	if config.AI.DescriptionSource == "" {
+		config.AI.DescriptionSource = "fallback"
+	}
+
+	// OpenAPI spec defaults. Note: OpenAPI is deliberately NOT part of the
+	// "all generators off → enable all" block below, so it stays opt-in and a
+	// repo's output is unchanged unless it sets generators.openapi: true.
+	if config.OpenAPI.OutputDir == "" {
+		config.OpenAPI.OutputDir = filepath.Join(config.DataLayer.Path, "generated-openapi")
+	}
+	if config.OpenAPI.FileName == "" {
+		config.OpenAPI.FileName = "openapi.yaml"
+	}
+	if config.OpenAPI.Version == "" {
+		config.OpenAPI.Version = "1.0.0"
+	}
+	if config.OpenAPI.BasePath == "" {
+		config.OpenAPI.BasePath = "/api/v1"
+	}
+	if config.OpenAPI.Title == "" {
+		config.OpenAPI.Title = config.Org + " API"
+	}
+
+	// Terraform emitter default config path. Opt-in like OpenAPI, so not part of
+	// the "all generators off → enable all" block.
+	if config.Terraform.ConfigPath == "" {
+		config.Terraform.ConfigPath = "convex-terraform-gen.json"
+	}
+
 	// Imports defaults - prefer package aliases
 	if config.Imports.Style == "" {
 		config.Imports.Style = "package"
@@ -225,6 +293,21 @@ func (c *Config) GetTypesOutputDir() string {
 // GetMetadataOutputDir returns the full path for generated schema metadata
 func (c *Config) GetMetadataOutputDir() string {
 	return filepath.Join(c.DataLayer.Path, c.DataLayer.MetadataDir)
+}
+
+// GetAICatalogOutputDir returns the full path for the generated AI tool catalog.
+func (c *Config) GetAICatalogOutputDir() string {
+	return filepath.Join(c.DataLayer.Path, c.AI.OutputDir)
+}
+
+// GetOpenAPISpecPath returns the full path for the generated OpenAPI spec file.
+func (c *Config) GetOpenAPISpecPath() string {
+	return filepath.Join(c.OpenAPI.OutputDir, c.OpenAPI.FileName)
+}
+
+// GetTerraformConfigPath returns the path to the Terraform curation overlay.
+func (c *Config) GetTerraformConfigPath() string {
+	return c.Terraform.ConfigPath
 }
 
 // IsSchemaDirectory returns true if schema is a directory (vs single file)
