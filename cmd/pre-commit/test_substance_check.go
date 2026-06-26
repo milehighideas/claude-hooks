@@ -31,29 +31,83 @@ type substanceReport struct {
 }
 
 // runTestSubstanceCheck is the pre-commit / standalone entry point for the
-// substance gates. Delegates the scan to collectSubstanceReport, prints
-// status (compact or verbose), writes the report to disk if reportDir is
-// set, and returns a non-nil error if any file has at least one violation.
+// substance gates. Delegates the scan to collectSubstanceReport, prints a
+// pass/fail status line (compact) or the full report (verbose), writes a
+// per-app report to disk if reportDir is set, and returns a non-nil error if
+// any file has at least one violation.
+//
+// The compact-mode printStatus calls mirror the sibling stub/missing-tests
+// gates — without them this check ran silently, printing neither ✅ nor ❌ to
+// the live runner output even though it could fail the commit.
 func runTestSubstanceCheck(cfg TestSubstanceCheckConfig, projectRoot string, stagedFiles []string) error {
+	if !compactMode() {
+		fmt.Println("================================")
+		fmt.Println("  TEST SUBSTANCE CHECK")
+		fmt.Println("================================")
+	}
+
 	rep, err := collectSubstanceReport(cfg, projectRoot, stagedFiles)
 	if err != nil {
+		if compactMode() {
+			printStatus("Test substance", false, err.Error())
+		} else {
+			fmt.Printf("❌ Test substance check error: %v\n\n", err)
+		}
 		return err
 	}
 
-	if reportDir != "" {
-		if werr := writeSubstanceReport(rep); werr != nil {
+	count := len(rep.Files)
+
+	// Write per-app report files only when there are violations, matching the
+	// stub-tests / srp / typecheck report conventions.
+	if reportDir != "" && count > 0 {
+		if werr := writeSubstanceReport(rep, projectRoot, reportDir); werr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to write substance report: %v\n", werr)
 		}
 	}
 
-	if len(rep.Files) == 0 {
+	if compactMode() {
+		if count > 0 {
+			printStatus("Test substance", false, substanceAppBreakdownDetail(rep, projectRoot))
+			printReportHint("test-substance/")
+			return fmt.Errorf("%d test file(s) failed substance checks", count)
+		}
+		printStatus("Test substance", true, "")
 		return nil
 	}
 
-	if !compactMode() {
-		printSubstanceReportPlain(rep)
+	if count == 0 {
+		fmt.Println("✅ Test substance check passed")
+		fmt.Println()
+		return nil
 	}
-	return fmt.Errorf("%d test file(s) failed substance checks", len(rep.Files))
+	printSubstanceReportPlain(rep)
+	return fmt.Errorf("%d test file(s) failed substance checks", count)
+}
+
+// substanceAppBreakdownDetail builds the compact status detail string,
+// grouping the failing files by app/package: "mobile 2 file(s), story 11
+// file(s)". Mirrors the stub-tests breakdown so the live status line tells you
+// which apps to look at before opening the report.
+func substanceAppBreakdownDetail(rep *substanceReport, projectRoot string) string {
+	appCounts := make(map[string]int)
+	for _, f := range rep.Files {
+		rel, err := filepath.Rel(projectRoot, f.Source)
+		if err != nil {
+			rel = f.Source
+		}
+		appCounts[appNameFromRel(filepath.ToSlash(rel))]++
+	}
+	apps := make([]string, 0, len(appCounts))
+	for app := range appCounts {
+		apps = append(apps, app)
+	}
+	sort.Strings(apps)
+	parts := make([]string, len(apps))
+	for i, app := range apps {
+		parts[i] = fmt.Sprintf("%s %d file(s)", app, appCounts[app])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // substanceConfigToInternal converts the JSON-bound TestSubstanceCheckConfig
@@ -254,41 +308,58 @@ func printSubstanceReportPlain(rep *substanceReport) {
 	fmt.Println()
 }
 
-// writeSubstanceReport emits a plaintext report next to the other check
-// reports under reportDir/test-substance/. Mirrors the layout used by
-// lint/typecheck/srp/missing-tests reports.
-func writeSubstanceReport(rep *substanceReport) error {
-	if reportDir == "" {
+// writeSubstanceReport writes one <baseDir>/test-substance/<app>.txt file per
+// app/package that has substance violations, matching the srp/<app>.txt,
+// typecheck/<app>.txt, and stub-tests/<app>.txt conventions used by sibling
+// checks. Previously this emitted a single report.txt for the whole repo,
+// which buried per-app findings and diverged from the other report dirs.
+func writeSubstanceReport(rep *substanceReport, projectRoot, baseDir string) error {
+	if baseDir == "" || len(rep.Files) == 0 {
 		return nil
 	}
-	dir := filepath.Join(reportDir, "test-substance")
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	outDir := filepath.Join(baseDir, "test-substance")
+	if err := os.MkdirAll(outDir, 0755); err != nil {
 		return err
 	}
-	out := filepath.Join(dir, "report.txt")
-	var sb strings.Builder
-	sb.WriteString("================================================================================\n")
-	sb.WriteString("TEST SUBSTANCE REPORT\n")
-	fmt.Fprintf(&sb, "Generated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	sb.WriteString("================================================================================\n\n")
-	if len(rep.Files) == 0 {
-		sb.WriteString("No substance violations.\n")
-		return os.WriteFile(out, []byte(sb.String()), 0644)
-	}
-	fmt.Fprintf(&sb, "Files with violations: %d\n\n", len(rep.Files))
+
+	byApp := make(map[string][]substanceFileResult)
 	for _, f := range rep.Files {
-		fmt.Fprintf(&sb, "%s\n", f.Source)
-		fmt.Fprintf(&sb, "  test: %s\n", f.Test)
-		for _, v := range f.Substance {
-			fmt.Fprintf(&sb, "  - [%s] %s\n", v.Kind, v.Message)
+		rel, err := filepath.Rel(projectRoot, f.Source)
+		if err != nil {
+			rel = f.Source
 		}
-		if f.Tautologies > 0 {
-			fmt.Fprintf(&sb, "  - [tautological_assertions] %d expect(X).toBe(X)-style call(s)\n", f.Tautologies)
-		}
-		if f.MajorityWeak {
-			sb.WriteString("  - [majority_weak] more than half of expect() calls are weak/tautological matchers\n")
-		}
-		sb.WriteString("\n")
+		byApp[appNameFromRel(filepath.ToSlash(rel))] = append(byApp[appNameFromRel(filepath.ToSlash(rel))], f)
 	}
-	return os.WriteFile(out, []byte(sb.String()), 0644)
+
+	generated := time.Now().Format("2006-01-02 15:04:05")
+	for app, files := range byApp {
+		sort.Slice(files, func(i, j int) bool { return files[i].Source < files[j].Source })
+
+		var sb strings.Builder
+		sb.WriteString(strings.Repeat("=", 80) + "\n")
+		fmt.Fprintf(&sb, "TEST SUBSTANCE - %s\n", strings.ToUpper(app))
+		fmt.Fprintf(&sb, "Generated: %s\n", generated)
+		sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+		fmt.Fprintf(&sb, "Files with violations: %d\n\n", len(files))
+		for _, f := range files {
+			fmt.Fprintf(&sb, "%s\n", f.Source)
+			fmt.Fprintf(&sb, "  test: %s\n", f.Test)
+			for _, v := range f.Substance {
+				fmt.Fprintf(&sb, "  - [%s] %s\n", v.Kind, v.Message)
+			}
+			if f.Tautologies > 0 {
+				fmt.Fprintf(&sb, "  - [tautological_assertions] %d expect(X).toBe(X)-style call(s)\n", f.Tautologies)
+			}
+			if f.MajorityWeak {
+				sb.WriteString("  - [majority_weak] more than half of expect() calls are weak/tautological matchers\n")
+			}
+			sb.WriteString("\n")
+		}
+
+		reportPath := filepath.Join(outDir, app+".txt")
+		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+			return err
+		}
+	}
+	return nil
 }

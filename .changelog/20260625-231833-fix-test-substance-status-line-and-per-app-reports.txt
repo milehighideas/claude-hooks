@@ -1,0 +1,1 @@
+fix: test-substance check now prints a pass/fail status line (was silent on failure) and writes per-app report files (test-substance/<app>.txt) instead of a single report.txt
