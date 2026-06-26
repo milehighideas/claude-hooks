@@ -64,9 +64,12 @@ func (g *TerraformGenerator) Generate(tables []TableInfo) error {
 			return err
 		}
 
-		// Write the routes file in convex/api, keeping the pluralized name
-		// convention (<table>Routes.ts) the existing backend uses.
-		routesPath := filepath.Join(g.config.Convex.Path, "api", rs.Table+"Routes.ts")
+		// Write the routes file in convex/api. By default this keeps the
+		// <table>Routes.ts convention the existing backend uses; when a Name
+		// override disambiguates two resources sharing one table, the file is keyed
+		// on the singular symbol base (<lcSingular>Routes.ts) so the two routes
+		// files do not collide on the shared table name.
+		routesPath := filepath.Join(g.config.Convex.Path, "api", routesFileBasename(r))
 		if err := writeGeneratedFile(routesPath, EmitRoutesTS(r)); err != nil {
 			return err
 		}

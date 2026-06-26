@@ -46,6 +46,10 @@ type FieldInfo struct {
 	IsArray   bool     // Is v.array(...)
 	ArrayType string   // For arrays, the inner type
 	Literals  []string // For v.union(v.literal(...)) enums
+	// Nested holds the inner object fields when this field is a nested object
+	// (Type=="object") or an array-of-objects (ArrayType=="object"), so the
+	// OpenAPI surface can emit the inner `properties` instead of a bare object.
+	Nested []FieldInfo
 }
 
 // TableInfo represents a parsed schema table
@@ -1265,6 +1269,21 @@ func unwrapValidatorCall(prefix, validator string) (string, bool) {
 	return strings.TrimSpace(inner), true
 }
 
+// parseObjectBody parses the inner fields of a `v.object({ ... })` validator
+// expression. It unwraps the v.object(...) call and strips the surrounding
+// braces (parseTableFields expects a brace-less, comma-separated field list),
+// returning nil when the input is not a v.object form.
+func parseObjectBody(validator string) []FieldInfo {
+	inner, ok := unwrapValidatorCall("v.object(", strings.TrimSpace(validator))
+	if !ok {
+		return nil
+	}
+	inner = strings.TrimSpace(inner)
+	inner = strings.TrimPrefix(inner, "{")
+	inner = strings.TrimSuffix(inner, "}")
+	return parseTableFields(inner)
+}
+
 // classifyValidator determines the type information for a validator expression.
 func classifyValidator(name, validator string) FieldInfo {
 	field := FieldInfo{Name: name, Type: "any"}
@@ -1277,8 +1296,12 @@ func classifyValidator(name, validator string) FieldInfo {
 		validator = inner
 	}
 
-	// v.id("tableName")
-	if match := idRe.FindStringSubmatch(validator); match != nil {
+	// v.id("tableName") — anchored to the START of the validator so a v.id(...)
+	// appearing as a SUB-FIELD inside a v.object({...}) / v.array(...) does not
+	// mis-classify the whole compound validator as a bare id. The structural
+	// v.object/v.array/v.union branches below own those compound forms.
+	if loc := idRe.FindStringIndex(validator); loc != nil && loc[0] == 0 {
+		match := idRe.FindStringSubmatch(validator)
 		field.Type = "id"
 		field.IsID = true
 		field.TableRef = match[1]
@@ -1344,6 +1367,9 @@ func classifyValidator(name, validator string) FieldInfo {
 				field.TableRef = idMatch[1]
 			} else {
 				field.ArrayType = "object"
+				// Capture the inner object's fields so the OpenAPI surface can emit
+				// the nested `items.properties` instead of a bare `type: object`.
+				field.Nested = parseObjectBody(inner)
 			}
 		}
 		return field
@@ -1373,6 +1399,7 @@ func classifyValidator(name, validator string) FieldInfo {
 	// v.object({...})
 	if strings.HasPrefix(validator, "v.object(") {
 		field.Type = "object"
+		field.Nested = parseObjectBody(validator)
 		return field
 	}
 

@@ -152,25 +152,67 @@ func writeSchema(sb *strings.Builder, name string, fields []FieldInfo, readOnly 
 }
 
 func writeProperty(sb *strings.Builder, f FieldInfo, ro bool) {
-	fmt.Fprintf(sb, "        %s:\n", f.Name)
+	writePropertyIndent(sb, f, ro, "        ")
+}
+
+// writePropertyIndent renders a single property schema at the given indent. It
+// recurses into nested object/array-of-object shapes (f.Nested) so the OpenAPI
+// surface carries the inner `properties` instead of a bare `type: object`.
+func writePropertyIndent(sb *strings.Builder, f FieldInfo, ro bool, indent string) {
+	fmt.Fprintf(sb, "%s%s:\n", indent, f.Name)
+	body := indent + "  "
 	switch f.Type {
 	case "array":
-		sb.WriteString("          type: array\n")
-		fmt.Fprintf(sb, "          items: { type: %s }\n", openapiScalar(f.ArrayType))
+		sb.WriteString(body + "type: array\n")
+		if f.ArrayType == "object" && len(f.Nested) > 0 {
+			sb.WriteString(body + "items:\n")
+			writeObjectSchema(sb, f.Nested, body+"  ")
+		} else {
+			fmt.Fprintf(sb, "%sitems: { type: %s }\n", body, openapiScalar(f.ArrayType))
+		}
 	case "union":
-		sb.WriteString("          type: string\n")
+		sb.WriteString(body + "type: string\n")
 		if len(f.Literals) > 0 {
 			quoted := make([]string, len(f.Literals))
 			for i, l := range f.Literals {
 				quoted[i] = fmt.Sprintf("%q", l)
 			}
-			fmt.Fprintf(sb, "          enum: [%s]\n", strings.Join(quoted, ", "))
+			fmt.Fprintf(sb, "%senum: [%s]\n", body, strings.Join(quoted, ", "))
+		}
+	case "object":
+		if len(f.Nested) > 0 {
+			writeObjectSchema(sb, f.Nested, body)
+		} else {
+			sb.WriteString(body + "type: object\n")
 		}
 	default:
-		fmt.Fprintf(sb, "          type: %s\n", openapiScalar(f.Type))
+		fmt.Fprintf(sb, "%stype: %s\n", body, openapiScalar(f.Type))
 	}
 	if ro {
-		sb.WriteString("          readOnly: true\n")
+		sb.WriteString(body + "readOnly: true\n")
+	}
+}
+
+// writeObjectSchema renders an inline `type: object` schema (required list +
+// properties) for a nested object's fields at the given indent.
+func writeObjectSchema(sb *strings.Builder, fields []FieldInfo, indent string) {
+	sb.WriteString(indent + "type: object\n")
+	var required []string
+	for _, f := range fields {
+		if !f.Optional {
+			required = append(required, f.Name)
+		}
+	}
+	if len(required) > 0 {
+		sb.WriteString(indent + "required:\n")
+		for _, r := range required {
+			fmt.Fprintf(sb, "%s  - %s\n", indent, r)
+		}
+	}
+	sb.WriteString(indent + "additionalProperties: false\n")
+	sb.WriteString(indent + "properties:\n")
+	for _, f := range fields {
+		writePropertyIndent(sb, f, false, indent+"  ")
 	}
 }
 

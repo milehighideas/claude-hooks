@@ -1,0 +1,1 @@
+feat: extend terraform/openapi emitter — FK-via-parent ownership, id-ref + id-array fields, readonly cols, typed nested objects/arrays, enums, media/presign routes, privacy nested-object + object-map

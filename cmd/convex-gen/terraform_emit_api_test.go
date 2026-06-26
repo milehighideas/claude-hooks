@@ -290,7 +290,7 @@ func TestEmitApiTSWritePathDelegation(t *testing.T) {
 
 	// (2) updateForApi delegates to the helper, not ctx.db.patch.
 	updateBody := between(src, "export const updateForApi = internalMutation({", "});")
-	if !strings.Contains(updateBody, "await applyVehicleUpdate(ctx, args.id, doc, patch);") {
+	if !strings.Contains(updateBody, "await applyVehicleUpdate(ctx, args.id, doc, patch, args.actorId);") {
 		t.Errorf("updateForApi must call the write-path helper:\n%s", updateBody)
 	}
 	if strings.Contains(updateBody, "ctx.db.patch(") {
@@ -299,7 +299,7 @@ func TestEmitApiTSWritePathDelegation(t *testing.T) {
 
 	// (2) removeForApi delegates to the helper, not ctx.db.delete.
 	removeBody := between(src, "export const removeForApi = internalMutation({", "});")
-	if !strings.Contains(removeBody, "await removeVehicle(ctx, args.id, doc);") {
+	if !strings.Contains(removeBody, "await removeVehicle(ctx, args.id, doc, args.actorId);") {
 		t.Errorf("removeForApi must call the write-path helper:\n%s", removeBody)
 	}
 	if strings.Contains(removeBody, "ctx.db.delete(") {
@@ -385,9 +385,9 @@ func TestEmitApiTSCreateConstants(t *testing.T) {
 
 	// Each constant rendered through tsDefaultLiteral.
 	for _, frag := range []string{
-		"revision: 1,",       // number
-		"status: \"draft\",", // string constant (JSON-quoted)
-		"viewArr: [],",       // empty array literal
+		"revision: 1 as const,",       // number constant (as const)
+		"status: \"draft\" as const,", // string constant (as const)
+		"viewArr: [],",                // empty array literal (no as const)
 	} {
 		if !strings.Contains(createBody, frag) {
 			t.Errorf("toCreateArgs missing create constant %q:\n%s", frag, createBody)
@@ -436,5 +436,48 @@ func TestEmitApiTSOwnershipAbsent(t *testing.T) {
 	removeBody := between(src, "export const removeForApi = internalMutation({", "});")
 	if !strings.Contains(removeBody, "if (!doc) return { deleted: false };") {
 		t.Errorf("removeForApi must guard on !doc only when unowned:\n%s", removeBody)
+	}
+}
+
+// TestSoftDeleteGuard locks the softDelete overlay: read/update/delete handlers
+// append `|| doc.<col>` to the ownership guard so a soft-deleted row is treated
+// as not-found by the public API.
+func TestSoftDeleteGuard(t *testing.T) {
+	tbl := TableInfo{Name: "maintenanceRecords", Fields: []FieldInfo{
+		{Name: "vehicleId", Type: "id", IsID: true, TableRef: "vehicles"},
+		{Name: "serviceName", Type: "string"},
+		{Name: "deleted", Type: "boolean", Optional: true},
+	}}
+	spec := ResourceSpec{
+		Table: "maintenanceRecords", Path: "maintenance",
+		Module:     "maintenance/maintenanceApi.ts",
+		SoftDelete: "deleted",
+		Ownership:  Ownership{Via: "vehicle_id", Table: "vehicles", Field: "ownerId"},
+		Verbs:      []string{"create", "read", "update", "delete"},
+		Expose: []ExposeField{
+			{Field: "vehicleId", Wire: "vehicle_id", Ref: "vehicles"},
+			{Field: "serviceName", Wire: "service_name"},
+		},
+	}
+	src := EmitApiTS(mustResolve(t, tbl, spec))
+
+	getBody := between(src, "export const getForApi = internalQuery({", "});")
+	if !strings.Contains(getBody, "|| doc.deleted) return null;") {
+		t.Errorf("read guard must hide soft-deleted rows:\n%s", getBody)
+	}
+	updBody := between(src, "export const updateForApi = internalMutation({", "});")
+	if !strings.Contains(updBody, "|| doc.deleted) return null;") {
+		t.Errorf("update guard must hide soft-deleted rows:\n%s", updBody)
+	}
+	rmBody := between(src, "export const removeForApi = internalMutation({", "});")
+	if !strings.Contains(rmBody, "|| doc.deleted) return { deleted: false };") {
+		t.Errorf("delete guard must hide soft-deleted rows:\n%s", rmBody)
+	}
+
+	// Without softDelete, no such guard is appended.
+	spec.SoftDelete = ""
+	plain := EmitApiTS(mustResolve(t, tbl, spec))
+	if strings.Contains(plain, "|| doc.deleted)") {
+		t.Errorf("no soft-delete guard expected when softDelete is unset:\n%s", plain)
 	}
 }

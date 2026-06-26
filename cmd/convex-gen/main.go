@@ -247,6 +247,20 @@ func run(cliTypedReturns bool) error {
 	if config.Generators.OpenAPI {
 		fmt.Println("Generating OpenAPI spec...")
 		openapiGen := NewOpenAPIGenerator(config)
+		// Align OpenAPI URL segments with the Terraform overlay's canonical `path`
+		// (snake_case) so the spec matches the generated routes and the
+		// tfplugingen-openapi generator_config. Best-effort: skip on load error.
+		if config.Generators.Terraform {
+			if spec, err := LoadTerraformSpec(config.GetTerraformConfigPath()); err == nil {
+				overrides := map[string]string{}
+				for _, rs := range spec.Resources {
+					if rs.Module != "" && rs.Path != "" {
+						overrides[rs.Module] = rs.Path
+					}
+				}
+				openapiGen.SetPathOverrides(overrides)
+			}
+		}
 		resources, err := openapiGen.Generate()
 		if err != nil {
 			return fmt.Errorf("failed to generate OpenAPI spec: %w", err)

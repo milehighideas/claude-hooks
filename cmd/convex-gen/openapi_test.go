@@ -226,3 +226,55 @@ func propertyBlock(schemaBlock, prop string) string {
 	}
 	return strings.Join(out, "\n")
 }
+
+// TestWriteProperty_NestedObjectArray locks the nested-object-array OpenAPI
+// emission: a v.array(v.object({...})) field renders as `type: array` with an
+// `items` object schema carrying the inner properties + required list, instead
+// of a bare `items: { type: object }`.
+func TestWriteProperty_NestedObjectArray(t *testing.T) {
+	f := FieldInfo{
+		Name: "parts_used", Type: "array", IsArray: true, ArrayType: "object",
+		Nested: []FieldInfo{
+			{Name: "name", Type: "string"},
+			{Name: "quantity", Type: "number"},
+			{Name: "brand", Type: "string", Optional: true},
+			{Name: "part_number", Type: "string", Optional: true},
+			{Name: "unit_price", Type: "number", Optional: true},
+		},
+	}
+	var sb strings.Builder
+	writeProperty(&sb, f, false)
+	out := sb.String()
+
+	for _, want := range []string{
+		"type: array",
+		"items:",
+		"type: object",
+		"name:",
+		"quantity:",
+		"part_number:",
+		"unit_price:",
+		"- name",
+		"- quantity",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("nested array OpenAPI missing %q:\n%s", want, out)
+		}
+	}
+	// Optional inner fields must NOT be in the nested required list.
+	if strings.Contains(out, "- brand") {
+		t.Errorf("optional inner field must not be required:\n%s", out)
+	}
+}
+
+// TestWriteProperty_EnumString locks enum rendering (regression guard for the
+// nested refactor): a union field stays `type: string` with an `enum` list.
+func TestWriteProperty_EnumString(t *testing.T) {
+	f := FieldInfo{Name: "transfer_type", Type: "union", Literals: []string{"gift", "private_sale"}}
+	var sb strings.Builder
+	writeProperty(&sb, f, false)
+	out := sb.String()
+	if !strings.Contains(out, "type: string") || !strings.Contains(out, `enum: ["gift", "private_sale"]`) {
+		t.Errorf("enum field must render type:string + enum list:\n%s", out)
+	}
+}

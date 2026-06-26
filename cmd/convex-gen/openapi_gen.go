@@ -16,10 +16,23 @@ import (
 // parser (which skips the internal `*ForApi` functions these modules contain).
 type OpenAPIGenerator struct {
 	config *Config
+	// pathOverrides maps an Api module path (relative to the Convex root, e.g.
+	// "vehicles/purchaseHistoryApi.ts") to the canonical public path segment from
+	// the Terraform overlay (e.g. "purchase_history"). Without an override the URL
+	// segment is derived from the filename, which diverges from the overlay path
+	// for multi-word resources and breaks the tfplugingen-openapi config match.
+	pathOverrides map[string]string
 }
 
 func NewOpenAPIGenerator(config *Config) *OpenAPIGenerator {
 	return &OpenAPIGenerator{config: config}
+}
+
+// SetPathOverrides supplies module-path → public-path-segment overrides sourced
+// from the Terraform overlay so the emitted OpenAPI paths match the generated
+// HTTP routes and the tfplugingen-openapi generator_config exactly.
+func (g *OpenAPIGenerator) SetPathOverrides(overrides map[string]string) {
+	g.pathOverrides = overrides
 }
 
 // apiResource is one CRUD resource discovered from a `*Api.ts` module.
@@ -117,8 +130,19 @@ func (g *OpenAPIGenerator) parseModule(path, name string) (apiResource, bool) {
 		return apiResource{}, false
 	}
 
+	// Prefer the canonical public path segment from the Terraform overlay (keyed
+	// by the module path relative to the Convex root); fall back to the filename.
+	segment := strings.TrimSuffix(name, "Api.ts")
+	if len(g.pathOverrides) > 0 {
+		if rel, err := filepath.Rel(g.config.Convex.Path, path); err == nil {
+			if override, ok := g.pathOverrides[rel]; ok {
+				segment = override
+			}
+		}
+	}
+
 	return apiResource{
-		pathSegment: strings.TrimSuffix(name, "Api.ts"),
+		pathSegment: segment,
 		schemaBase:  toPascalCase(prefix),
 		input:       byKind["Input"],
 		patch:       byKind["Patch"],
