@@ -88,7 +88,8 @@ Run `pre-commit --list` to see all available checks. Currently supported:
 | `changelog`         | Validate changelog entries exist                      |
 | `consoleCheck`      | Check for console.log statements                      |
 | `frontendStructure` | Validate CRUD folder structure in components          |
-| `srp`               | Single Responsibility Principle validation            |
+| `srp`               | Single Responsibility Principle validation (TypeScript) |
+| `srpNative`         | Structural SRP for Swift/Kotlin (file/type/function length, one type per file) |
 | `mockCheck`         | Ensure tests use `__mocks__/` instead of inline mocks |
 | `testFiles`         | Ensure test files exist for source files              |
 | `vitestAssertions`  | Ensure vitest configs have `requireAssertions: true`  |
@@ -366,6 +367,39 @@ Enable/disable checks with boolean flags. Some checks support extended configura
 - **excludePaths**: Paths to exclude from SRP checking
 - **hideWarnings**: Don't show warnings, only errors
 
+#### SRP Native Configuration
+
+```json
+"srpNativeConfig": {
+  "appPaths": ["apps/maps-ios", "apps/maps-android"],
+  "excludePaths": [],
+  "fileLines": 400,
+  "typeBodyLines": 300,
+  "funcBodyLines": 60,
+  "minTypeBodyLines": 40,
+  "oneTypeIgnoreConformances": ["PreviewProvider"],
+  "fileLinesOverrides": {}
+}
+```
+
+- **appPaths**: Limit native SRP checks to these directories (empty = all)
+- **excludePaths**: Path substrings to skip. Build artifacts and
+  SwiftPM/Pods/Gradle checkouts (`build/`, `build-device/`, `.build/`,
+  `DerivedData/`, `SourcePackages/`, `Pods/`, `.gradle/`) are **always**
+  excluded on top of this list.
+- **swiftExtensions** / **kotlinExtensions**: Override the grammar-by-extension
+  mapping (defaults `[".swift"]` / `[".kt", ".kts"]`)
+- **fileLines** / **typeBodyLines** / **funcBodyLines**: Line limits (defaults
+  400 / 300 / 60)
+- **minTypeBodyLines**: Body-size floor for `oneTypePerFile` (default 40) — a
+  top-level type only counts toward the one-type-per-file limit if its body is
+  at least this many lines
+- **oneTypeIgnoreConformances**: Protocols whose conformers are exempt from
+  `oneTypePerFile` (default `["PreviewProvider"]`)
+- **fileLinesOverrides**: Map of path-substring → per-file line limit
+- **enabledRules**: Subset of `fileSize`, `typeBodyLength`, `functionBodyLength`,
+  `oneTypePerFile` to run (empty = all four)
+
 #### Test Configuration
 
 ```json
@@ -563,6 +597,29 @@ Validates code organization and architecture:
 - File size limits (screens: 100 lines, hooks: 150 lines, components: 200 lines)
 - Types in dedicated `types/` folders
 - No mixed concerns (data fetching + UI + state)
+
+### Native SRP (`srpNative`)
+
+Structural SRP for native source — Swift (iOS) and Kotlin (Android) — using the
+same tree-sitter engine as `srp`, in the shared `internal/srpnative` analyzer.
+The TypeScript-only `srp` rules (Convex imports, screen state, type-export
+location, mixed concerns) do not apply; instead four size/structure rules run:
+
+- `fileSize` — total file lines over the limit (default 400)
+- `typeBodyLength` — a single class/struct/enum/actor body over the limit
+  (default 300) — the Massive-View-Controller catcher
+- `functionBodyLength` — a single function/method body over the limit (default 60)
+- `oneTypePerFile` — more than one **substantial** top-level type in a file.
+  A type only counts if its body ≥ `minTypeBodyLines` (default 40) and it does
+  not conform to an ignored protocol (default `PreviewProvider`), so idiomatic
+  co-location (a parent SwiftUI view with small private subviews, grouped
+  response DTOs, an Xcode preview struct) is not flagged. Swift extensions and
+  nested types never count.
+
+All violations are errors. Scoping is **staged native files only** — there is no
+warnOnly/grandfather path. Build artifacts and SwiftPM/Pods/Gradle checkouts are
+always excluded on top of `excludePaths`. Configuration lives in
+`srpNativeConfig` (see [SRP Native Configuration](#srp-native-configuration)).
 
 ### Console Check
 

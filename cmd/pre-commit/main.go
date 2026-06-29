@@ -357,7 +357,8 @@ func getGitBranch() string {
 func printAvailableChecks() {
 	fmt.Println("Available checks:")
 	fmt.Println("  frontendStructure  - Validate CRUD folder structure in components/")
-	fmt.Println("  srp                - Single Responsibility Principle check")
+	fmt.Println("  srp                - Single Responsibility Principle check (TypeScript)")
+	fmt.Println("  srpNative          - Structural SRP for Swift/Kotlin (file/type/function length, one type per file)")
 	fmt.Println("  mockCheck          - Ensure tests use __mocks__/ instead of inline mocks")
 	fmt.Println("  consoleCheck       - Check for console.log statements")
 	fmt.Println("  lint               - Run oxlint/eslint across all affected apps")
@@ -675,6 +676,12 @@ func run() error {
 			srpCfg := config.SRPConfig.withStagedStrict(config.Features.SrpStrictOnStaged)
 			filterResult := filterFilesForSRPWithDetails(srpFiles, srpCfg)
 			return runSRPCheckWithFilter(filterResult, srpCfg, fullMode, newFiles, changedFiles)
+		})
+	}
+
+	if config.Features.SrpNative {
+		asyncCheck("SRP native compliance", "srpNative", func() error {
+			return runSRPNativeCheck(stagedFiles, config.SRPNativeConfig)
 		})
 	}
 
@@ -1109,6 +1116,8 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			changedFiles[f] = true
 		}
 		return runSRPCheckWithFilter(filterResult, srpCfg, true, newFiles, changedFiles)
+	case "srpNative":
+		return runSRPNativeCheck(files, config.SRPNativeConfig)
 	case "mockCheck":
 		return runMockCheck(files, config.MockCheck)
 	case "consoleCheck":

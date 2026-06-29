@@ -1,0 +1,1 @@
+feat(pre-commit): add native Swift/Kotlin SRP checks (srpNative)

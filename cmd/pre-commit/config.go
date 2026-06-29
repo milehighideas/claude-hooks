@@ -35,6 +35,7 @@ type Config struct {
 	TestCoverageConfig            TestCoverageConfig            `json:"testCoverageConfig"`
 	TestQualityConfig             TestQualityConfig             `json:"testQualityConfig"`
 	SRPConfig                     SRPConfig                     `json:"srpConfig"`
+	SRPNativeConfig               SRPNativeConfig               `json:"srpNativeConfig"`
 	DataLayerAllowed              []string                      `json:"dataLayerAllowed"`
 	NextImageCheck                NextImageCheckConfig          `json:"nextImageCheck"`
 	NextLinkCheck                 NextLinkCheckConfig           `json:"nextLinkCheck"`
@@ -234,6 +235,10 @@ type Features struct {
 	// srpConfig.errorScopes: ["changed"] but expressed as a single feature
 	// flag for the common "ratchet new work, audit existing code" workflow.
 	SrpStrictOnStaged       bool `json:"srpStrictOnStaged"`
+	// SrpNative runs structural SRP checks (file/type/function length, one type
+	// per file) on staged Swift and Kotlin files. Configured via srpNativeConfig.
+	// Hard-error policy: every violation blocks; scoping is staged-files only.
+	SrpNative               bool `json:"srpNative"`
 	TestFiles               bool `json:"testFiles"`
 	MockCheck               bool `json:"mockCheck"`
 	VitestAssertions        bool `json:"vitestAssertions"`
