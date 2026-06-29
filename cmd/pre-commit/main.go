@@ -746,7 +746,7 @@ func run() error {
 
 	if config.Features.ConvexCheck {
 		asyncCheck("Convex check", "convexCheck", func() error {
-			return runConvexCheck(config.ConvexCheckConfig, projectRoot, stagedAbs)
+			return runConvexCheck(projectRoot, stagedAbs)
 		})
 	}
 
@@ -1200,7 +1200,7 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
 			}
 		}
-		return runConvexCheck(config.ConvexCheckConfig, projectRoot, stagedAbs)
+		return runConvexCheck(projectRoot, stagedAbs)
 	case "tiersGen":
 		projectRoot, _ := os.Getwd()
 		return checkTiersGen(projectRoot, files)
@@ -1371,7 +1371,7 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
 			}
 		}
-		collectResult("convexCheck", runConvexCheck(config.ConvexCheckConfig, projectRoot, stagedAbs))
+		collectResult("convexCheck", runConvexCheck(projectRoot, stagedAbs))
 	}
 
 	// Lint and typecheck — run concurrently, print in deterministic order

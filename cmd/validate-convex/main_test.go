@@ -18,11 +18,3 @@ func TestIsConvexTarget(t *testing.T) {
 	}
 }
 
-func TestContainsAny(t *testing.T) {
-	if !containsAny("/r/packages/backend/convex/vehicles/read/getVehicle.ts", []string{"convex/vehicles"}) {
-		t.Error("expected match for convex/vehicles")
-	}
-	if containsAny("/r/packages/backend/convex/events/x.ts", []string{"convex/vehicles"}) {
-		t.Error("did not expect match")
-	}
-}

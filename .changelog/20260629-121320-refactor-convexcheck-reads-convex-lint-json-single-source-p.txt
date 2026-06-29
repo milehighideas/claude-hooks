@@ -1,0 +1,1 @@
+refactor: convexCheck reads .convex-lint.json (single source) + per-rule errorRules ratchet

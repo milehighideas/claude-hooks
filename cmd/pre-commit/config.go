@@ -43,7 +43,6 @@ type Config struct {
 	MissingTestsCheckConfig       MissingTestsCheckConfig       `json:"missingTestsCheckConfig"`
 	TestSubstanceCheckConfig      TestSubstanceCheckConfig      `json:"testSubstanceCheckConfig"`
 	RedundantCreatedAtCheckConfig RedundantCreatedAtCheckConfig `json:"redundantCreatedAtCheckConfig"`
-	ConvexCheckConfig             ConvexCheckConfig             `json:"convexCheckConfig"`
 	WarningChecks                 []string                      `json:"warningChecks"` // Checks listed here run but don't block commits
 }
 
@@ -74,21 +73,22 @@ type RedundantCreatedAtCheckConfig struct {
 
 // ConvexCheckConfig configures the convexCheck feature: it runs the
 // @milehighideas/oxlint-plugin-convex rules on staged Convex files and blocks
-// per Severity. Thresholds (maxLines/maxFunctions/crudDomains) are read by the
-// oxlint plugin itself from this same block; this struct is the Go side's view.
+// on the rules listed in ErrorRules. Thresholds (maxLines/maxFunctions/
+// crudDomains) are read by the oxlint plugin itself from this same .pre-commit
+// block; this struct is the Go side's view.
 type ConvexCheckConfig struct {
 	// AppPaths restricts to files whose path contains one of these. Empty =
 	// no convex files matched (feature effectively off).
 	AppPaths []string `json:"appPaths"`
 	// ExcludePaths skips files whose path contains any of these substrings.
 	ExcludePaths []string `json:"excludePaths"`
-	// Severity: "error" blocks on any convex(*) diagnostic; anything else
-	// ("warn"/unset) means the only blocking rule is crud-structure for
-	// crudDomains (which self-noops elsewhere).
-	Severity string `json:"severity"`
-	// CrudDomains: path substrings where crud-structure is enforced even when
-	// Severity != "error".
-	CrudDomains []string `json:"crudDomains"`
+	// ErrorRules is the set of convex rule ids promoted to error on
+	// changed/edited files (the ratchet). Empty = dormant (nothing blocks).
+	// `.oxlintrc.json` stays at "warn" so fullLint/CI never block on existing
+	// violations; enforcement is opt-in per rule here. e.g.
+	// ["type-exports-location", "no-any-returns"]. crud-structure additionally
+	// self-gates to convexCheckConfig.crudDomains inside the plugin.
+	ErrorRules []string `json:"errorRules"`
 }
 
 // MissingTestsCheckConfig configures the missing-tests detector. Same shape

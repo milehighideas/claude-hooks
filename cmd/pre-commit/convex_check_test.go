@@ -22,21 +22,22 @@ func TestConvexFilesInScope(t *testing.T) {
 }
 
 func TestConvexCheckNoopWhenDormant(t *testing.T) {
-	// severity warn + no crudDomains => no-op (returns nil even with violations)
-	cfg := ConvexCheckConfig{Severity: "warn"}
-	if err := runConvexCheck(cfg, "/repo", nil); err != nil {
+	// no .convex-lint.json under projectRoot => empty config => dormant (nil)
+	if err := runConvexCheck("/nonexistent-root", nil); err != nil {
 		t.Fatalf("expected nil when dormant, got %v", err)
 	}
 }
 
-func TestRulesToEnforce(t *testing.T) {
-	if r := rulesToEnforce(ConvexCheckConfig{Severity: "warn"}); r != nil {
-		t.Errorf("warn + no crudDomains should enforce no rules, got %v", r)
+func TestConvexRuleID(t *testing.T) {
+	cases := map[string]string{
+		"convex(type-exports-location)": "type-exports-location",
+		"convex(file-size)":             "file-size",
+		"eslint(no-unused-vars)":        "",
+		"convex(":                       "",
 	}
-	if r := rulesToEnforce(ConvexCheckConfig{Severity: "warn", CrudDomains: []string{"convex/vehicles"}}); len(r) != 1 || r[0] != "crud-structure" {
-		t.Errorf("warn + crudDomains should enforce only crud-structure, got %v", r)
-	}
-	if r := rulesToEnforce(ConvexCheckConfig{Severity: "error"}); len(r) != len(allConvexRules)+1 {
-		t.Errorf("error should enforce all rules + crud-structure, got %v", r)
+	for code, want := range cases {
+		if got := convexRuleID(code); got != want {
+			t.Errorf("convexRuleID(%q) = %q, want %q", code, got, want)
+		}
 	}
 }

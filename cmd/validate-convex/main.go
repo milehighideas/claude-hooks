@@ -26,8 +26,9 @@ type hookInput struct {
 type convexCfg struct {
 	AppPaths     []string `json:"appPaths"`
 	ExcludePaths []string `json:"excludePaths"`
-	Severity     string   `json:"severity"`
-	CrudDomains  []string `json:"crudDomains"`
+	// ErrorRules: convex rule ids enforced (blocking) at edit time. Empty =
+	// dormant. .oxlintrc.json stays at "warn"; this is the per-rule ratchet.
+	ErrorRules []string `json:"errorRules"`
 }
 
 func isConvexTarget(path string, appPaths, exclude []string) bool {
@@ -54,27 +55,21 @@ func isConvexTarget(path string, appPaths, exclude []string) bool {
 	return false
 }
 
-func containsAny(path string, subs []string) bool {
-	f := strings.ReplaceAll(path, "\\", "/")
-	for _, s := range subs {
-		if s != "" && strings.Contains(f, s) {
-			return true
-		}
-	}
-	return false
-}
-
-var allConvexRules = []string{
-	"file-size", "max-functions", "require-returns", "no-any-returns",
-	"no-api-imports", "type-exports-location", "no-filter-in-query",
-	"no-collect-in-query",
-}
-
 type oxlintResult struct {
 	Diagnostics []struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"diagnostics"`
+}
+
+// convexRuleID turns an oxlint diagnostic code like "convex(type-exports-location)"
+// into the bare rule id "type-exports-location"; "" if not a convex rule.
+func convexRuleID(code string) string {
+	const prefix = "convex("
+	if !strings.HasPrefix(code, prefix) || !strings.HasSuffix(code, ")") {
+		return ""
+	}
+	return code[len(prefix) : len(code)-1]
 }
 
 func main() {
@@ -91,35 +86,31 @@ func main() {
 		os.Exit(0)
 	}
 
-	var raw struct {
-		ConvexCheckConfig convexCfg `json:"convexCheckConfig"`
-	}
-	// jsonc.Unmarshal reads .pre-commit.json from CWD; the hook runs in the
-	// project root. If it can't be read, stay silent (allow).
-	if err := jsonc.Unmarshal(".pre-commit.json", &raw); err != nil {
+	// .convex-lint.json is the single source of truth, shared with the oxlint
+	// plugin and the convexCheck commit gate. Read from CWD (the hook runs in
+	// the project root). If it can't be read, stay silent (allow).
+	var cfg convexCfg
+	if err := jsonc.Unmarshal(".convex-lint.json", &cfg); err != nil {
 		os.Exit(0)
 	}
-	cfg := raw.ConvexCheckConfig
 	if !isConvexTarget(path, cfg.AppPaths, cfg.ExcludePaths) {
 		os.Exit(0)
 	}
 
-	// Decide which rules to enforce at edit time.
-	var rules []string
-	if cfg.Severity == "error" {
-		rules = append(append([]string{}, allConvexRules...), "crud-structure")
-	} else if containsAny(path, cfg.CrudDomains) {
-		rules = []string{"crud-structure"}
-	} else {
-		os.Exit(0) // dormant for this file
+	// Enforce only the rules opted into via .convex-lint.json errorRules (the
+	// ratchet). Empty = dormant. oxlint emits every convex rule as a warning
+	// (from .oxlintrc); we block on the subset whose rule id is in errorRules.
+	// (oxlint -D does NOT override a JS-plugin rule's config severity, so we
+	// gate on errorRules membership rather than oxlint severity.)
+	errSet := map[string]bool{}
+	for _, r := range cfg.ErrorRules {
+		errSet[r] = true
+	}
+	if len(errSet) == 0 {
+		os.Exit(0)
 	}
 
-	args := []string{"--format=json"}
-	for _, r := range rules {
-		args = append(args, "-D", "convex/"+r)
-	}
-	args = append(args, path)
-	cmd := exec.Command("oxlint", args...)
+	cmd := exec.Command("oxlint", "--format=json", path)
 	out, _ := cmd.Output()
 
 	var res oxlintResult
@@ -128,7 +119,7 @@ func main() {
 	}
 	var msgs []string
 	for _, d := range res.Diagnostics {
-		if strings.HasPrefix(d.Code, "convex(") {
+		if rule := convexRuleID(d.Code); rule != "" && errSet[rule] {
 			msgs = append(msgs, fmt.Sprintf("  ✗ %s — %s", d.Code, d.Message))
 		}
 	}

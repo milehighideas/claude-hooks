@@ -6,16 +6,20 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/milehighideas/claude-hooks/internal/jsonc"
 )
 
-// allConvexRules are the plugin rule ids that convexCheck can promote to error.
-var allConvexRules = []string{
-	"file-size", "max-functions", "require-returns", "no-any-returns",
-	"no-api-imports", "type-exports-location", "no-filter-in-query",
-	"no-collect-in-query",
-}
-
 const convexTestSuffixSkip = ".test."
+
+// loadConvexConfig reads .convex-lint.json from the project root — the single
+// source of truth shared with the oxlint plugin. Missing/invalid file = empty
+// config (feature dormant).
+func loadConvexConfig(projectRoot string) ConvexCheckConfig {
+	var cfg ConvexCheckConfig
+	_ = jsonc.Unmarshal(filepath.Join(projectRoot, ".convex-lint.json"), &cfg)
+	return cfg
+}
 
 // convexFilesInScope filters staged absolute paths to in-scope Convex files.
 func convexFilesInScope(cfg ConvexCheckConfig, projectRoot string, staged []string) []string {
@@ -49,18 +53,6 @@ func convexFilesInScope(cfg ConvexCheckConfig, projectRoot string, staged []stri
 	return out
 }
 
-// rulesToEnforce returns the convex rule ids to promote to error given severity.
-func rulesToEnforce(cfg ConvexCheckConfig) []string {
-	if cfg.Severity == "error" {
-		// all + crud-structure (self-noops outside crudDomains)
-		return append(append([]string{}, allConvexRules...), "crud-structure")
-	}
-	if len(cfg.CrudDomains) > 0 {
-		return []string{"crud-structure"}
-	}
-	return nil
-}
-
 type oxlintResult struct {
 	Diagnostics []struct {
 		Code     string `json:"code"`
@@ -69,24 +61,35 @@ type oxlintResult struct {
 	} `json:"diagnostics"`
 }
 
-// runConvexCheck runs oxlint with the convex rules forced to error on the
-// staged convex files and returns an error (blocking) if any fire. No-op when
-// dormant (severity != "error" and no crudDomains).
-func runConvexCheck(cfg ConvexCheckConfig, projectRoot string, stagedAbs []string) error {
-	rules := rulesToEnforce(cfg)
-	if len(rules) == 0 {
+// convexRuleID turns "convex(type-exports-location)" into "type-exports-location";
+// "" if not a convex rule.
+func convexRuleID(code string) string {
+	const prefix = "convex("
+	if !strings.HasPrefix(code, prefix) || !strings.HasSuffix(code, ")") {
+		return ""
+	}
+	return code[len(prefix) : len(code)-1]
+}
+
+// runConvexCheck loads .convex-lint.json and blocks when a staged convex file
+// trips a rule listed in errorRules. oxlint emits every convex rule as a warning
+// (from .oxlintrc); we gate on errorRules membership, not oxlint severity
+// (oxlint -D does not override a JS-plugin rule's config severity). No-op when
+// dormant (errorRules empty).
+func runConvexCheck(projectRoot string, stagedAbs []string) error {
+	cfg := loadConvexConfig(projectRoot)
+	errSet := map[string]bool{}
+	for _, r := range cfg.ErrorRules {
+		errSet[r] = true
+	}
+	if len(errSet) == 0 {
 		return nil // dormant
 	}
 	files := convexFilesInScope(cfg, projectRoot, stagedAbs)
 	if len(files) == 0 {
 		return nil
 	}
-	args := []string{"--format=json"}
-	for _, r := range rules {
-		args = append(args, "-D", "convex/"+r)
-	}
-	args = append(args, files...)
-
+	args := append([]string{"--format=json"}, files...)
 	cmd := exec.Command("oxlint", args...)
 	cmd.Dir = projectRoot
 	out, _ := cmd.Output() // non-zero exit when findings exist; parse stdout regardless
@@ -97,7 +100,7 @@ func runConvexCheck(cfg ConvexCheckConfig, projectRoot string, stagedAbs []strin
 	}
 	var convexDiags []string
 	for _, d := range res.Diagnostics {
-		if strings.HasPrefix(d.Code, "convex(") {
+		if rule := convexRuleID(d.Code); rule != "" && errSet[rule] {
 			convexDiags = append(convexDiags,
 				fmt.Sprintf("  %s  %s — %s", filepath.Base(d.Filename), d.Code, d.Message))
 		}
