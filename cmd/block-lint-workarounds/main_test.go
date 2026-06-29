@@ -360,6 +360,26 @@ func TestCheckESLintDisable_BlocksComments(t *testing.T) {
 	}
 }
 
+func TestCheckOxlintDisable_BlocksComments(t *testing.T) {
+	blockCases := []string{
+		"// oxlint-disable\nconst x = 1;",
+		"/* oxlint-disable-next-line */\nconst y = 2;",
+		"const z = 3; // oxlint-disable-next-line convex/file-size",
+	}
+	for _, src := range blockCases {
+		out := checkOxlintDisable(src)
+		if out == nil || out.Decision != "block" {
+			t.Fatalf("expected block for %q, got %+v", src, out)
+		}
+		if !strings.Contains(out.Reason, "oxlint suppression comment detected") {
+			t.Errorf("expected oxlint block message, got %q", out.Reason)
+		}
+	}
+	if out := checkOxlintDisable("const ok = 1;"); out != nil {
+		t.Fatalf("expected nil for clean source, got %+v", out)
+	}
+}
+
 func TestCheckTSIgnore_WarnsButAllows(t *testing.T) {
 	tests := []struct {
 		name          string

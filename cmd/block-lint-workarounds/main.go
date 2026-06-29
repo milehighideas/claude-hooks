@@ -102,6 +102,11 @@ func processHook(input *HookInput) *HookOutput {
 		return output
 	}
 
+	// Check for oxlint-disable comments
+	if output := checkOxlintDisable(text); output != nil {
+		return output
+	}
+
 	// Check for TypeScript suppression comments (warn only)
 	if output := checkTSIgnore(text); output != nil {
 		return output
@@ -216,6 +221,35 @@ Do not add eslint-disable comments to suppress errors.
 Instead, fix the underlying issue:
 - Remove unused imports/variables
 - Fix the code properly`, match),
+			}
+		}
+	}
+
+	return nil
+}
+
+func checkOxlintDisable(text string) *HookOutput {
+	patterns := []Pattern{
+		{
+			Regex:   regexp.MustCompile(`//\s*oxlint-disable`),
+			Message: "inline oxlint-disable comment",
+		},
+		{
+			Regex:   regexp.MustCompile(`/\*\s*oxlint-disable`),
+			Message: "block oxlint-disable comment",
+		},
+	}
+
+	for _, p := range patterns {
+		if match := p.Regex.FindString(text); match != "" {
+			return &HookOutput{
+				Decision: "block",
+				Reason: fmt.Sprintf(`BLOCKED: oxlint suppression comment detected
+
+Found: %s
+
+Do not add oxlint-disable comments to suppress errors.
+Fix the underlying issue instead (split the file, add the returns: validator, etc.).`, match),
 			}
 		}
 	}

@@ -43,6 +43,7 @@ type Config struct {
 	MissingTestsCheckConfig       MissingTestsCheckConfig       `json:"missingTestsCheckConfig"`
 	TestSubstanceCheckConfig      TestSubstanceCheckConfig      `json:"testSubstanceCheckConfig"`
 	RedundantCreatedAtCheckConfig RedundantCreatedAtCheckConfig `json:"redundantCreatedAtCheckConfig"`
+	ConvexCheckConfig             ConvexCheckConfig             `json:"convexCheckConfig"`
 	WarningChecks                 []string                      `json:"warningChecks"` // Checks listed here run but don't block commits
 }
 
@@ -69,6 +70,25 @@ type RedundantCreatedAtCheckConfig struct {
 	// ExcludePaths skips files whose project-relative path contains any of
 	// these substrings. Exclusions always win over AppPaths.
 	ExcludePaths []string `json:"excludePaths"`
+}
+
+// ConvexCheckConfig configures the convexCheck feature: it runs the
+// @milehighideas/oxlint-plugin-convex rules on staged Convex files and blocks
+// per Severity. Thresholds (maxLines/maxFunctions/crudDomains) are read by the
+// oxlint plugin itself from this same block; this struct is the Go side's view.
+type ConvexCheckConfig struct {
+	// AppPaths restricts to files whose path contains one of these. Empty =
+	// no convex files matched (feature effectively off).
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose path contains any of these substrings.
+	ExcludePaths []string `json:"excludePaths"`
+	// Severity: "error" blocks on any convex(*) diagnostic; anything else
+	// ("warn"/unset) means the only blocking rule is crud-structure for
+	// crudDomains (which self-noops elsewhere).
+	Severity string `json:"severity"`
+	// CrudDomains: path substrings where crud-structure is enforced even when
+	// Severity != "error".
+	CrudDomains []string `json:"crudDomains"`
 }
 
 // MissingTestsCheckConfig configures the missing-tests detector. Same shape
@@ -220,6 +240,7 @@ type Features struct {
 	StubTestCheck           bool `json:"stubTestCheck"`
 	MissingTestsCheck       bool `json:"missingTestsCheck"`
 	RedundantCreatedAtCheck bool `json:"redundantCreatedAtCheck"`
+	ConvexCheck             bool `json:"convexCheck"`
 	TiersGen                bool `json:"tiersGen"`
 	LinguiExtract           bool `json:"linguiExtract"`
 	// TestSubstanceCheck runs substance gates against test files for staged

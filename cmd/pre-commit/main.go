@@ -744,6 +744,12 @@ func run() error {
 		})
 	}
 
+	if config.Features.ConvexCheck {
+		asyncCheck("Convex check", "convexCheck", func() error {
+			return runConvexCheck(config.ConvexCheckConfig, projectRoot, stagedAbs)
+		})
+	}
+
 	if config.Features.BuildCheck {
 		asyncCheck("Build check", "buildCheck", func() error {
 			if !compactMode() {
@@ -1184,6 +1190,17 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			}
 		}
 		return runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs)
+	case "convexCheck":
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		return runConvexCheck(config.ConvexCheckConfig, projectRoot, stagedAbs)
 	case "tiersGen":
 		projectRoot, _ := os.Getwd()
 		return checkTiersGen(projectRoot, files)
@@ -1340,6 +1357,21 @@ func runAllStandaloneChecks(config *Config, files []string) error {
 			}
 		}
 		collectResult("redundantCreatedAtCheck", runRedundantCreatedAtCheck(config.RedundantCreatedAtCheckConfig, projectRoot, stagedAbs))
+	}
+
+	// Convex check — runs the @milehighideas/oxlint-plugin-convex rules on
+	// staged Convex files (gated by convexCheckConfig.severity / crudDomains).
+	if config.Features.ConvexCheck {
+		projectRoot, _ := os.Getwd()
+		stagedAbs := make([]string, 0, len(files))
+		for _, f := range files {
+			if filepath.IsAbs(f) {
+				stagedAbs = append(stagedAbs, f)
+			} else {
+				stagedAbs = append(stagedAbs, filepath.Join(projectRoot, f))
+			}
+		}
+		collectResult("convexCheck", runConvexCheck(config.ConvexCheckConfig, projectRoot, stagedAbs))
 	}
 
 	// Lint and typecheck — run concurrently, print in deterministic order

@@ -27,6 +27,35 @@ var (
 // Loaded from .pre-commit.json srpConfig.screenHooks; defaults to useState/useReducer/useContext.
 var screenHooksConfig map[string]bool
 
+// srpAppPaths / srpExcludePaths mirror the commit-time orchestrator's file
+// selection so the edit-time hook doesn't apply frontend SRP rules to files
+// (e.g. the Convex backend) that commit-time SRP never checks.
+var (
+	srpAppPaths     []string
+	srpExcludePaths []string
+)
+
+// inSRPScope reports whether filePath is in SRP scope. ExcludePaths always win;
+// empty appPaths = all files in scope (back-compat with the previous unscoped
+// behavior).
+func inSRPScope(filePath string) bool {
+	f := strings.ReplaceAll(filePath, "\\", "/")
+	for _, ex := range srpExcludePaths {
+		if ex != "" && strings.Contains(f, ex) {
+			return false
+		}
+	}
+	if len(srpAppPaths) == 0 {
+		return true
+	}
+	for _, ap := range srpAppPaths {
+		if ap != "" && strings.Contains(f, ap) {
+			return true
+		}
+	}
+	return false
+}
+
 func loadScreenHooksConfig() {
 	defaults := map[string]bool{"useState": true, "useReducer": true, "useContext": true}
 	allHooks := []string{"useState", "useReducer", "useContext", "useCallback", "useEffect", "useMemo"}
@@ -35,12 +64,16 @@ func loadScreenHooksConfig() {
 
 	var raw struct {
 		SRPConfig struct {
-			ScreenHooks []string `json:"screenHooks"`
+			ScreenHooks  []string `json:"screenHooks"`
+			AppPaths     []string `json:"appPaths"`
+			ExcludePaths []string `json:"excludePaths"`
 		} `json:"srpConfig"`
 	}
 	if err := jsonc.Unmarshal(".pre-commit.json", &raw); err != nil {
 		return
 	}
+	srpAppPaths = raw.SRPConfig.AppPaths
+	srpExcludePaths = raw.SRPConfig.ExcludePaths
 
 	hooks := raw.SRPConfig.ScreenHooks
 	if len(hooks) == 0 {
@@ -300,6 +333,10 @@ func runHookMode() {
 	isTS, filePath, content := isComponentWriteOperation(data)
 	if !isTS {
 		os.Exit(0)
+	}
+
+	if !inSRPScope(filePath) {
+		os.Exit(0) // out of SRP scope (e.g. Convex backend) — handled by validate-convex
 	}
 
 	// Analyze the file
