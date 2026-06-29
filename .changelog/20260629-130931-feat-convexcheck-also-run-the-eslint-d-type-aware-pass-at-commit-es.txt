@@ -1,0 +1,1 @@
+feat(convexCheck): also run the eslint_d type-aware pass at commit (eslintErrorRules) for full edit/commit parity

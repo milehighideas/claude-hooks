@@ -89,6 +89,11 @@ type ConvexCheckConfig struct {
 	// ["type-exports-location", "no-any-returns"]. crud-structure additionally
 	// self-gates to convexCheckConfig.crudDomains inside the plugin.
 	ErrorRules []string `json:"errorRules"`
+	// EslintErrorRules is the set of @convex-dev/eslint-plugin rule ids (bare,
+	// e.g. "explicit-table-ids") — the type-aware rules oxlint can't do —
+	// enforced on staged convex files via eslint_d. Empty = skip the eslint
+	// pass. Best-effort: silently skipped if eslint_d isn't installed.
+	EslintErrorRules []string `json:"eslintErrorRules"`
 }
 
 // MissingTestsCheckConfig configures the missing-tests detector. Same shape
