@@ -1,7 +1,15 @@
-// Command validate-convex is a PreToolUse hook (Write|Edit) that runs the
-// @milehighideas/oxlint-plugin-convex rules on the edited Convex file and blocks
-// (exit 2) when a convex(*) diagnostic fires — but only when enforcement is on
-// (convexCheckConfig.severity == "error", or the file is under crudDomains).
+// Command validate-convex is a PreToolUse hook (Write|Edit) that lints the edited
+// Convex file and blocks (exit 2) on opted-in rules from .convex-lint.json:
+//
+//   • errorRules        — @milehighideas/oxlint-plugin-convex rules, run via
+//     oxlint (fast, syntactic). Gated on rule-id membership (oxlint -D does not
+//     override a JS-plugin rule's config severity).
+//   • eslintErrorRules  — @convex-dev/eslint-plugin rules (the type-aware ones
+//     oxlint can't do, e.g. explicit-table-ids), run via eslint_d (the daemon
+//     keeps the TS program warm so a single-file lint is sub-second). Best
+//     effort: if eslint_d isn't installed, this pass is silently skipped.
+//
+// Both default to empty = dormant.
 package main
 
 import (
@@ -26,9 +34,12 @@ type hookInput struct {
 type convexCfg struct {
 	AppPaths     []string `json:"appPaths"`
 	ExcludePaths []string `json:"excludePaths"`
-	// ErrorRules: convex rule ids enforced (blocking) at edit time. Empty =
-	// dormant. .oxlintrc.json stays at "warn"; this is the per-rule ratchet.
+	// ErrorRules: oxlint-plugin-convex rule ids enforced (blocking) at edit
+	// time. Empty = dormant. .oxlintrc.json stays at "warn"; this is the ratchet.
 	ErrorRules []string `json:"errorRules"`
+	// EslintErrorRules: @convex-dev/eslint-plugin rule ids (bare, e.g.
+	// "explicit-table-ids") enforced at edit time via eslint_d.
+	EslintErrorRules []string `json:"eslintErrorRules"`
 }
 
 func isConvexTarget(path string, appPaths, exclude []string) bool {
@@ -55,11 +66,14 @@ func isConvexTarget(path string, appPaths, exclude []string) bool {
 	return false
 }
 
-type oxlintResult struct {
-	Diagnostics []struct {
-		Code    string `json:"code"`
-		Message string `json:"message"`
-	} `json:"diagnostics"`
+func toSet(xs []string) map[string]bool {
+	s := map[string]bool{}
+	for _, x := range xs {
+		if x != "" {
+			s[x] = true
+		}
+	}
+	return s
 }
 
 // convexRuleID turns an oxlint diagnostic code like "convex(type-exports-location)"
@@ -70,6 +84,69 @@ func convexRuleID(code string) string {
 		return ""
 	}
 	return code[len(prefix) : len(code)-1]
+}
+
+type oxlintResult struct {
+	Diagnostics []struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"diagnostics"`
+}
+
+// oxlintViolations runs oxlint on path and returns formatted messages for any
+// convex(*) diagnostic whose rule id is in want.
+func oxlintViolations(path string, want map[string]bool) []string {
+	out, _ := exec.Command("oxlint", "--format=json", path).Output()
+	var res oxlintResult
+	if json.Unmarshal(out, &res) != nil {
+		return nil
+	}
+	var msgs []string
+	for _, d := range res.Diagnostics {
+		if rule := convexRuleID(d.Code); rule != "" && want[rule] {
+			msgs = append(msgs, fmt.Sprintf("  ✗ convex/%s — %s", rule, d.Message))
+		}
+	}
+	return msgs
+}
+
+type eslintResult struct {
+	Messages []struct {
+		RuleID  string `json:"ruleId"`
+		Message string `json:"message"`
+		Line    int    `json:"line"`
+	} `json:"messages"`
+}
+
+// eslintViolations runs eslint_d on path (daemon keeps the TS program warm) and
+// returns messages for any @convex-dev/<rule> whose bare rule id is in want.
+// Best effort: if eslint_d isn't installed, returns nil (no block).
+func eslintViolations(projectRoot, path string, want map[string]bool) []string {
+	bin := filepath.Join(projectRoot, "node_modules", ".bin", "eslint_d")
+	if _, err := os.Stat(bin); err != nil {
+		return nil // eslint_d not available — skip the type-aware pass
+	}
+	cmd := exec.Command(bin, "--format", "json", path)
+	cmd.Dir = projectRoot
+	out, _ := cmd.Output() // non-zero exit on lint errors; JSON still on stdout
+
+	var results []eslintResult
+	if json.Unmarshal(out, &results) != nil {
+		return nil
+	}
+	var msgs []string
+	for _, r := range results {
+		for _, m := range r.Messages {
+			const prefix = "@convex-dev/"
+			if !strings.HasPrefix(m.RuleID, prefix) {
+				continue
+			}
+			if want[strings.TrimPrefix(m.RuleID, prefix)] {
+				msgs = append(msgs, fmt.Sprintf("  ✗ %s:%d — %s", m.RuleID, m.Line, m.Message))
+			}
+		}
+	}
+	return msgs
 }
 
 func main() {
@@ -97,34 +174,23 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Enforce only the rules opted into via .convex-lint.json errorRules (the
-	// ratchet). Empty = dormant. oxlint emits every convex rule as a warning
-	// (from .oxlintrc); we block on the subset whose rule id is in errorRules.
-	// (oxlint -D does NOT override a JS-plugin rule's config severity, so we
-	// gate on errorRules membership rather than oxlint severity.)
-	errSet := map[string]bool{}
-	for _, r := range cfg.ErrorRules {
-		errSet[r] = true
-	}
-	if len(errSet) == 0 {
-		os.Exit(0)
+	oxSet := toSet(cfg.ErrorRules)
+	esSet := toSet(cfg.EslintErrorRules)
+	if len(oxSet) == 0 && len(esSet) == 0 {
+		os.Exit(0) // fully dormant
 	}
 
-	cmd := exec.Command("oxlint", "--format=json", path)
-	out, _ := cmd.Output()
-
-	var res oxlintResult
-	if json.Unmarshal(out, &res) != nil {
-		os.Exit(0)
-	}
 	var msgs []string
-	for _, d := range res.Diagnostics {
-		if rule := convexRuleID(d.Code); rule != "" && errSet[rule] {
-			msgs = append(msgs, fmt.Sprintf("  ✗ %s — %s", d.Code, d.Message))
-		}
+	if len(oxSet) > 0 {
+		msgs = append(msgs, oxlintViolations(path, oxSet)...)
 	}
+	if len(esSet) > 0 {
+		cwd, _ := os.Getwd()
+		msgs = append(msgs, eslintViolations(cwd, path, esSet)...)
+	}
+
 	if len(msgs) > 0 {
-		fmt.Fprintf(os.Stderr, "\n❌ BLOCKED: Convex lint violation in %s\n%s\n\nFix the issue (split the file, add returns:, etc.) — see convex/REFACTORING.md.\n",
+		fmt.Fprintf(os.Stderr, "\n❌ BLOCKED: Convex lint violation in %s\n%s\n\nFix the issue (split the file, add returns:, use db.get(\"table\", id), etc.) — see convex/REFACTORING.md.\n",
 			filepath.Base(path), strings.Join(msgs, "\n"))
 		os.Exit(2)
 	}

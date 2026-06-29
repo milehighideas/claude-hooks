@@ -1,0 +1,1 @@
+feat(validate-convex): edit-time eslint_d pass for type-aware rules (eslintErrorRules, e.g. explicit-table-ids)
