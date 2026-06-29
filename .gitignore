@@ -6,6 +6,8 @@ bin/*
 /pre-commit
 /convex-gen
 /auto-convex-gen
+/validate-convex
+/validate-srp
 
 # Go
 *.exe

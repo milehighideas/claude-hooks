@@ -39,6 +39,10 @@ func (g *TerraformGenerator) Generate(tables []TableInfo) error {
 	sort.Strings(names)
 
 	var resolved []ResolvedResource
+	// Collect every emitted TS path so they can be Prettier-formatted in one pass
+	// after generation (the emitter writes dense, unformatted TS; the committed
+	// curated files are Prettier-formatted — see formatTSWithPrettier).
+	var tsOutputs []string
 	for _, name := range names {
 		rs := spec.Resources[name]
 		tbl, ok := byName[rs.Table]
@@ -73,6 +77,14 @@ func (g *TerraformGenerator) Generate(tables []TableInfo) error {
 		if err := writeGeneratedFile(routesPath, EmitRoutesTS(r)); err != nil {
 			return err
 		}
+
+		tsOutputs = append(tsOutputs, apiPath, typesPath, routesPath)
+	}
+
+	// Reformat the emitted TS to the committed style. Best-effort: a missing
+	// Prettier skips the step rather than failing generation.
+	if err := formatTSWithPrettier(tsOutputs); err != nil {
+		return err
 	}
 
 	// generator_config.yml for the HashiCorp codegen tools, written beside the

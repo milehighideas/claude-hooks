@@ -1,0 +1,1 @@
+fix: commit untracked cmd/convex-gen/prettier.go (referenced by committed test; was breaking CI) + ignore stray root validator binaries
