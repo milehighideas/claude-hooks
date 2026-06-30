@@ -125,6 +125,9 @@ func runDataLayerCheck(appFiles map[string][]string, allowedFiles []string) erro
 		if err := writeDataLayerCheckReport(allViolations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write data layer check report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("data-layer-check", "Data layer check", "", false)
 	}
 
 	if compactMode() {

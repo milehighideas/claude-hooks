@@ -64,6 +64,9 @@ func runTestSubstanceCheck(cfg TestSubstanceCheckConfig, projectRoot string, sta
 		if werr := writeSubstanceReport(rep, projectRoot, reportDir); werr != nil {
 			fmt.Fprintf(os.Stderr, "warning: failed to write substance report: %v\n", werr)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("test-substance", "Test substance", "", false)
 	}
 
 	if compactMode() {
@@ -335,33 +338,33 @@ func writeSubstanceReport(rep *substanceReport, projectRoot, baseDir string) err
 	for app, files := range byApp {
 		sort.Slice(files, func(i, j int) bool { return files[i].Source < files[j].Source })
 
+		// Build the per-file violation detail once; it's the actual findings,
+		// shared by both findings.txt and the full report.
+		var detail strings.Builder
+		for _, f := range files {
+			fmt.Fprintf(&detail, "%s\n", f.Source)
+			fmt.Fprintf(&detail, "  test: %s\n", f.Test)
+			for _, v := range f.Substance {
+				fmt.Fprintf(&detail, "  - [%s] %s\n", v.Kind, v.Message)
+			}
+			if f.Tautologies > 0 {
+				fmt.Fprintf(&detail, "  - [tautological_assertions] %d expect(X).toBe(X)-style call(s)\n", f.Tautologies)
+			}
+			if f.MajorityWeak {
+				detail.WriteString("  - [majority_weak] more than half of expect() calls are weak/tautological matchers\n")
+			}
+			detail.WriteString("\n")
+		}
+
 		var sb strings.Builder
 		sb.WriteString(strings.Repeat("=", 80) + "\n")
 		fmt.Fprintf(&sb, "TEST SUBSTANCE - %s\n", strings.ToUpper(app))
 		fmt.Fprintf(&sb, "Generated: %s\n", generated)
 		sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 		fmt.Fprintf(&sb, "Files with violations: %d\n\n", len(files))
-		for _, f := range files {
-			fmt.Fprintf(&sb, "%s\n", f.Source)
-			fmt.Fprintf(&sb, "  test: %s\n", f.Test)
-			for _, v := range f.Substance {
-				fmt.Fprintf(&sb, "  - [%s] %s\n", v.Kind, v.Message)
-			}
-			if f.Tautologies > 0 {
-				fmt.Fprintf(&sb, "  - [tautological_assertions] %d expect(X).toBe(X)-style call(s)\n", f.Tautologies)
-			}
-			if f.MajorityWeak {
-				sb.WriteString("  - [majority_weak] more than half of expect() calls are weak/tautological matchers\n")
-			}
-			sb.WriteString("\n")
-		}
+		sb.WriteString(detail.String())
 
-		// Findings-only report: flat list of violating source files.
-		var findingsBody strings.Builder
-		for _, f := range files {
-			fmt.Fprintf(&findingsBody, "  %s\n", f.Source)
-		}
-		findings := findingsDoc("TEST SUBSTANCE", app, len(files), findingsBody.String())
+		findings := findingsDoc("TEST SUBSTANCE", app, len(files), detail.String())
 
 		if err := writeDualReport(baseDir, "test-substance", app, findings, sb.String()); err != nil {
 			return err

@@ -323,9 +323,22 @@ func runTestFilesCheck(stagedFiles []string) error {
 		}
 	}
 
+	// Build a report (always written): error violations fail the check;
+	// warnings are informational and appear only in the full report.
+	var out strings.Builder
+	for _, v := range errors {
+		fmt.Fprintf(&out, "❌ %s: %s\n   Reason: %s require tests\n   Expected: %s\n", v.File, v.Message, v.Reason, v.ExpectedPath)
+	}
+	for _, v := range warnings {
+		fmt.Fprintf(&out, "⚠️  %s: %s\n   Reason: %s\n   Expected: %s\n", v.File, v.Message, v.Reason, v.ExpectedPath)
+	}
+	failed := len(errors) > 0
+	_ = writeRunReport("test-files", "Test files", out.String(), failed)
+
 	if compactMode() {
-		if len(errors) > 0 {
+		if failed {
 			printStatus("Test files", false, fmt.Sprintf("%d missing", len(errors)))
+			printReportHint("test-files/")
 			return fmt.Errorf("missing test files")
 		}
 		printStatus("Test files", true, "")

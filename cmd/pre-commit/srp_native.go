@@ -159,6 +159,9 @@ func runSRPNativeCheck(files []string, cfg SRPNativeConfig) error {
 		if err := writeSRPNativeReport(violations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write SRP native report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("srpNative", "SRP native compliance", "", false)
 	}
 
 	if compactMode() {

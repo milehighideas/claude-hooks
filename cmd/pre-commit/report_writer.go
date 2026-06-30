@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -75,4 +76,95 @@ func findingsDoc(title, app string, count int, body string) string {
 		return ""
 	}
 	return findingsHeader(title, app, count) + body
+}
+
+// errorLineRe matches output lines worth surfacing as findings: compiler/tool
+// errors, failures, and the test-runner failure glyphs. Broad on purpose — for
+// raw command output (xcodebuild, gradle, expo, tsc) the actionable lines are
+// the ones mentioning error/fail/fatal/etc.
+var errorLineRe = regexp.MustCompile(`(?i)(\berror\b|\berrors\b|\bfail(ed|ure|ing)?\b|\bfatal\b|\bpanic\b|\bexception\b|\bwarning\b|assertionerror|\bexpected\b|\breceived\b|\bunresolved\b|\bundefined\b|\bundeclared\b|\bcannot\b|\bmissing\b)|[✕×✗✖●❌]`)
+
+// extractErrorLines pulls the error/failure-relevant lines out of raw command or
+// tool output and counts them. When nothing matches it falls back to the
+// trailing summary so a failed run's findings are never empty. Shared by every
+// command-style check and by the test runner.
+func extractErrorLines(output string) (string, int) {
+	var b strings.Builder
+	count := 0
+	for _, line := range strings.Split(output, "\n") {
+		if errorLineRe.MatchString(line) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+			count++
+		}
+	}
+	if b.Len() == 0 {
+		lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+		if len(lines) > 40 {
+			lines = lines[len(lines)-40:]
+		}
+		return strings.Join(lines, "\n") + "\n", 0
+	}
+	return b.String(), count
+}
+
+// runReportContent builds the (fullreport, findings) pair for a run-style check
+// from its raw output. findings is empty unless failed. app is used only for the
+// findings banner label (may be empty).
+func runReportContent(title, app, output string, failed bool) (full, findings string) {
+	var fb strings.Builder
+	fb.WriteString(strings.Repeat("=", 80) + "\n")
+	fmt.Fprintf(&fb, "%s\n", strings.ToUpper(title))
+	fmt.Fprintf(&fb, "Generated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	if failed {
+		fb.WriteString("Result: FAILED\n")
+	} else {
+		fb.WriteString("Result: PASSED\n")
+	}
+	fb.WriteString(strings.Repeat("=", 80) + "\n\n")
+	if strings.TrimSpace(output) == "" {
+		if failed {
+			fb.WriteString("(no output captured)\n")
+		} else {
+			fmt.Fprintf(&fb, "✅ %s passed\n", title)
+		}
+	} else {
+		fb.WriteString(output)
+		if !strings.HasSuffix(output, "\n") {
+			fb.WriteByte('\n')
+		}
+	}
+
+	if failed {
+		body, n := extractErrorLines(output)
+		if n == 0 {
+			n = 1
+		}
+		findings = findingsDoc(title, app, n, body)
+	}
+	return fb.String(), findings
+}
+
+// writeRunReport is the universal per-check report entry point. It always writes
+// <reportDir>/<subdir>/fullreport.txt (the check's full output, or a passed
+// banner), and writes findings.txt only when the check failed. It's a no-op when
+// reportDir is unset. Checks with richer per-app breakdowns still write their own
+// <subdir>/<app>/ detail on top of this.
+func writeRunReport(subdir, title, output string, failed bool) error {
+	if reportDir == "" {
+		return nil
+	}
+	full, findings := runReportContent(title, "", output, failed)
+	return writeDualReportFlat(reportDir, subdir, findings, full)
+}
+
+// writeAppRunReport is the per-app variant: it writes
+// <reportDir>/<subdir>/<app>/{findings,fullreport}.txt for run-style checks that
+// execute once per app (native build, bundle check).
+func writeAppRunReport(subdir, app, title, output string, failed bool) error {
+	if reportDir == "" {
+		return nil
+	}
+	full, findings := runReportContent(title, app, output, failed)
+	return writeDualReport(reportDir, subdir, app, findings, full)
 }

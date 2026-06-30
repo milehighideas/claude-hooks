@@ -22,6 +22,9 @@ func checkConvex(config ConvexConfig) error {
 	}
 
 	output, err := runConvexDev(config.Path, config.PackageManager)
+	failed := err != nil || !strings.Contains(output, marker)
+	_ = writeRunReport("convex-validation", "Convex validation", output, failed)
+
 	if err != nil {
 		// Include output in error for debugging
 		return fmt.Errorf("convex dev failed: %w\nOutput: %s", err, output)

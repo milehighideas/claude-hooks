@@ -80,7 +80,17 @@ func runBundleCheck(config BundleCheckConfig, apps map[string]AppConfig, package
 	wg.Wait()
 
 	var failed []result
+	var combined strings.Builder
 	for _, r := range results {
+		// Per-app report: <reportDir>/bundle-check/<app>/{findings,fullreport}.txt
+		appFailed := r.err != nil
+		appReport := r.output
+		if appFailed && r.err != nil {
+			appReport = fmt.Sprintf("%s\n\n%v", r.output, r.err)
+		}
+		_ = writeAppRunReport("bundle-check", r.app, "Bundle check: "+r.app, appReport, appFailed)
+		fmt.Fprintf(&combined, "===== %s =====\n%s\n", r.app, r.output)
+
 		if r.err != nil {
 			failed = append(failed, r)
 			continue
@@ -89,6 +99,9 @@ func runBundleCheck(config BundleCheckConfig, apps map[string]AppConfig, package
 			fmt.Printf("   ✓ %s passed bundle check\n", r.app)
 		}
 	}
+
+	// Flat aggregate report across all bundled apps (always written).
+	_ = writeRunReport("bundle-check", "Bundle check", combined.String(), len(failed) > 0)
 
 	if len(failed) == 0 {
 		return nil

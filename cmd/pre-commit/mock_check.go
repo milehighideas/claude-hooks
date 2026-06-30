@@ -71,6 +71,9 @@ func (c *MockChecker) Check(files []string, config MockCheckConfig) error {
 		if err := writeMockCheckReport(violations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write mock check report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("mock-check", "Mock check", "", false)
 	}
 
 	if compactMode() {

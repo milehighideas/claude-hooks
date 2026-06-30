@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/milehighideas/claude-hooks/internal/nextchecks"
 )
@@ -25,7 +26,7 @@ type NextLinkCheckConfig struct {
 
 // runNextImageCheck validates public-asset references for the in-scope apps.
 func runNextImageCheck(cfg NextImageCheckConfig, apps map[string]AppConfig) error {
-	return runNextCheck("Next image refs", "image reference", cfg.Apps, apps,
+	return runNextCheck("Next image refs", "next-image", "image reference", cfg.Apps, apps,
 		func(appPath string) (nextchecks.Result, error) {
 			return nextchecks.CheckImages(appPath, cfg.WithDefaults())
 		})
@@ -33,7 +34,7 @@ func runNextImageCheck(cfg NextImageCheckConfig, apps map[string]AppConfig) erro
 
 // runNextLinkCheck validates internal links for the in-scope apps.
 func runNextLinkCheck(cfg NextLinkCheckConfig, apps map[string]AppConfig) error {
-	return runNextCheck("Next link check", "link", cfg.Apps, apps,
+	return runNextCheck("Next link check", "next-link", "link", cfg.Apps, apps,
 		func(appPath string) (nextchecks.Result, error) {
 			return nextchecks.CheckLinks(appPath, cfg.WithDefaults())
 		})
@@ -42,7 +43,7 @@ func runNextLinkCheck(cfg NextLinkCheckConfig, apps map[string]AppConfig) error 
 // runNextCheck runs a per-app nextchecks function across the scoped apps,
 // aggregates misses, and reports in compact or verbose mode like other checks.
 func runNextCheck(
-	display, noun string,
+	display, subdir, noun string,
 	scope []string,
 	apps map[string]AppConfig,
 	fn func(appPath string) (nextchecks.Result, error),
@@ -104,13 +105,27 @@ func runNextCheck(
 	}
 
 	failed := len(misses) > 0
+
+	// Render the misses (and any run error) into a report. Written always:
+	// findings.txt on failure, fullreport.txt every run.
+	var out strings.Builder
+	for _, m := range misses {
+		fmt.Fprintf(&out, "%s  %s  (in %s)\n", m.app, m.Ref, m.File)
+	}
+	if runErr != nil {
+		fmt.Fprintf(&out, "error: %v\n", runErr)
+	}
+	_ = writeRunReport(subdir, display, out.String(), failed || runErr != nil)
+
 	if compactMode() {
 		if failed {
 			printStatus(display, false, fmt.Sprintf("%d %ss", len(misses), noun))
+			printReportHint(subdir + "/")
 			return fmt.Errorf("found %d unresolved %s(s)", len(misses), noun)
 		}
 		if runErr != nil {
 			printStatus(display, false, "error")
+			printReportHint(subdir + "/")
 			return runErr
 		}
 		printStatus(display, true, "")

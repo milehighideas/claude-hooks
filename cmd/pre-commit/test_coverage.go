@@ -176,6 +176,9 @@ func runTestCoverageCheck(config TestCoverageConfig) error {
 		if err := writeTestCoverageReport(violations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write test coverage report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("test-coverage", "Test coverage", "", false)
 	}
 
 	if compactMode() {

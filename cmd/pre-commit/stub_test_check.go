@@ -249,6 +249,9 @@ func runStubTestCheck(cfg StubTestCheckConfig, projectRoot string, stagedFiles [
 		if err := writeStubTestReport(report.Stubs, projectRoot, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write stub tests report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("stub-tests", "Stub tests", "", false)
 	}
 
 	if compactMode() {

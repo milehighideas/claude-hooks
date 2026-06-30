@@ -164,7 +164,10 @@ func runConvexCheck(projectRoot string, stagedAbs []string) error {
 	if len(esSet) > 0 {
 		diags = append(diags, eslintCommitViolations(projectRoot, files, esSet)...)
 	}
-	if len(diags) > 0 {
+	failed := len(diags) > 0
+	_ = writeRunReport("convex-check", "Convex check", strings.Join(diags, "\n"), failed)
+	if failed {
+		printReportHint("convex-check/")
 		return fmt.Errorf("convexCheck: %d violation(s)\n%s", len(diags), strings.Join(diags, "\n"))
 	}
 	return nil

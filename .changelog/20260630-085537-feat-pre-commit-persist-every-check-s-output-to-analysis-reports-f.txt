@@ -1,0 +1,1 @@
+feat(pre-commit): persist every check's output to analysis-reports (fullreport always, findings on fail)

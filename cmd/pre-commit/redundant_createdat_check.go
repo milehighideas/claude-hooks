@@ -163,6 +163,9 @@ func runRedundantCreatedAtCheck(
 		if err := writeRedundantCreatedAtReport(report.Violations, projectRoot, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write redundant createdAt report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("redundant-createdat", "Redundant createdAt", "", false)
 	}
 
 	if compactMode() {

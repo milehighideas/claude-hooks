@@ -34,41 +34,54 @@ func runFrontendStructureBinary() error {
 		}
 	}
 
-	if compactMode() {
-		// Capture output instead of piping to terminal
-		cmd := exec.Command(binName)
-		cmd.Env = os.Environ()
-		var stdout, stderr bytes.Buffer
-		cmd.Stdout = &stdout
-		cmd.Stderr = &stderr
+	// Always capture so the output can be persisted to a report; in verbose mode
+	// it's also echoed to the terminal afterward.
+	cmd := exec.Command(binName)
+	cmd.Env = os.Environ()
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	output := stripANSI(stdout.String() + stderr.String())
 
-		if err := cmd.Run(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
-				printStatus("Frontend structure", false, "")
-				return fmt.Errorf("frontend structure validation failed")
-			}
-			printStatus("Frontend structure", true, "skipped")
-			return nil
+	if !compactMode() && output != "" {
+		fmt.Print(output)
+	}
+
+	failed := false
+	skipped := false
+	if runErr != nil {
+		if exitErr, ok := runErr.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
+			failed = true
+		} else {
+			skipped = true // validator not found / non-2 exit
 		}
-		printStatus("Frontend structure", true, "")
+	}
+
+	_ = writeRunReport("frontend-structure", "Frontend structure", output, failed)
+
+	if compactMode() {
+		if failed {
+			printStatus("Frontend structure", false, "")
+			printReportHint("frontend-structure/")
+			return fmt.Errorf("frontend structure validation failed")
+		}
+		if skipped {
+			printStatus("Frontend structure", true, "skipped")
+		} else {
+			printStatus("Frontend structure", true, "")
+		}
 		return nil
 	}
 
-	cmd := exec.Command(binName)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = os.Environ()
-
-	if err := cmd.Run(); err != nil {
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
-			return fmt.Errorf("frontend structure validation failed")
-		}
+	if failed {
+		return fmt.Errorf("frontend structure validation failed")
+	}
+	if skipped {
 		fmt.Println("✅ Frontend structure check skipped (validator not found)")
 		fmt.Println()
 		return nil
 	}
-
 	fmt.Println("✅ Frontend structure check passed")
 	fmt.Println()
 	return nil

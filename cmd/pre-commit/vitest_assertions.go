@@ -121,6 +121,9 @@ func runVitestAssertionsCheck(apps map[string]AppConfig) error {
 		if err := writeVitestAssertionsReport(violations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write vitest assertions report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("vitest-assertions", "Vitest assertions", "", false)
 	}
 
 	if compactMode() {

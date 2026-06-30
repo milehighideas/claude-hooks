@@ -553,28 +553,40 @@ pre-commit
 pre-commit --report-dir ./reports
 ```
 
-Reports are organized by check type, then by app/package. Each app gets its own
-subfolder holding two files:
+**Every enabled check writes a report** so any failure during a commit is
+inspectable. Reports are organized by check type, and each report is a pair:
 
-- `findings.txt` — only the blocking, actionable items that caused (or would
-  cause) the hook to fail. For lint/typecheck this is the surviving findings
-  with the raw tool dump and the filtered-out noise stripped; for SRP it's the
-  blocking errors only (warnings stay in the full report).
-- `fullreport.txt` — the complete verbose report (summary counts, every section,
-  and the raw linter/tsc output).
+- `fullreport.txt` — written **always** (pass or fail): the check's complete
+  output (summary counts, every section, raw linter/tsc/command output), or a
+  `✅ <Check> passed` banner on a clean run.
+- `findings.txt` — written **only on failure**: just the blocking, actionable
+  items. For lint/typecheck the surviving findings with the raw tool dump and
+  filtered-out noise stripped; for SRP the blocking errors only; for
+  command-based checks (native build, bundle, convex) the error/failure lines.
+
+Checks with a per-app dimension nest the pair under `<app>/`; aggregate checks
+write it flat:
 
 ```text
 reports/branch-name_timestamp/
-  lint/<app>/{findings,fullreport}.txt           - ESLint reports
-  typecheck/<app>/{findings,fullreport}.txt      - TypeScript reports
-  srp/<app>/{findings,fullreport}.txt            - SRP analysis
-  console-check/<app>/{findings,fullreport}.txt  - Console statement violations
+  lint/<app>/{findings,fullreport}.txt            - per app
+  typecheck/<app>/{findings,fullreport}.txt       - per app
+  srp/<app>/{findings,fullreport}.txt             - per app
+  console-check/<app>/{findings,fullreport}.txt   - per app
+  native-build/<app>/{findings,fullreport}.txt    - per app (+ flat aggregate)
+  bundle-check/<app>/{findings,fullreport}.txt    - per app (+ flat aggregate)
+  convex-validation/{findings,fullreport}.txt     - flat
+  frontend-structure/{findings,fullreport}.txt    - flat
+  convex-check/{findings,fullreport}.txt          - flat
+  next-image/{findings,fullreport}.txt            - flat
+  next-link/{findings,fullreport}.txt             - flat
+  test-files/{findings,fullreport}.txt            - flat
+  test-coverage/ test-quality/ vitest-assertions/ - flat
   ...
 ```
 
-The aggregate checks with no per-app dimension (`test-coverage`,
-`vitest-assertions`, `test-quality`) write the same pair flat at
-`reports/branch-name_timestamp/<check>/{findings,fullreport}.txt`.
+Checks **disabled** in `.pre-commit.json` don't run, so they write nothing. The
+runner prints a `→ reports/.../<check>/` pointer beneath any failed check.
 
 ## Check Details
 

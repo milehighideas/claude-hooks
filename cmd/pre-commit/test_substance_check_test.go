@@ -92,9 +92,10 @@ func TestWriteSubstanceReport_PerAppSplit(t *testing.T) {
 		}
 	}
 
-	// story/findings.txt lists the violating sources concisely (no raw detail).
+	// story/findings.txt carries the full per-file violation detail (kinds and
+	// messages), not just the source file names.
 	storyFindings := readFile(t, filepath.Join(outDir, "story", "findings.txt"))
-	for _, want := range []string{"FINDINGS: story", "Blocking findings: 2", "B.tsx", "C.tsx"} {
+	for _, want := range []string{"FINDINGS: story", "Blocking findings: 2", "B.tsx", "C.tsx", "test:", "[loc_ratio_below]", "tautological_assertions] 3"} {
 		if !strings.Contains(storyFindings, want) {
 			t.Errorf("story findings missing %q; got:\n%s", want, storyFindings)
 		}

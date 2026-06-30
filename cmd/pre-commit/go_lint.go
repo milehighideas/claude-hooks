@@ -33,34 +33,36 @@ func checkGoLint(stagedFiles []string, config GoLintConfig) error {
 		tool = "go-vet"
 	}
 
-	// Run linter in each directory
+	// Run linter in each directory. Always capture so the output can be
+	// persisted to a report; in verbose mode it's echoed afterward.
 	var lintErrors []string
+	var combined strings.Builder
 	for _, dir := range dirs {
 		if !compactMode() {
 			fmt.Printf("   Linting Go code in %s...\n", dir)
 		}
 
+		var out string
 		var err error
-		if compactMode() {
-			if tool == "golangci-lint" {
-				_, err = runCommandCapturedInDir(dir, "golangci-lint", "run", "./...")
-			} else {
-				_, err = runCommandCapturedInDir(dir, "go", "vet", "./...")
-			}
+		if tool == "golangci-lint" {
+			out, err = runCommandCapturedInDir(dir, "golangci-lint", "run", "./...")
 		} else {
-			if tool == "golangci-lint" {
-				err = runCommandInDir(dir, "golangci-lint", "run", "./...")
-			} else {
-				err = runCommandInDir(dir, "go", "vet", "./...")
-			}
+			out, err = runCommandCapturedInDir(dir, "go", "vet", "./...")
 		}
+		if !compactMode() && out != "" {
+			fmt.Print(out)
+		}
+		fmt.Fprintf(&combined, "===== %s =====\n%s\n", dir, out)
 
 		if err != nil {
 			lintErrors = append(lintErrors, fmt.Sprintf("%s: %v", dir, err))
 		}
 	}
 
-	if len(lintErrors) > 0 {
+	failed := len(lintErrors) > 0
+	_ = writeRunReport("go-lint", "Go linting", combined.String(), failed)
+	if failed {
+		printReportHint("go-lint/")
 		return fmt.Errorf("go lint failed:\n  %s", strings.Join(lintErrors, "\n  "))
 	}
 

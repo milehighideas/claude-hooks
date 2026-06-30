@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 )
@@ -49,8 +50,9 @@ func checkNativeBuild(stagedFiles []string, config NativeBuildConfig) error {
 
 	// Run builds in parallel
 	type buildResult struct {
-		app NativeBuildApp
-		err error
+		app    NativeBuildApp
+		output string
+		err    error
 	}
 
 	results := make(chan buildResult, len(affectedApps))
@@ -70,14 +72,14 @@ func checkNativeBuild(stagedFiles []string, config NativeBuildConfig) error {
 				dir = app.Path
 			}
 
-			var err error
-			if compactMode() {
-				_, err = runCommandCapturedInDir(dir, app.Command, app.Args...)
-			} else {
-				err = runCommandInDir(dir, app.Command, app.Args...)
+			// Always capture so we can persist the build output to a report,
+			// even in verbose mode where it also streams to the terminal.
+			output, err := runCommandCapturedInDir(dir, app.Command, app.Args...)
+			if !compactMode() {
+				fmt.Print(output)
 			}
 
-			results <- buildResult{app: app, err: err}
+			results <- buildResult{app: app, output: output, err: err}
 		}(app)
 	}
 
@@ -85,17 +87,41 @@ func checkNativeBuild(stagedFiles []string, config NativeBuildConfig) error {
 	close(results)
 
 	var buildErrors []string
+	var combined strings.Builder
 	for result := range results {
+		// Per-app report: <reportDir>/native-build/<app>/{findings,fullreport}.txt
+		appFailed := result.err != nil
+		appReport := result.output
+		if appFailed && result.err != nil {
+			appReport = fmt.Sprintf("%s\n\n%v", result.output, result.err)
+		}
+		_ = writeAppRunReport("native-build", appNameFromNative(result.app), "Native build: "+result.app.Name, appReport, appFailed)
+
+		fmt.Fprintf(&combined, "===== %s =====\n%s\n", result.app.Name, result.output)
 		if result.err != nil {
 			buildErrors = append(buildErrors, fmt.Sprintf("%s: %v", result.app.Name, result.err))
 		}
 	}
 
-	if len(buildErrors) > 0 {
+	failed := len(buildErrors) > 0
+	// Flat aggregate report across all affected native apps.
+	_ = writeRunReport("native-build", "Native build", combined.String(), failed)
+
+	if failed {
 		return fmt.Errorf("native build failed:\n  %s", strings.Join(buildErrors, "\n  "))
 	}
 
 	return nil
+}
+
+// appNameFromNative derives a report-folder name from a native app, preferring
+// the last path segment (e.g. "dashtag-maps-ios") for a stable, filesystem-safe
+// label.
+func appNameFromNative(app NativeBuildApp) string {
+	if app.Path != "" {
+		return filepath.Base(app.Path)
+	}
+	return strings.ReplaceAll(strings.ToLower(app.Name), " ", "-")
 }
 
 // hasMatchingFiles returns true if any staged file is under the given path

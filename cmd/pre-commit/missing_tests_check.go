@@ -376,6 +376,9 @@ func runMissingTestsCheck(cfg MissingTestsCheckConfig, projectRoot string, stage
 		if err := writeMissingTestsReport(report.Missing, projectRoot, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write missing tests report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("missing-tests", "Missing tests", "", false)
 	}
 
 	if compactMode() {

@@ -131,6 +131,9 @@ func runConsoleCheck(appFiles map[string][]string, allowedFiles []string) error 
 		if err := writeConsoleCheckReport(allViolations, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write console check report: %v\n", err)
 		}
+	} else if reportDir != "" {
+		// Always-write: leave a passing fullreport.txt on a clean run.
+		_ = writeRunReport("console-check", "Console check", "", false)
 	}
 
 	if compactMode() {

@@ -545,6 +545,11 @@ func runSRPCheckWithFilter(filterResult SRPFilterResult, config SRPConfig, fullM
 		if err := writeSRPReport(errors, warnings, reportDir); err != nil {
 			fmt.Printf("   Warning: failed to write SRP report: %v\n", err)
 		}
+		if len(errors) == 0 && len(warnings) == 0 {
+			// Always-write: leave a passing fullreport.txt on a clean run
+			// (writeSRPReport writes nothing when there are no violations).
+			_ = writeRunReport("srp", "SRP compliance", "", false)
+		}
 	}
 
 	if compactMode() {
