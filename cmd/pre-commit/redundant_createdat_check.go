@@ -263,12 +263,14 @@ func writeRedundantCreatedAtReport(violations []string, projectRoot, baseDir str
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		sb.WriteString("VIOLATIONS (count = occurrences in that file)\n")
 		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		var fileList strings.Builder
 		for _, e := range entries {
-			fmt.Fprintf(&sb, "  [%3d]  %s\n", e.count, e.path)
+			fmt.Fprintf(&fileList, "  [%3d]  %s\n", e.count, e.path)
 		}
+		sb.WriteString(fileList.String())
 
-		reportPath := filepath.Join(outDir, app+".txt")
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		findings := findingsDoc("REDUNDANT createdAt", app, len(entries), fileList.String())
+		if err := writeDualReport(baseDir, "redundant-createdat", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

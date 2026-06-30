@@ -234,12 +234,14 @@ func runTestCoverageCheck(config TestCoverageConfig) error {
 
 // writeTestCoverageReport writes test coverage findings to a report file
 func writeTestCoverageReport(violations []TestCoverageViolation, baseDir string) error {
-	coverageDir := filepath.Join(baseDir, "test-coverage")
-	if err := os.MkdirAll(coverageDir, 0755); err != nil {
-		return err
+	// Findings body: flat list of source files missing tests.
+	var fileList strings.Builder
+	for _, v := range violations {
+		relSource, _ := filepath.Rel(".", v.SourceFile)
+		relTest, _ := filepath.Rel(".", v.ExpectedTestFile)
+		fmt.Fprintf(&fileList, "  %s\n", relSource)
+		fmt.Fprintf(&fileList, "    → expected: %s\n", relTest)
 	}
-
-	reportPath := filepath.Join(coverageDir, "violations.txt")
 
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
@@ -280,5 +282,6 @@ func writeTestCoverageReport(violations []TestCoverageViolation, baseDir string)
 		}
 	}
 
-	return os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	findings := findingsDoc("TEST COVERAGE", "", len(violations), fileList.String())
+	return writeDualReportFlat(baseDir, "test-coverage", findings, sb.String())
 }

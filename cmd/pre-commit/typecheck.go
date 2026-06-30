@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -70,13 +69,36 @@ func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilte
 
 // writeTypecheckReport writes typecheck findings to a report file
 func writeTypecheckReport(appName, rawOutput string, allErrors, realErrors []tsError, baseDir string) error {
-	typecheckDir := filepath.Join(baseDir, "typecheck")
-	if err := os.MkdirAll(typecheckDir, 0755); err != nil {
-		return err
+	// Group errors by file and count by code.
+	errorsByFile := make(map[string][]tsError)
+	for _, e := range realErrors {
+		errorsByFile[e.filePath] = append(errorsByFile[e.filePath], e)
+	}
+	errorsByCode := make(map[string]int)
+	for _, e := range realErrors {
+		errorsByCode[e.errorCode]++
 	}
 
-	reportPath := filepath.Join(typecheckDir, fmt.Sprintf("%s.txt", appName))
+	// Build the actionable body (by-code + by-file) once; shared by both reports.
+	var body strings.Builder
+	body.WriteString(strings.Repeat("=", 80) + "\n")
+	body.WriteString("ERRORS BY CODE\n")
+	body.WriteString(strings.Repeat("=", 80) + "\n\n")
+	for code, count := range errorsByCode {
+		fmt.Fprintf(&body, "  %s: %d\n", code, count)
+	}
+	body.WriteString("\n" + strings.Repeat("=", 80) + "\n")
+	body.WriteString("ERRORS BY FILE\n")
+	body.WriteString(strings.Repeat("=", 80) + "\n\n")
+	for file, errs := range errorsByFile {
+		fmt.Fprintf(&body, "\n%s (%d errors)\n", file, len(errs))
+		body.WriteString(strings.Repeat("-", 40) + "\n")
+		for _, e := range errs {
+			fmt.Fprintf(&body, "  [%s] %s\n", e.errorCode, e.fullText)
+		}
+	}
 
+	// Full report (legacy content): counts + body + raw tsc output.
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
 	fmt.Fprintf(&sb, "TYPECHECK REPORT: %s\n", appName)
@@ -87,44 +109,17 @@ func writeTypecheckReport(appName, rawOutput string, allErrors, realErrors []tsE
 	fmt.Fprintf(&sb, "Errors after filtering: %d\n", len(realErrors))
 	fmt.Fprintf(&sb, "Filtered out: %d\n\n", len(allErrors)-len(realErrors))
 
-	// Group errors by file
-	errorsByFile := make(map[string][]tsError)
-	for _, e := range realErrors {
-		errorsByFile[e.filePath] = append(errorsByFile[e.filePath], e)
-	}
+	sb.WriteString(body.String())
 
-	// Count by error code
-	errorsByCode := make(map[string]int)
-	for _, e := range realErrors {
-		errorsByCode[e.errorCode]++
-	}
-
-	sb.WriteString(strings.Repeat("=", 80) + "\n")
-	sb.WriteString("ERRORS BY CODE\n")
-	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
-	for code, count := range errorsByCode {
-		fmt.Fprintf(&sb, "  %s: %d\n", code, count)
-	}
-
-	sb.WriteString("\n" + strings.Repeat("=", 80) + "\n")
-	sb.WriteString("ERRORS BY FILE\n")
-	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
-
-	for file, errs := range errorsByFile {
-		fmt.Fprintf(&sb, "\n%s (%d errors)\n", file, len(errs))
-		sb.WriteString(strings.Repeat("-", 40) + "\n")
-		for _, e := range errs {
-			fmt.Fprintf(&sb, "  [%s] %s\n", e.errorCode, e.fullText)
-		}
-	}
-
-	// Also write raw output
 	sb.WriteString("\n\n" + strings.Repeat("=", 80) + "\n")
 	sb.WriteString("RAW TSC OUTPUT\n")
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 	sb.WriteString(rawOutput)
 
-	return os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	// Findings-only report: just the surviving errors.
+	findings := findingsDoc("TYPECHECK", appName, len(realErrors), body.String())
+
+	return writeDualReport(baseDir, "typecheck", appName, findings, sb.String())
 }
 
 // parseTypeScriptErrors parses tsc output into individual errors

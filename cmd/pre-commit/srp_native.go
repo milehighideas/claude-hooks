@@ -238,7 +238,16 @@ func writeSRPNativeReport(violations []srpnative.Violation, baseDir string) erro
 				}
 			}
 		}
-		if err := os.WriteFile(filepath.Join(dir, app+".txt"), []byte(sb.String()), 0644); err != nil {
+		// Findings-only report: flat "file: [rule] message" list.
+		var findingsBody strings.Builder
+		for _, f := range files {
+			for _, v := range byFile[f] {
+				fmt.Fprintf(&findingsBody, "  %s: [%s] %s\n", f, v.RuleID, v.Message)
+			}
+		}
+		findings := findingsDoc("SRP NATIVE", app, len(vs), findingsBody.String())
+
+		if err := writeDualReport(baseDir, "srpNative", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

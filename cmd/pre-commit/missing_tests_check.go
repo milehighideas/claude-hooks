@@ -473,13 +473,15 @@ func writeMissingTestsReport(missing []missingTest, projectRoot, baseDir string)
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		sb.WriteString("MISSING TESTS\n")
 		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		var fileList strings.Builder
 		for _, e := range entries {
-			fmt.Fprintf(&sb, "  %s\n", e.source)
-			fmt.Fprintf(&sb, "    → expected: %s\n", e.expected)
+			fmt.Fprintf(&fileList, "  %s\n", e.source)
+			fmt.Fprintf(&fileList, "    → expected: %s\n", e.expected)
 		}
+		sb.WriteString(fileList.String())
 
-		reportPath := filepath.Join(outDir, app+".txt")
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		findings := findingsDoc("MISSING TESTS", app, len(entries), fileList.String())
+		if err := writeDualReport(baseDir, "missing-tests", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

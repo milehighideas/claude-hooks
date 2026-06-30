@@ -335,12 +335,14 @@ func writeStubTestReport(stubs []string, projectRoot, baseDir string) error {
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		sb.WriteString("STUB FILES\n")
 		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		var fileList strings.Builder
 		for _, f := range files {
-			fmt.Fprintf(&sb, "  %s\n", f)
+			fmt.Fprintf(&fileList, "  %s\n", f)
 		}
+		sb.WriteString(fileList.String())
 
-		reportPath := filepath.Join(outDir, app+".txt")
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		findings := findingsDoc("STUB TESTS", app, len(files), fileList.String())
+		if err := writeDualReport(baseDir, "stub-tests", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

@@ -206,9 +206,17 @@ func writeDataLayerCheckReport(violations []DataLayerViolation, baseDir string) 
 		byApp[v.AppName] = append(byApp[v.AppName], v)
 	}
 
-	// Write a separate report file for each app
+	// Write a separate report folder for each app
 	for app, appViolations := range byApp {
-		reportPath := filepath.Join(dataLayerDir, app+".txt")
+		// The flat file+pattern list is both the findings body and the full
+		// report's detail section.
+		var fileList strings.Builder
+		for _, v := range appViolations {
+			fmt.Fprintf(&fileList, "  %s\n", v.File)
+			for _, p := range v.Patterns {
+				fmt.Fprintf(&fileList, "    matched: %s\n", p)
+			}
+		}
 
 		var sb strings.Builder
 		sb.WriteString(strings.Repeat("=", 80) + "\n")
@@ -221,15 +229,10 @@ func writeDataLayerCheckReport(violations []DataLayerViolation, baseDir string) 
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		sb.WriteString("FILES WITH DIRECT CONVEX IMPORTS\n")
 		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		sb.WriteString(fileList.String())
 
-		for _, v := range appViolations {
-			fmt.Fprintf(&sb, "  %s\n", v.File)
-			for _, p := range v.Patterns {
-				fmt.Fprintf(&sb, "    matched: %s\n", p)
-			}
-		}
-
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		findings := findingsDoc("DATA LAYER CHECK", app, len(appViolations), fileList.String())
+		if err := writeDualReport(baseDir, "data-layer-check", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

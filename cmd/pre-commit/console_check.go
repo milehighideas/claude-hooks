@@ -218,9 +218,14 @@ func writeConsoleCheckReport(violations []ConsoleViolation, baseDir string) erro
 		byApp[v.AppName] = append(byApp[v.AppName], v)
 	}
 
-	// Write a separate report file for each app
+	// Write a separate report folder for each app
 	for app, appViolations := range byApp {
-		reportPath := filepath.Join(consoleDir, app+".txt")
+		// The flat file list is both the findings body and the full report's
+		// detail section.
+		var fileList strings.Builder
+		for _, v := range appViolations {
+			fmt.Fprintf(&fileList, "  %s\n", v.File)
+		}
 
 		var sb strings.Builder
 		sb.WriteString(strings.Repeat("=", 80) + "\n")
@@ -233,12 +238,10 @@ func writeConsoleCheckReport(violations []ConsoleViolation, baseDir string) erro
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		sb.WriteString("FILES WITH CONSOLE STATEMENTS\n")
 		sb.WriteString(strings.Repeat("-", 40) + "\n\n")
+		sb.WriteString(fileList.String())
 
-		for _, v := range appViolations {
-			fmt.Fprintf(&sb, "  %s\n", v.File)
-		}
-
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		findings := findingsDoc("CONSOLE CHECK", app, len(appViolations), fileList.String())
+		if err := writeDualReport(baseDir, "console-check", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

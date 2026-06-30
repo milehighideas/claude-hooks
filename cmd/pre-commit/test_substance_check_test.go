@@ -63,34 +63,47 @@ func TestWriteSubstanceReport_PerAppSplit(t *testing.T) {
 	for _, e := range entries {
 		got[e.Name()] = true
 	}
-	// One file per app/package, NOT a single report.txt.
-	for _, want := range []string{"mobile.txt", "story.txt", "backend.txt"} {
+	// One subfolder per app/package, each holding findings.txt + fullreport.txt.
+	for _, want := range []string{"mobile", "story", "backend"} {
 		if !got[want] {
-			t.Errorf("expected per-app report %s, missing; got files: %v", want, got)
+			t.Errorf("expected per-app report folder %s, missing; got: %v", want, got)
+		}
+		for _, file := range []string{"findings.txt", "fullreport.txt"} {
+			if _, err := os.Stat(filepath.Join(outDir, want, file)); err != nil {
+				t.Errorf("expected %s/%s: %v", want, file, err)
+			}
 		}
 	}
-	if got["report.txt"] {
-		t.Errorf("found legacy single report.txt; expected per-app files only")
+	if got["report.txt"] || got["story.txt"] {
+		t.Errorf("found legacy flat report file; expected per-app subfolders only: %v", got)
 	}
 	if len(entries) != 3 {
-		t.Errorf("expected exactly 3 per-app files, got %d (%v)", len(entries), got)
+		t.Errorf("expected exactly 3 per-app folders, got %d (%v)", len(entries), got)
 	}
 
-	// story.txt aggregates both story files and surfaces their kinds.
-	storyBody := readFile(t, filepath.Join(outDir, "story.txt"))
+	// story/fullreport.txt aggregates both story files and surfaces their kinds.
+	storyBody := readFile(t, filepath.Join(outDir, "story", "fullreport.txt"))
 	if !strings.Contains(storyBody, "Files with violations: 2") {
-		t.Errorf("story.txt should report 2 files; got:\n%s", storyBody)
+		t.Errorf("story fullreport should report 2 files; got:\n%s", storyBody)
 	}
 	for _, want := range []string{"TEST SUBSTANCE - STORY", "[loc_ratio_below]", "tautological_assertions] 3", "B.tsx", "C.tsx"} {
 		if !strings.Contains(storyBody, want) {
-			t.Errorf("story.txt missing %q; got:\n%s", want, storyBody)
+			t.Errorf("story fullreport missing %q; got:\n%s", want, storyBody)
 		}
 	}
 
-	// mobile.txt carries the majority_weak line.
-	mobileBody := readFile(t, filepath.Join(outDir, "mobile.txt"))
+	// story/findings.txt lists the violating sources concisely (no raw detail).
+	storyFindings := readFile(t, filepath.Join(outDir, "story", "findings.txt"))
+	for _, want := range []string{"FINDINGS: story", "Blocking findings: 2", "B.tsx", "C.tsx"} {
+		if !strings.Contains(storyFindings, want) {
+			t.Errorf("story findings missing %q; got:\n%s", want, storyFindings)
+		}
+	}
+
+	// mobile/fullreport.txt carries the majority_weak line.
+	mobileBody := readFile(t, filepath.Join(outDir, "mobile", "fullreport.txt"))
 	if !strings.Contains(mobileBody, "[majority_weak]") {
-		t.Errorf("mobile.txt missing majority_weak line; got:\n%s", mobileBody)
+		t.Errorf("mobile fullreport missing majority_weak line; got:\n%s", mobileBody)
 	}
 }
 

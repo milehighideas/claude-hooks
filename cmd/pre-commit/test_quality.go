@@ -188,12 +188,11 @@ func runTestQualityCheck(config TestQualityConfig) error {
 
 // writeTestQualityReport writes test quality findings to a report file
 func writeTestQualityReport(violations []TestQualityViolation, baseDir string) error {
-	qualityDir := filepath.Join(baseDir, "test-quality")
-	if err := os.MkdirAll(qualityDir, 0755); err != nil {
-		return err
+	// Group by app
+	appViolations := make(map[string][]TestQualityViolation)
+	for _, v := range violations {
+		appViolations[v.AppName] = append(appViolations[v.AppName], v)
 	}
-
-	reportPath := filepath.Join(qualityDir, "violations.txt")
 
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
@@ -203,24 +202,21 @@ func writeTestQualityReport(violations []TestQualityViolation, baseDir string) e
 
 	fmt.Fprintf(&sb, "Total export-only test stubs: %d\n\n", len(violations))
 
-	// Group by app
-	appViolations := make(map[string][]TestQualityViolation)
-	for _, v := range violations {
-		appViolations[v.AppName] = append(appViolations[v.AppName], v)
-	}
-
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
 	sb.WriteString("VIOLATIONS BY APP\n")
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 
+	var fileList strings.Builder
 	for app, vs := range appViolations {
 		fmt.Fprintf(&sb, "%s (%d files)\n", app, len(vs))
 		sb.WriteString(strings.Repeat("-", 40) + "\n")
 		for _, v := range vs {
 			fmt.Fprintf(&sb, "  %s\n", v.FilePath)
+			fmt.Fprintf(&fileList, "  %s\n", v.FilePath)
 		}
 		sb.WriteString("\n")
 	}
 
-	return os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	findings := findingsDoc("TEST QUALITY", "", len(violations), fileList.String())
+	return writeDualReportFlat(baseDir, "test-quality", findings, sb.String())
 }

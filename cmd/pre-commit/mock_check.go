@@ -201,10 +201,8 @@ func writeMockCheckReport(violations []Violation, baseDir string) error {
 		byApp[app] = append(byApp[app], v)
 	}
 
-	// Write a separate report file for each app
+	// Write a separate report folder for each app
 	for app, appViolations := range byApp {
-		reportPath := filepath.Join(mockDir, app+".txt")
-
 		var sb strings.Builder
 		sb.WriteString(strings.Repeat("=", 80) + "\n")
 		fmt.Fprintf(&sb, "MOCK CHECK VIOLATIONS - %s\n", strings.ToUpper(app))
@@ -247,7 +245,14 @@ func writeMockCheckReport(violations []Violation, baseDir string) error {
 			}
 		}
 
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		// Findings-only report: flat "file (line): module" list.
+		var findingsBody strings.Builder
+		for _, v := range appViolations {
+			fmt.Fprintf(&findingsBody, "  %s (line %d): jest.mock('%s', ...)\n", v.File, v.Line, v.Module)
+		}
+		findings := findingsDoc("MOCK CHECK", app, len(appViolations), findingsBody.String())
+
+		if err := writeDualReport(baseDir, "mock-check", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

@@ -28,19 +28,6 @@ var DefaultLintExcludePaths = []string{}
 // writeLintReport writes lint findings to a report file.
 // linterName is used in the report header (e.g., "oxlint", "eslint").
 func writeLintReport(appName, linterName, rawOutput string, allErrors, realErrors []lintError, baseDir string) error {
-	lintDir := filepath.Join(baseDir, "lint")
-	if err := os.MkdirAll(lintDir, 0755); err != nil {
-		return err
-	}
-
-	reportPath := filepath.Join(lintDir, fmt.Sprintf("%s.txt", appName))
-
-	var sb strings.Builder
-	sb.WriteString(strings.Repeat("=", 80) + "\n")
-	fmt.Fprintf(&sb, "LINT REPORT: %s\n", appName)
-	fmt.Fprintf(&sb, "Generated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
-	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
-
 	// Count by severity
 	warningCount := 0
 	errorCount := 0
@@ -52,20 +39,13 @@ func writeLintReport(appName, linterName, rawOutput string, allErrors, realError
 		}
 	}
 
-	fmt.Fprintf(&sb, "Total findings: %d (%d errors, %d warnings)\n", len(realErrors), errorCount, warningCount)
-	fmt.Fprintf(&sb, "Total parsed: %d\n", len(allErrors))
-	fmt.Fprintf(&sb, "Filtered out: %d\n\n", len(allErrors)-len(realErrors))
-
-	// Group errors by file
+	// Build the "findings by file" body once; it's shared by both the full
+	// report and the findings-only report.
 	errorsByFile := make(map[string][]lintError)
 	for _, e := range realErrors {
 		errorsByFile[e.filePath] = append(errorsByFile[e.filePath], e)
 	}
-
-	sb.WriteString(strings.Repeat("=", 80) + "\n")
-	sb.WriteString("FINDINGS BY FILE\n")
-	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
-
+	var body strings.Builder
 	for file, errs := range errorsByFile {
 		fileWarnings := 0
 		fileErrors := 0
@@ -83,20 +63,38 @@ func writeLintReport(appName, linterName, rawOutput string, allErrors, realError
 		if fileWarnings > 0 {
 			severityParts = append(severityParts, fmt.Sprintf("%d warnings", fileWarnings))
 		}
-		fmt.Fprintf(&sb, "\n%s (%s)\n", file, strings.Join(severityParts, ", "))
-		sb.WriteString(strings.Repeat("-", 40) + "\n")
+		fmt.Fprintf(&body, "\n%s (%s)\n", file, strings.Join(severityParts, ", "))
+		body.WriteString(strings.Repeat("-", 40) + "\n")
 		for _, e := range errs {
-			fmt.Fprintf(&sb, "  Line %s:%s [%s] %s\n", e.line, e.column, e.rule, e.message)
+			fmt.Fprintf(&body, "  Line %s:%s [%s] %s\n", e.line, e.column, e.rule, e.message)
 		}
 	}
 
-	// Also write raw output
+	// Full report (legacy content): summary + findings-by-file + raw output.
+	var sb strings.Builder
+	sb.WriteString(strings.Repeat("=", 80) + "\n")
+	fmt.Fprintf(&sb, "LINT REPORT: %s\n", appName)
+	fmt.Fprintf(&sb, "Generated: %s\n", time.Now().Format("2006-01-02 15:04:05"))
+	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+
+	fmt.Fprintf(&sb, "Total findings: %d (%d errors, %d warnings)\n", len(realErrors), errorCount, warningCount)
+	fmt.Fprintf(&sb, "Total parsed: %d\n", len(allErrors))
+	fmt.Fprintf(&sb, "Filtered out: %d\n\n", len(allErrors)-len(realErrors))
+
+	sb.WriteString(strings.Repeat("=", 80) + "\n")
+	sb.WriteString("FINDINGS BY FILE\n")
+	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
+	sb.WriteString(body.String())
+
 	sb.WriteString("\n\n" + strings.Repeat("=", 80) + "\n")
 	fmt.Fprintf(&sb, "RAW %s OUTPUT\n", strings.ToUpper(linterName))
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 	sb.WriteString(rawOutput)
 
-	return os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	// Findings-only report: just the surviving findings, grouped by file.
+	findings := findingsDoc("LINT", appName, len(realErrors), body.String())
+
+	return writeDualReport(baseDir, "lint", appName, findings, sb.String())
 }
 
 // runEslint runs ESLint with --fix

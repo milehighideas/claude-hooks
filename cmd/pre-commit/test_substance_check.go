@@ -356,8 +356,14 @@ func writeSubstanceReport(rep *substanceReport, projectRoot, baseDir string) err
 			sb.WriteString("\n")
 		}
 
-		reportPath := filepath.Join(outDir, app+".txt")
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		// Findings-only report: flat list of violating source files.
+		var findingsBody strings.Builder
+		for _, f := range files {
+			fmt.Fprintf(&findingsBody, "  %s\n", f.Source)
+		}
+		findings := findingsDoc("TEST SUBSTANCE", app, len(files), findingsBody.String())
+
+		if err := writeDualReport(baseDir, "test-substance", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

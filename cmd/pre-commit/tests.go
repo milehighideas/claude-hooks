@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -211,13 +209,7 @@ func writeTestReport(appName, output string, testErr error, baseDir string) {
 		return
 	}
 
-	testsDir := filepath.Join(baseDir, "tests")
-	if err := os.MkdirAll(testsDir, 0755); err != nil {
-		return
-	}
-
-	reportPath := filepath.Join(testsDir, appName+".txt")
-
+	// Full report (legacy content): banner + result + raw test output.
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
 	fmt.Fprintf(&sb, "TEST REPORT: %s\n", appName)
@@ -230,7 +222,53 @@ func writeTestReport(appName, output string, testErr error, baseDir string) {
 	sb.WriteString(strings.Repeat("=", 80) + "\n\n")
 	sb.WriteString(output)
 
-	_ = os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	// Findings-only report: nothing on PASS; the failure-marker lines on FAIL.
+	var findings string
+	if testErr == nil {
+		findings = findingsDoc("TESTS", appName, 0, "")
+	} else {
+		body, count := extractTestFailureLines(output)
+		if count == 0 {
+			count = 1
+		}
+		findings = findingsDoc("TESTS", appName, count, body)
+	}
+
+	_ = writeDualReport(baseDir, "tests", appName, findings, sb.String())
+}
+
+// testFailureMarkerRe matches lines worth surfacing as findings: failed
+// test/suite headers (FAIL, vitest/jest ✕/×/✗/●) and assertion detail lines.
+var testFailureMarkerRe = regexp.MustCompile(`(?i)\b(FAIL|AssertionError|Expected|Received)\b|[✕×✗✖●]`)
+
+// testFailureHeaderRe matches just the failed-test/suite headers, used to count
+// distinct failures.
+var testFailureHeaderRe = regexp.MustCompile(`(?i)\bFAIL\b|[✕×✗✖●]`)
+
+// extractTestFailureLines pulls the failure-relevant lines out of a test run's
+// output and counts the distinct failed test/suite headers. When no specific
+// markers are found it falls back to the trailing summary so findings.txt is
+// never empty for a failed run.
+func extractTestFailureLines(output string) (string, int) {
+	var b strings.Builder
+	count := 0
+	for _, line := range strings.Split(output, "\n") {
+		if testFailureMarkerRe.MatchString(line) {
+			b.WriteString(line)
+			b.WriteByte('\n')
+			if testFailureHeaderRe.MatchString(line) {
+				count++
+			}
+		}
+	}
+	if b.Len() == 0 {
+		lines := strings.Split(strings.TrimRight(output, "\n"), "\n")
+		if len(lines) > 40 {
+			lines = lines[len(lines)-40:]
+		}
+		return strings.Join(lines, "\n") + "\n", 0
+	}
+	return b.String(), count
 }
 
 // determineAppsToTest returns the apps that should have tests run based on config and context

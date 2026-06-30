@@ -1,0 +1,1 @@
+feat(pre-commit): split per-app reports into findings.txt + fullreport.txt

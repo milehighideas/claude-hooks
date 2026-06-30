@@ -370,8 +370,6 @@ func writeSRPReport(errors, warnings []SRPViolation, baseDir string) error {
 		appErrors := errorsByApp[app]
 		appWarnings := warningsByApp[app]
 
-		reportPath := filepath.Join(srpDir, app+".txt")
-
 		var sb strings.Builder
 		sb.WriteString(strings.Repeat("=", 80) + "\n")
 		fmt.Fprintf(&sb, "SRP ANALYSIS - %s\n", strings.ToUpper(app))
@@ -446,7 +444,27 @@ func writeSRPReport(errors, warnings []SRPViolation, baseDir string) error {
 			}
 		}
 
-		if err := os.WriteFile(reportPath, []byte(sb.String()), 0644); err != nil {
+		// Findings-only report: the blocking errors (warnings are informational
+		// and stay in the full report), grouped by file.
+		var findingsBody strings.Builder
+		if len(appErrors) > 0 {
+			errByFile := make(map[string][]SRPViolation)
+			for _, e := range appErrors {
+				errByFile[e.File] = append(errByFile[e.File], e)
+			}
+			for file, errs := range errByFile {
+				fmt.Fprintf(&findingsBody, "\n%s (%d errors)\n", file, len(errs))
+				for _, v := range errs {
+					fmt.Fprintf(&findingsBody, "  ❌ %s\n", v.Message)
+					if v.Suggestion != "" {
+						fmt.Fprintf(&findingsBody, "     → %s\n", v.Suggestion)
+					}
+				}
+			}
+		}
+		findings := findingsDoc("SRP", app, len(appErrors), findingsBody.String())
+
+		if err := writeDualReport(baseDir, "srp", app, findings, sb.String()); err != nil {
 			return err
 		}
 	}

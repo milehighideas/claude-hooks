@@ -553,12 +553,28 @@ pre-commit
 pre-commit --report-dir ./reports
 ```
 
-Reports are organized by check type:
+Reports are organized by check type, then by app/package. Each app gets its own
+subfolder holding two files:
 
-- `reports/branch-name_timestamp/lint/` - ESLint reports
-- `reports/branch-name_timestamp/typecheck/` - TypeScript reports
-- `reports/branch-name_timestamp/srp/` - SRP analysis
-- `reports/branch-name_timestamp/console-check/` - Console statement violations
+- `findings.txt` — only the blocking, actionable items that caused (or would
+  cause) the hook to fail. For lint/typecheck this is the surviving findings
+  with the raw tool dump and the filtered-out noise stripped; for SRP it's the
+  blocking errors only (warnings stay in the full report).
+- `fullreport.txt` — the complete verbose report (summary counts, every section,
+  and the raw linter/tsc output).
+
+```text
+reports/branch-name_timestamp/
+  lint/<app>/{findings,fullreport}.txt           - ESLint reports
+  typecheck/<app>/{findings,fullreport}.txt      - TypeScript reports
+  srp/<app>/{findings,fullreport}.txt            - SRP analysis
+  console-check/<app>/{findings,fullreport}.txt  - Console statement violations
+  ...
+```
+
+The aggregate checks with no per-app dimension (`test-coverage`,
+`vitest-assertions`, `test-quality`) write the same pair flat at
+`reports/branch-name_timestamp/<check>/{findings,fullreport}.txt`.
 
 ## Check Details
 

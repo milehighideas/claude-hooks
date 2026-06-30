@@ -163,12 +163,11 @@ func runVitestAssertionsCheck(apps map[string]AppConfig) error {
 
 // writeVitestAssertionsReport writes vitest assertions findings to a report file
 func writeVitestAssertionsReport(violations []VitestAssertionViolation, baseDir string) error {
-	vitestDir := filepath.Join(baseDir, "vitest-assertions")
-	if err := os.MkdirAll(vitestDir, 0755); err != nil {
-		return err
+	// Findings body: flat list of apps missing requireAssertions.
+	var fileList strings.Builder
+	for _, v := range violations {
+		fmt.Fprintf(&fileList, "  %s (%s): %s\n", v.AppName, v.ConfigPath, v.Message)
 	}
-
-	reportPath := filepath.Join(vitestDir, "violations.txt")
 
 	var sb strings.Builder
 	sb.WriteString(strings.Repeat("=", 80) + "\n")
@@ -199,5 +198,6 @@ func writeVitestAssertionsReport(violations []VitestAssertionViolation, baseDir 
 	sb.WriteString("  }\n\n")
 	sb.WriteString("This ensures every test has at least one expect() call.\n")
 
-	return os.WriteFile(reportPath, []byte(sb.String()), 0644)
+	findings := findingsDoc("VITEST ASSERTIONS", "", len(violations), fileList.String())
+	return writeDualReportFlat(baseDir, "vitest-assertions", findings, sb.String())
 }
