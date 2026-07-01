@@ -115,31 +115,59 @@ func runEslint(appPath string) (string, error) {
 	return stdout.String(), nil
 }
 
-// runOxlint runs Oxlint with --fix
-func runOxlint(appPath string) (string, error) {
-	// Create temp file for output
-	tmpFile, err := os.CreateTemp("", "oxlint-output-*.txt")
+// resolveOxlintBin returns the oxlint executable to run and whether a
+// project-local install was found. It prefers a local install
+// (node_modules/.bin/oxlint, found by walking up from appPath) so the project's
+// pinned version is used instead of whatever global oxlint happens to be on
+// PATH. Global installs drift: a stale global (e.g. Homebrew's 1.36.x) shipped
+// a jsx-a11y/aria-proptypes false positive on template-literal aria-label
+// values that later releases fixed, which made the gate disagree with the
+// project's own `oxlint .`.
+//
+// A missing or half-written node_modules (fresh clone, mid `bun install`, or a
+// broken .bin symlink) makes os.Stat fail, so found is false and the caller
+// falls back to PATH rather than treating a transient state as a real result.
+func resolveOxlintBin(appPath string) (string, bool) {
+	dir, err := filepath.Abs(appPath)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp file: %w", err)
+		return "oxlint", false
 	}
-	tmpPath := tmpFile.Name()
-	_ = tmpFile.Close()
-	defer func() { _ = os.Remove(tmpPath) }()
+	for {
+		candidate := filepath.Join(dir, "node_modules", ".bin", "oxlint")
+		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
+			return candidate, true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return "oxlint", false
+		}
+		dir = parent
+	}
+}
 
-	// Run oxlint via shell to avoid Go 1.19+ relative path issues
-	// Redirect both stdout and stderr to the temp file
-	shellCmd := fmt.Sprintf("oxlint --fix . > %s 2>&1", tmpPath)
-	cmd := exec.Command("bash", "-c", shellCmd)
+// runOxlint runs Oxlint with --fix, preferring the project-pinned binary (see
+// resolveOxlintBin). When no local install is found it falls back to a PATH
+// oxlint; when oxlint is unavailable entirely — node_modules not installed yet,
+// or an install still in flight — it skips without blocking and without
+// reporting a false clean pass, emitting a visible notice instead. Combined
+// stdout+stderr is returned so the caller can parse diagnostics.
+func runOxlint(appPath string) (string, error) {
+	bin, local := resolveOxlintBin(appPath)
+	if !local {
+		if _, err := exec.LookPath(bin); err != nil {
+			fmt.Fprintf(os.Stderr, "   ⚠️  oxlint not found for %s — run your install (e.g. bun install); skipping lint\n", appPath)
+			return "", nil
+		}
+	}
+
+	cmd := exec.Command(bin, "--fix", ".")
 	cmd.Dir = appPath
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
 	_ = cmd.Run() // Ignore exit code, oxlint returns non-zero when errors found
 
-	// Read the output file
-	output, err := os.ReadFile(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read oxlint output: %w", err)
-	}
-
-	return string(output), nil
+	return out.String(), nil
 }
 
 // parseEslintErrors parses ESLint output into individual errors
@@ -187,13 +215,13 @@ func parseEslintErrors(output string) []lintError {
 // parseOxlintErrors parses Oxlint output into individual errors
 // Oxlint output format:
 //
-//	  x plugin(rule): message
-//	   ,-[filepath:line:col]
+//	x plugin(rule): message
+//	 ,-[filepath:line:col]
 //
 // or for warnings:
 //
-//	  ! plugin(rule): message
-//	   ,-[filepath:line:col]
+//	! plugin(rule): message
+//	 ,-[filepath:line:col]
 func parseOxlintErrors(output string) []lintError {
 	var errors []lintError
 	lines := strings.Split(output, "\n")

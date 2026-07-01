@@ -1,10 +1,10 @@
 // Command validate-convex is a PreToolUse hook (Write|Edit) that lints the edited
 // Convex file and blocks (exit 2) on opted-in rules from .convex-lint.json:
 //
-//   • errorRules        — @milehighideas/oxlint-plugin-convex rules, run via
+//   - errorRules        — @milehighideas/oxlint-plugin-convex rules, run via
 //     oxlint (fast, syntactic). Gated on rule-id membership (oxlint -D does not
 //     override a JS-plugin rule's config severity).
-//   • eslintErrorRules  — @convex-dev/eslint-plugin rules (the type-aware ones
+//   - eslintErrorRules  — @convex-dev/eslint-plugin rules (the type-aware ones
 //     oxlint can't do, e.g. explicit-table-ids), run via eslint_d (the daemon
 //     keeps the TS program warm so a single-file lint is sub-second). Best
 //     effort: if eslint_d isn't installed, this pass is silently skipped.
@@ -94,9 +94,18 @@ type oxlintResult struct {
 }
 
 // oxlintViolations runs oxlint on path and returns formatted messages for any
-// convex(*) diagnostic whose rule id is in want.
-func oxlintViolations(path string, want map[string]bool) []string {
-	out, _ := exec.Command("oxlint", "--format=json", path).Output()
+// convex(*) diagnostic whose rule id is in want. It uses the project-pinned
+// oxlint (node_modules/.bin/oxlint) so the edit-time hook matches the version
+// the commit gate and app lint use. Best effort: if it isn't installed (fresh
+// clone, mid-install), returns nil so a transient state never blocks an edit.
+func oxlintViolations(projectRoot, path string, want map[string]bool) []string {
+	bin := filepath.Join(projectRoot, "node_modules", ".bin", "oxlint")
+	if _, err := os.Stat(bin); err != nil {
+		return nil // oxlint not installed — skip (mirrors eslintViolations)
+	}
+	cmd := exec.Command(bin, "--format=json", path)
+	cmd.Dir = projectRoot
+	out, _ := cmd.Output()
 	var res oxlintResult
 	if json.Unmarshal(out, &res) != nil {
 		return nil
@@ -180,12 +189,12 @@ func main() {
 		os.Exit(0) // fully dormant
 	}
 
+	cwd, _ := os.Getwd()
 	var msgs []string
 	if len(oxSet) > 0 {
-		msgs = append(msgs, oxlintViolations(path, oxSet)...)
+		msgs = append(msgs, oxlintViolations(cwd, path, oxSet)...)
 	}
 	if len(esSet) > 0 {
-		cwd, _ := os.Getwd()
 		msgs = append(msgs, eslintViolations(cwd, path, esSet)...)
 	}
 

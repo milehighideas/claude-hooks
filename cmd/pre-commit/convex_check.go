@@ -87,8 +87,12 @@ type eslintResult struct {
 // membership, not oxlint severity (oxlint -D does not override a JS-plugin
 // rule's config severity).
 func oxlintCommitViolations(projectRoot string, files []string, want map[string]bool) []string {
+	// Use the project-pinned oxlint (see resolveOxlintBin) so this gate runs the
+	// same version as the app lint pass. A missing install degrades to the
+	// unmarshal-failure path below (non-blocking), same as before.
+	oxlintBin, _ := resolveOxlintBin(projectRoot)
 	args := append([]string{"--format=json"}, files...)
-	cmd := exec.Command("oxlint", args...)
+	cmd := exec.Command(oxlintBin, args...)
 	cmd.Dir = projectRoot
 	out, _ := cmd.Output() // non-zero exit when findings exist; parse stdout regardless
 

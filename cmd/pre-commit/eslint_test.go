@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -361,4 +363,65 @@ func TestShouldFilterLintErrorWithDefaults(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResolveOxlintBin(t *testing.T) {
+	writeBin := func(t *testing.T, dir string) string {
+		t.Helper()
+		bin := filepath.Join(dir, "node_modules", ".bin")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(bin, "oxlint")
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	// No local install anywhere → fall back to bare "oxlint", found=false so the
+	// caller can decide whether PATH has one.
+	t.Run("falls back to PATH when no local install", func(t *testing.T) {
+		got, found := resolveOxlintBin(t.TempDir())
+		if got != "oxlint" || found {
+			t.Errorf("resolveOxlintBin() = (%q, %v), want (%q, false)", got, found, "oxlint")
+		}
+	})
+
+	// Local install in the app dir itself is preferred.
+	t.Run("prefers app-local node_modules/.bin/oxlint", func(t *testing.T) {
+		root := t.TempDir()
+		want := writeBin(t, root)
+		got, found := resolveOxlintBin(root)
+		if got != want || !found {
+			t.Errorf("resolveOxlintBin() = (%q, %v), want (%q, true)", got, found, want)
+		}
+	})
+
+	// A monorepo app with no local install walks up to the workspace-root install.
+	t.Run("walks up to a parent node_modules install", func(t *testing.T) {
+		root := t.TempDir()
+		want := writeBin(t, root)
+		appPath := filepath.Join(root, "apps", "story")
+		if err := os.MkdirAll(appPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, found := resolveOxlintBin(appPath)
+		if got != want || !found {
+			t.Errorf("resolveOxlintBin() = (%q, %v), want (%q, true)", got, found, want)
+		}
+	})
+
+	// A directory (not a file) named oxlint — e.g. a half-written install — must
+	// be ignored, not returned as the binary.
+	t.Run("ignores a directory named oxlint", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "node_modules", ".bin", "oxlint"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		got, found := resolveOxlintBin(root)
+		if got != "oxlint" || found {
+			t.Errorf("resolveOxlintBin() = (%q, %v), want (%q, false)", got, found, "oxlint")
+		}
+	})
 }
