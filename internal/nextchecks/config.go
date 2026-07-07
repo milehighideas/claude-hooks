@@ -28,6 +28,11 @@ type ImageConfig struct {
 	PublicDir    string   `json:"publicDir"`
 	Extensions   []string `json:"extensions"`
 	ExcludePaths []string `json:"excludePaths"`
+	// Ignore lists asset-ref path prefixes to skip (e.g. "/favicon.ico"). Use
+	// for assets Next serves that don't live under public/ — most commonly
+	// app-router metadata files like app/favicon.ico, which resolve at runtime
+	// as /favicon.ico but have no public/ counterpart. Mirrors LinkConfig.Ignore.
+	Ignore []string `json:"ignore"`
 }
 
 // LinkConfig controls the internal-link check.

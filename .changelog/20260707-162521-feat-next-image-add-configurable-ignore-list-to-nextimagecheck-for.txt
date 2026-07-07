@@ -1,0 +1,1 @@
+feat(next-image): add configurable ignore list to nextImageCheck for app-router assets like /favicon.ico

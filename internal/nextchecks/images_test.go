@@ -53,6 +53,39 @@ func TestCheckImages(t *testing.T) {
 	}
 }
 
+func TestCheckImagesIgnore(t *testing.T) {
+	app := t.TempDir()
+	// /favicon.ico is served by Next from app/favicon.ico (no public/ copy).
+	writeFile(t, filepath.Join(app, "public", "a.png"), "x")
+	writeFile(t, filepath.Join(app, "app", "page.tsx"), `
+		export default function P() {
+			return (<>
+				<img src="/a.png" />
+				<link rel="icon" href="/favicon.ico" />
+				<link rel="mask" href="/favicon.svg" />
+			</>);
+		}
+	`)
+
+	// Without ignore, both favicon refs are flagged as missing.
+	res, err := CheckImages(app, ImageConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Misses) != 2 {
+		t.Fatalf("want 2 misses without ignore, got %d: %+v", len(res.Misses), res.Misses)
+	}
+
+	// A prefix in Ignore skips matching refs.
+	res, err = CheckImages(app, ImageConfig{Ignore: []string{"/favicon."}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Misses) != 0 {
+		t.Fatalf("ignored refs must not be reported; got %+v", res.Misses)
+	}
+}
+
 func TestCheckImagesSkipsTestFiles(t *testing.T) {
 	app := t.TempDir()
 	writeFile(t, filepath.Join(app, "public", "real.png"), "x")

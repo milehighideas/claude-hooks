@@ -31,6 +31,9 @@ func CheckImages(appPath string, cfg ImageConfig) (Result, error) {
 		}
 		for _, m := range re.FindAllStringSubmatch(string(data), -1) {
 			ref := stripQueryHash(m[1])
+			if imageRefIgnored(ref, cfg.Ignore) {
+				continue
+			}
 			if _, ok := seen[ref]; !ok {
 				seen[ref] = file
 			}
@@ -46,6 +49,18 @@ func CheckImages(appPath string, cfg ImageConfig) (Result, error) {
 	}
 	sortMisses(res.Misses)
 	return res, nil
+}
+
+// imageRefIgnored reports whether ref matches a configured ignore prefix. Use
+// for asset paths Next serves that have no public/ counterpart — e.g. the
+// app-router /favicon.ico (from app/favicon.ico).
+func imageRefIgnored(ref string, ignore []string) bool {
+	for _, ig := range ignore {
+		if ig != "" && strings.HasPrefix(ref, ig) {
+			return true
+		}
+	}
+	return false
 }
 
 // imageRefRegexp builds a matcher for leading-slash asset paths with one of the
