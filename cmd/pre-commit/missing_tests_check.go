@@ -146,17 +146,11 @@ func collectMissingTestsReport(cfg MissingTestsCheckConfig, projectRoot string, 
 	// db.get(id) → db.get("table", id)) pass without tripping over
 	// pre-existing untested files.
 	if cfg.StatusFilter == "added" {
-		addedSet, err := getNewlyAddedFiles()
+		narrowed, err := narrowToAddedFiles(stagedFiles, projectRoot)
 		if err != nil {
 			return nil, fmt.Errorf("getting newly added files: %w", err)
 		}
-		filtered := stagedFiles[:0]
-		for _, f := range stagedFiles {
-			if addedSet[f] {
-				filtered = append(filtered, f)
-			}
-		}
-		stagedFiles = filtered
+		stagedFiles = narrowed
 	}
 
 	// No per-path scoping: fall back to global-mode behavior.

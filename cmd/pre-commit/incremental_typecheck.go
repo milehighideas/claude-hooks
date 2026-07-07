@@ -52,8 +52,15 @@ func (it *IncrementalTypecheck) Run() error {
 	// Find type definition files to include
 	typeDefFiles := it.findTypeDefinitionFiles()
 
-	// Build tsc-files command based on config
-	args := []string{"tsc-files", "--noEmit"}
+	// Resolve the project's installed tsc-files (never an npx-fetched one). A
+	// missing tool fails the commit rather than passing unchecked files.
+	bin, ok := resolveNodeBin(it.projectPath, "tsc-files")
+	if !ok {
+		return fmt.Errorf("tsc-files is not installed — run your install and retry")
+	}
+
+	// Build tsc-files args based on config
+	args := []string{"--noEmit"}
 	if it.typecheckFilter.SkipLibCheck != nil && *it.typecheckFilter.SkipLibCheck {
 		args = append(args, "--skipLibCheck")
 	}
@@ -61,7 +68,7 @@ func (it *IncrementalTypecheck) Run() error {
 	args = append(args, relativePaths...)
 
 	// Run tsc-files
-	cmd := exec.Command("npx", args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = it.projectPath
 
 	var stdout, stderr bytes.Buffer
@@ -249,8 +256,15 @@ func (it *IncrementalTypecheck) RunBuffered() (string, error) {
 	// Find type definition files to include
 	typeDefFiles := it.findTypeDefinitionFiles()
 
-	// Build tsc-files command based on config
-	args := []string{"tsc-files", "--noEmit"}
+	// Resolve the project's installed tsc-files (never an npx-fetched one). A
+	// missing tool fails the commit rather than passing unchecked files.
+	bin, ok := resolveNodeBin(it.projectPath, "tsc-files")
+	if !ok {
+		return output.String(), fmt.Errorf("tsc-files is not installed — run your install and retry")
+	}
+
+	// Build tsc-files args based on config
+	args := []string{"--noEmit"}
 	if it.typecheckFilter.SkipLibCheck != nil && *it.typecheckFilter.SkipLibCheck {
 		args = append(args, "--skipLibCheck")
 	}
@@ -258,7 +272,7 @@ func (it *IncrementalTypecheck) RunBuffered() (string, error) {
 	args = append(args, relativePaths...)
 
 	// Run tsc-files
-	cmd := exec.Command("npx", args...)
+	cmd := exec.Command(bin, args...)
 	cmd.Dir = it.projectPath
 
 	var stdout, stderr bytes.Buffer

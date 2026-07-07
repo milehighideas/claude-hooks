@@ -2,6 +2,7 @@ package main
 
 import (
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -46,6 +47,36 @@ func getNewlyAddedFiles() (map[string]bool, error) {
 		}
 	}
 	return result, nil
+}
+
+// narrowToAddedFiles filters stagedFiles down to those that are newly added
+// (git status "A"). It backs the statusFilter:"added" escape hatch shared by
+// the stub, missing-tests, and redundant-createdAt checks, letting mechanical
+// bulk refactors (e.g. a package rename) move existing files without tripping
+// checks that gate pre-existing violations.
+//
+// Callers pass absolute paths (stagedAbs) while getNewlyAddedFiles reports
+// repo-relative paths, so each file is matched on either form — the earlier
+// inline implementations compared only the absolute form against the relative
+// set, which silently matched nothing.
+func narrowToAddedFiles(stagedFiles []string, projectRoot string) ([]string, error) {
+	addedSet, err := getNewlyAddedFiles()
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]string, 0, len(stagedFiles))
+	for _, f := range stagedFiles {
+		if addedSet[f] {
+			filtered = append(filtered, f)
+			continue
+		}
+		if rel, err := filepath.Rel(projectRoot, f); err == nil {
+			if addedSet[filepath.ToSlash(rel)] {
+				filtered = append(filtered, f)
+			}
+		}
+	}
+	return filtered, nil
 }
 
 // categorizeFiles separates files into app-specific groups and detects shared path changes

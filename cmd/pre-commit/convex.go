@@ -21,7 +21,10 @@ func checkConvex(config ConvexConfig) error {
 		marker = DefaultConvexSuccessMarker
 	}
 
-	output, err := runConvexDev(config.Path, config.PackageManager)
+	output, ok, err := runConvexDev(config.Path)
+	if !ok {
+		return fmt.Errorf("convex CLI is not installed at %s — run your install and retry", config.Path)
+	}
 	failed := err != nil || !strings.Contains(output, marker)
 	_ = writeRunReport("convex-validation", "Convex validation", output, failed)
 
@@ -37,23 +40,17 @@ func checkConvex(config ConvexConfig) error {
 	return nil
 }
 
-// runConvexDev runs convex dev --once using the configured package manager
-func runConvexDev(path string, packageManager string) (string, error) {
-	var runner string
-	var args []string
-	switch packageManager {
-	case "bun":
-		runner = "bunx"
-		args = []string{"convex", "dev", "--once"}
-	case "yarn":
-		runner = "yarn"
-		args = []string{"dlx", "convex", "dev", "--once"}
-	default:
-		runner = "npx"
-		args = []string{"convex", "dev", "--once"}
+// runConvexDev runs `convex dev --once` using the project's installed Convex CLI
+// (see resolveNodeBin), never a bunx/npx-fetched one. ok is false when convex
+// isn't installed, so the caller fails the commit loudly rather than passing an
+// unvalidated backend.
+func runConvexDev(path string) (string, bool, error) {
+	bin, ok := resolveNodeBin(path, "convex")
+	if !ok {
+		return "", false, nil
 	}
 
-	cmd := exec.Command(runner, args...)
+	cmd := exec.Command(bin, "dev", "--once")
 	cmd.Dir = path
 
 	var stdout, stderr bytes.Buffer
@@ -65,5 +62,5 @@ func runConvexDev(path string, packageManager string) (string, error) {
 	// Combine stdout and stderr
 	output := stdout.String() + stderr.String()
 
-	return output, err
+	return output, true, err
 }

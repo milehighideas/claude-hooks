@@ -87,10 +87,10 @@ type eslintResult struct {
 // membership, not oxlint severity (oxlint -D does not override a JS-plugin
 // rule's config severity).
 func oxlintCommitViolations(projectRoot string, files []string, want map[string]bool) []string {
-	// Use the project-pinned oxlint (see resolveOxlintBin) so this gate runs the
-	// same version as the app lint pass. A missing install degrades to the
+	// Use the project's installed oxlint (see resolveNodeBin) so this gate runs
+	// the same version as the app lint pass. A missing install degrades to the
 	// unmarshal-failure path below (non-blocking), same as before.
-	oxlintBin, _ := resolveOxlintBin(projectRoot)
+	oxlintBin, _ := resolveNodeBin(projectRoot, "oxlint")
 	args := append([]string{"--format=json"}, files...)
 	cmd := exec.Command(oxlintBin, args...)
 	cmd.Dir = projectRoot
@@ -171,8 +171,10 @@ func runConvexCheck(projectRoot string, stagedAbs []string) error {
 	failed := len(diags) > 0
 	_ = writeRunReport("convex-check", "Convex check", strings.Join(diags, "\n"), failed)
 	if failed {
+		printStatus("Convex check", false, fmt.Sprintf("%d violation(s)", len(diags)))
 		printReportHint("convex-check/")
 		return fmt.Errorf("convexCheck: %d violation(s)\n%s", len(diags), strings.Join(diags, "\n"))
 	}
+	printStatus("Convex check", true, fmt.Sprintf("%d file(s)", len(files)))
 	return nil
 }

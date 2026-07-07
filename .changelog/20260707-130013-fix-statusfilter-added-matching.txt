@@ -1,0 +1,1 @@
+fix(pre-commit): make statusFilter "added" match staged files correctly (abs/rel bug) and add statusFilter support to the redundant-createdAt check so bulk renames of pre-existing schema files pass

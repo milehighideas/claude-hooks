@@ -1,0 +1,1 @@
+feat(pre-commit): resolve project-local node_modules/.bin CLIs (tsc/tsgo/tsc-files/eslint/oxlint/lint-staged/convex/prettier) so gate checks run the installed version instead of a global or npx/bunx-fetched copy

@@ -11,25 +11,20 @@ func runLintStaged(cfg LintStagedConfig) error {
 		fmt.Println("Running lint-staged...")
 	}
 
-	pm := cfg.PackageManager
-	if pm == "" {
-		pm = "pnpm"
+	// Run the project's installed lint-staged (never a bunx/npx-fetched one). A
+	// missing tool fails the commit rather than silently skipping formatting.
+	bin, ok := resolveNodeBin(".", "lint-staged")
+	if !ok {
+		if compactMode() {
+			printStatus("Formatting", false, "lint-staged not installed")
+		}
+		return fmt.Errorf("lint-staged is not installed — run your install and retry")
 	}
-
-	// Build command based on package manager
-	var cmd string
-	var args []string
-	if pm == "bun" {
-		cmd = "bunx"
-		args = []string{"lint-staged", "--no-stash"}
-	} else {
-		cmd = pm
-		args = []string{"exec", "lint-staged", "--no-stash"}
-	}
+	args := []string{"--no-stash"}
 
 	if compactMode() {
 		// Capture output instead of piping to terminal
-		if _, err := runCommandCapturedWithEnv(cfg.Env, cmd, args...); err != nil {
+		if _, err := runCommandCapturedWithEnv(cfg.Env, bin, args...); err != nil {
 			printStatus("Formatting", false, "lint-staged failed")
 			return fmt.Errorf("lint-staged failed: %w", err)
 		}
@@ -37,7 +32,7 @@ func runLintStaged(cfg LintStagedConfig) error {
 		return nil
 	}
 
-	if err := runCommandWithEnv(cfg.Env, cmd, args...); err != nil {
+	if err := runCommandWithEnv(cfg.Env, bin, args...); err != nil {
 		return fmt.Errorf("lint-staged failed: %w", err)
 	}
 	fmt.Println("Formatting complete")

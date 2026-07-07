@@ -97,15 +97,16 @@ func writeLintReport(appName, linterName, rawOutput string, allErrors, realError
 	return writeDualReport(baseDir, "lint", appName, findings, sb.String())
 }
 
-// runEslint runs ESLint with --fix
+// runEslint runs the project's installed ESLint with --fix (see resolveNodeBin).
+// It never reaches for a global or npx-fetched copy; if eslint isn't installed
+// it returns an error so the commit fails loudly rather than passing unlinted.
 func runEslint(appPath string) (string, error) {
-	// Use exec.LookPath to find pnpm in PATH (avoids Go 1.19+ relative path security check)
-	pnpmPath, err := exec.LookPath("pnpm")
-	if err != nil {
-		return "", fmt.Errorf("pnpm not found in PATH: %w", err)
+	bin, ok := resolveNodeBin(appPath, "eslint")
+	if !ok {
+		return "", fmt.Errorf("eslint is not installed for %s — run your install and retry", appPath)
 	}
 
-	cmd := exec.Command(pnpmPath, "eslint", "--fix", ".")
+	cmd := exec.Command(bin, "--fix", ".")
 	cmd.Dir = appPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -115,49 +116,15 @@ func runEslint(appPath string) (string, error) {
 	return stdout.String(), nil
 }
 
-// resolveOxlintBin returns the oxlint executable to run and whether a
-// project-local install was found. It prefers a local install
-// (node_modules/.bin/oxlint, found by walking up from appPath) so the project's
-// pinned version is used instead of whatever global oxlint happens to be on
-// PATH. Global installs drift: a stale global (e.g. Homebrew's 1.36.x) shipped
-// a jsx-a11y/aria-proptypes false positive on template-literal aria-label
-// values that later releases fixed, which made the gate disagree with the
-// project's own `oxlint .`.
-//
-// A missing or half-written node_modules (fresh clone, mid `bun install`, or a
-// broken .bin symlink) makes os.Stat fail, so found is false and the caller
-// falls back to PATH rather than treating a transient state as a real result.
-func resolveOxlintBin(appPath string) (string, bool) {
-	dir, err := filepath.Abs(appPath)
-	if err != nil {
-		return "oxlint", false
-	}
-	for {
-		candidate := filepath.Join(dir, "node_modules", ".bin", "oxlint")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return candidate, true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return "oxlint", false
-		}
-		dir = parent
-	}
-}
-
-// runOxlint runs Oxlint with --fix, preferring the project-pinned binary (see
-// resolveOxlintBin). When no local install is found it falls back to a PATH
-// oxlint; when oxlint is unavailable entirely — node_modules not installed yet,
-// or an install still in flight — it skips without blocking and without
-// reporting a false clean pass, emitting a visible notice instead. Combined
-// stdout+stderr is returned so the caller can parse diagnostics.
+// runOxlint runs the project's installed Oxlint with --fix (see resolveNodeBin).
+// It never falls back to a global or network-fetching runner. If oxlint isn't
+// installed it returns an error so the commit fails loudly — a missing linter
+// must never pass as a clean lint. Combined stdout+stderr is returned for
+// parsing.
 func runOxlint(appPath string) (string, error) {
-	bin, local := resolveOxlintBin(appPath)
-	if !local {
-		if _, err := exec.LookPath(bin); err != nil {
-			fmt.Fprintf(os.Stderr, "   ⚠️  oxlint not found for %s — run your install (e.g. bun install); skipping lint\n", appPath)
-			return "", nil
-		}
+	bin, ok := resolveNodeBin(appPath, "oxlint")
+	if !ok {
+		return "", fmt.Errorf("oxlint is not installed for %s — run your install (e.g. bun install) and retry", appPath)
 	}
 
 	cmd := exec.Command(bin, "--fix", ".")
@@ -307,24 +274,18 @@ func findConvexEslintPath() string {
 	return ""
 }
 
-// runConvexEslint runs ESLint in a convex/backend package directory (no --fix, analysis only)
+// runConvexEslint runs the project's installed ESLint in a convex/backend
+// package directory (no --fix, analysis only). It never reaches for a global or
+// npx-fetched copy; when a convex eslint config exists but eslint isn't
+// installed it returns an error so the commit fails loudly rather than skipping
+// the check.
 func runConvexEslint(pkgPath string) (string, error) {
-	eslintPath, err := exec.LookPath("eslint")
-	if err != nil {
-		// Fall back to npx
-		npxPath, npxErr := exec.LookPath("npx")
-		if npxErr != nil {
-			return "", fmt.Errorf("eslint not found in PATH: %w", err)
-		}
-		eslintPath = npxPath
+	bin, ok := resolveNodeBin(pkgPath, "eslint")
+	if !ok {
+		return "", fmt.Errorf("eslint is not installed for %s — run your install and retry", pkgPath)
 	}
 
-	var cmd *exec.Cmd
-	if filepath.Base(eslintPath) == "npx" {
-		cmd = exec.Command(eslintPath, "eslint", ".")
-	} else {
-		cmd = exec.Command(eslintPath, ".")
-	}
+	cmd := exec.Command(bin, ".")
 	cmd.Dir = pkgPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -350,8 +311,11 @@ func runConvexEslintBuffered(lf LintFilter) (string, error) {
 
 	lintOutput, err := runConvexEslint(pkgPath)
 	if err != nil {
-		fmt.Fprintf(&output, "   ⚠ ESLint failed to run in %s: %v\n", pkgPath, err)
-		return output.String(), nil // Non-fatal: don't block on ESLint infra issues
+		// runConvexEslint only errors when eslint isn't installed (it ignores
+		// eslint's own exit code). A convex eslint config exists, so that's a
+		// setup error that must fail the commit — never a silent skip.
+		fmt.Fprintf(&output, "   ❌ %v\n", err)
+		return output.String(), err
 	}
 
 	errors := parseEslintErrors(lintOutput)

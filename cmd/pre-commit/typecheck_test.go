@@ -1,8 +1,9 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -66,7 +67,7 @@ src/bar.tsx(25,10): error TS2742: The inferred type cannot be named without a re
 			},
 		},
 		{
-			name: "multi-line error with tab indentation",
+			name:   "multi-line error with tab indentation",
 			output: "src/utils.ts(50,12): error TS2345: Argument of type 'string' is not assignable.\n\tExpected type 'number'.\n",
 			expected: []tsError{
 				{
@@ -123,7 +124,7 @@ src/c.ts(3,3): error TS2742: Cannot infer.
 			},
 		},
 		{
-			name: "error with path containing parentheses in filename",
+			name:   "error with path containing parentheses in filename",
 			output: "src/components/Button(old).tsx(5,10): error TS2304: Cannot find name 'Props'.\n",
 			expected: []tsError{
 				{
@@ -134,7 +135,7 @@ src/c.ts(3,3): error TS2742: Cannot infer.
 			},
 		},
 		{
-			name: "error with Windows-style path",
+			name:   "error with Windows-style path",
 			output: "C:\\Users\\dev\\project\\src\\index.ts(10,5): error TS2322: Type error.\n",
 			expected: []tsError{
 				{
@@ -159,7 +160,7 @@ Found 1 error.
 			},
 		},
 		{
-			name: "error in test file path",
+			name:   "error in test file path",
 			output: "src/__tests__/utils.test.ts(10,5): error TS2322: Type error.\n",
 			expected: []tsError{
 				{
@@ -170,7 +171,7 @@ Found 1 error.
 			},
 		},
 		{
-			name: "error with high line and column numbers",
+			name:   "error with high line and column numbers",
 			output: "src/large-file.ts(9999,150): error TS2551: Property 'foo' does not exist.\n",
 			expected: []tsError{
 				{
@@ -434,161 +435,103 @@ func TestShouldFilterErrorWithDefaults(t *testing.T) {
 func TestBuildTypecheckCmd(t *testing.T) {
 	boolPtr := func(b bool) *bool { return &b }
 
-	tests := []struct {
-		name           string
-		packageManager string
-		filter         string
-		appPath        string
-		tf             TypecheckFilter
-		wantDir        string   // expected cmd.Dir (empty means unset)
-		wantPath       string   // substring expected in cmd.Path
-		wantNoFilter   bool     // bun should NOT have --filter in args
-		wantArgs       []string // expected args (nil to skip check)
-	}{
-		{
-			name:           "bun uses cmd.Dir and npx instead of --filter",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsc", "--noEmit"},
-		},
-		{
-			name:           "bun build mode uses cmd.Dir and npx",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseBuildMode: boolPtr(true)},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsc", "-b"},
-		},
-		{
-			name:           "bun with skipLibCheck uses cmd.Dir and npx",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{SkipLibCheck: boolPtr(true)},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsc", "--noEmit", "--skipLibCheck"},
-		},
-		{
-			name:           "pnpm uses --filter flag",
-			packageManager: "pnpm",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{},
-			wantDir:        "",
-			wantPath:       "pnpm",
-			wantArgs:       []string{"pnpm", "--filter", "@camconow/portal", "exec", "tsc", "--noEmit"},
-		},
-		{
-			name:           "yarn uses workspace flag",
-			packageManager: "yarn",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{},
-			wantDir:        "",
-			wantPath:       "yarn",
-			wantArgs:       []string{"yarn", "workspace", "@camconow/portal", "exec", "tsc", "--noEmit"},
-		},
-		{
-			name:           "bun with useTsgo swaps tsc -> tsgo",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseTsgo: boolPtr(true)},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsgo", "--noEmit"},
-		},
-		{
-			name:           "bun with useTsgo + skipLibCheck",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseTsgo: boolPtr(true), SkipLibCheck: boolPtr(true)},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsgo", "--noEmit", "--skipLibCheck"},
-		},
-		{
-			name:           "bun with useTsgo + build mode",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseTsgo: boolPtr(true), UseBuildMode: boolPtr(true)},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsgo", "-b"},
-		},
-		{
-			name:           "pnpm with useTsgo",
-			packageManager: "pnpm",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseTsgo: boolPtr(true)},
-			wantDir:        "",
-			wantPath:       "pnpm",
-			wantArgs:       []string{"pnpm", "--filter", "@camconow/portal", "exec", "tsgo", "--noEmit"},
-		},
-		{
-			name:           "yarn with useTsgo + build mode",
-			packageManager: "yarn",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseTsgo: boolPtr(true), UseBuildMode: boolPtr(true)},
-			wantDir:        "",
-			wantPath:       "yarn",
-			wantArgs:       []string{"yarn", "workspace", "@camconow/portal", "exec", "tsgo", "-b"},
-		},
-		{
-			name:           "useTsgo explicitly false falls back to tsc",
-			packageManager: "bun",
-			filter:         "@camconow/portal",
-			appPath:        "/project/apps/portal",
-			tf:             TypecheckFilter{UseTsgo: boolPtr(false)},
-			wantDir:        "/project/apps/portal",
-			wantPath:       "npx",
-			wantNoFilter:   true,
-			wantArgs:       []string{"npx", "tsc", "--noEmit"},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cmd := buildTypecheckCmd(tt.packageManager, tt.filter, tt.appPath, tt.tf)
-
-			if cmd.Dir != tt.wantDir {
-				t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, tt.wantDir)
+	// mkApp creates a temp app dir whose node_modules/.bin holds the given tools,
+	// mimicking an installed project. Pass no tools to model an uninstalled app.
+	mkApp := func(t *testing.T, tools ...string) string {
+		t.Helper()
+		root := t.TempDir()
+		if len(tools) > 0 {
+			binDir := filepath.Join(root, "node_modules", ".bin")
+			if err := os.MkdirAll(binDir, 0o755); err != nil {
+				t.Fatal(err)
 			}
-
-			if !strings.Contains(cmd.Path, tt.wantPath) && !strings.HasSuffix(cmd.Path, tt.wantPath) {
-				t.Errorf("cmd.Path = %q, want it to contain %q", cmd.Path, tt.wantPath)
-			}
-
-			if tt.wantNoFilter {
-				for _, arg := range cmd.Args {
-					if arg == "--filter" {
-						t.Error("bun command should not use --filter flag")
-					}
+			for _, tool := range tools {
+				if err := os.WriteFile(filepath.Join(binDir, tool), []byte("#!/bin/sh\n"), 0o755); err != nil {
+					t.Fatal(err)
 				}
 			}
-
-			if tt.wantArgs != nil {
-				if !reflect.DeepEqual(cmd.Args, tt.wantArgs) {
-					t.Errorf("cmd.Args = %v, want %v", cmd.Args, tt.wantArgs)
-				}
-			}
-		})
+		}
+		return root
 	}
+
+	// When the compiler is installed, the pinned binary is run directly in the
+	// app dir — never through npx and never with a workspace --filter.
+	t.Run("runs the installed tsc directly", func(t *testing.T) {
+		app := mkApp(t, "tsc")
+		cmd, ok := buildTypecheckCmd("bun", "@x/portal", app, TypecheckFilter{})
+		if !ok {
+			t.Fatal("ok = false, want true when tsc is installed")
+		}
+		wantBin := filepath.Join(app, "node_modules", ".bin", "tsc")
+		if cmd.Path != wantBin {
+			t.Errorf("cmd.Path = %q, want %q", cmd.Path, wantBin)
+		}
+		if cmd.Dir != app {
+			t.Errorf("cmd.Dir = %q, want %q", cmd.Dir, app)
+		}
+		if !reflect.DeepEqual(cmd.Args, []string{wantBin, "--noEmit"}) {
+			t.Errorf("cmd.Args = %v", cmd.Args)
+		}
+		for _, arg := range cmd.Args {
+			if arg == "npx" || arg == "--filter" {
+				t.Errorf("cmd.Args must not contain npx/--filter: %v", cmd.Args)
+			}
+		}
+	})
+
+	t.Run("swaps to the installed tsgo with skipLibCheck", func(t *testing.T) {
+		app := mkApp(t, "tsgo")
+		cmd, ok := buildTypecheckCmd("bun", "@x/portal", app, TypecheckFilter{UseTsgo: boolPtr(true), SkipLibCheck: boolPtr(true)})
+		if !ok {
+			t.Fatal("ok = false, want true")
+		}
+		wantBin := filepath.Join(app, "node_modules", ".bin", "tsgo")
+		if !reflect.DeepEqual(cmd.Args, []string{wantBin, "--noEmit", "--skipLibCheck"}) {
+			t.Errorf("cmd.Args = %v", cmd.Args)
+		}
+	})
+
+	t.Run("build mode passes -b to the installed binary", func(t *testing.T) {
+		app := mkApp(t, "tsc")
+		cmd, ok := buildTypecheckCmd("bun", "@x/portal", app, TypecheckFilter{UseBuildMode: boolPtr(true)})
+		if !ok {
+			t.Fatal("ok = false, want true")
+		}
+		wantBin := filepath.Join(app, "node_modules", ".bin", "tsc")
+		if !reflect.DeepEqual(cmd.Args, []string{wantBin, "-b"}) {
+			t.Errorf("cmd.Args = %v", cmd.Args)
+		}
+	})
+
+	// Without a flat node_modules/.bin (yarn PnP, pnpm's isolated store), fall
+	// back to the package manager's workspace exec — still the installed
+	// compiler, never a fetched one.
+	t.Run("yarn PnP fallback uses workspace exec", func(t *testing.T) {
+		cmd, ok := buildTypecheckCmd("yarn", "@x/portal", mkApp(t), TypecheckFilter{})
+		if !ok {
+			t.Fatal("ok = false, want true (yarn workspace exec fallback)")
+		}
+		if !reflect.DeepEqual(cmd.Args, []string{"yarn", "workspace", "@x/portal", "exec", "tsc", "--noEmit"}) {
+			t.Errorf("cmd.Args = %v", cmd.Args)
+		}
+	})
+
+	t.Run("pnpm isolated fallback uses --filter exec", func(t *testing.T) {
+		cmd, ok := buildTypecheckCmd("pnpm", "@x/portal", mkApp(t), TypecheckFilter{UseTsgo: boolPtr(true)})
+		if !ok {
+			t.Fatal("ok = false, want true (pnpm exec fallback)")
+		}
+		if !reflect.DeepEqual(cmd.Args, []string{"pnpm", "--filter", "@x/portal", "exec", "tsgo", "--noEmit"}) {
+			t.Errorf("cmd.Args = %v", cmd.Args)
+		}
+	})
+
+	// bun/npm with nothing installed and no non-network runner → not runnable,
+	// so the caller skips instead of reaching for npx.
+	t.Run("bun with nothing installed is not runnable", func(t *testing.T) {
+		cmd, ok := buildTypecheckCmd("bun", "@x/portal", mkApp(t), TypecheckFilter{})
+		if ok || cmd != nil {
+			t.Errorf("got (%v, %v), want (nil, false)", cmd, ok)
+		}
+	})
 }

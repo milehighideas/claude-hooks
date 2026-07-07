@@ -62,6 +62,14 @@ type RedundantCreatedAtCheckConfig struct {
 	// Lighter; lets you adopt incrementally without failing on legacy
 	// schemas.
 	Mode string `json:"mode"`
+	// StatusFilter narrows which staged files are checked when Mode is
+	// "staged". "all" (default) checks every staged schema file (Added,
+	// Copied, Modified, Renamed). "added" only checks newly added files,
+	// so a mechanical bulk refactor (e.g. a package rename) can move
+	// existing schema files without re-flagging their pre-existing,
+	// grandfathered createdAt fields. The edit-time block-redundant-createdat
+	// hook still blocks NEW createdAt fields at Write time.
+	StatusFilter string `json:"statusFilter"`
 	// AppPaths restricts scanning to files whose project-relative path
 	// contains at least one of these substrings. Empty = scan the whole
 	// project. For this check the useful value is typically

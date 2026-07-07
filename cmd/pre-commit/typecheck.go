@@ -23,47 +23,50 @@ var DefaultErrorCodes = []string{"TS2589", "TS2742"}
 // DefaultExcludePaths are the path patterns excluded by default (test files)
 var DefaultExcludePaths = []string{"__tests__/", ".test.", ".spec."}
 
-// buildTypecheckCmd builds the tsc (or tsgo) command using the configured package manager.
-// For bun, --filter only works with package scripts, not direct executables,
-// so we run the binary directly and set cmd.Dir to the app path instead.
+// buildTypecheckCmd builds the tsc (or tsgo) command, preferring the project's
+// installed compiler (node_modules/.bin) so the gate uses the same version as
+// `bun run typecheck`/CI, never an npx-fetched one. ok is false when no compiler
+// can be run without fetching (bun/npm with nothing installed yet), so the
+// caller fails the commit instead of passing an unchecked project.
 //
 // When TypecheckFilter.UseTsgo is true, the binary name is swapped from `tsc`
 // (TypeScript 6.x) to `tsgo` (TypeScript 7 native preview, from
 // @typescript/native-preview). All flags pass through unchanged — tsgo accepts
 // --noEmit, --skipLibCheck, and -b.
-func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilter) *exec.Cmd {
+func buildTypecheckCmd(packageManager, filter, appPath string, tf TypecheckFilter) (*exec.Cmd, bool) {
 	bin := "tsc"
 	if tf.UseTsgo != nil && *tf.UseTsgo {
 		bin = "tsgo"
 	}
 
+	var args []string
 	if tf.UseBuildMode != nil && *tf.UseBuildMode {
-		switch packageManager {
-		case "bun":
-			cmd := exec.Command("npx", bin, "-b")
-			cmd.Dir = appPath
-			return cmd
-		case "yarn":
-			return exec.Command("yarn", "workspace", filter, "exec", bin, "-b")
-		default:
-			return exec.Command("pnpm", "--filter", filter, "exec", bin, "-b")
+		args = []string{"-b"}
+	} else {
+		args = []string{"--noEmit"}
+		if tf.SkipLibCheck != nil && *tf.SkipLibCheck {
+			args = append(args, "--skipLibCheck")
 		}
 	}
 
-	args := []string{"--noEmit"}
-	if tf.SkipLibCheck != nil && *tf.SkipLibCheck {
-		args = append(args, "--skipLibCheck")
+	// Prefer the project's installed compiler.
+	if local, ok := resolveNodeBin(appPath, bin); ok {
+		cmd := exec.Command(local, args...)
+		cmd.Dir = appPath
+		return cmd, true
 	}
 
+	// Non-network fallbacks for workspace layouts without a flat
+	// node_modules/.bin (yarn PnP, pnpm's isolated store): these still run the
+	// *installed* compiler via the package manager, not a fetched one.
 	switch packageManager {
-	case "bun":
-		cmd := exec.Command("npx", append([]string{bin}, args...)...)
-		cmd.Dir = appPath
-		return cmd
 	case "yarn":
-		return exec.Command("yarn", append([]string{"workspace", filter, "exec", bin}, args...)...)
+		return exec.Command("yarn", append([]string{"workspace", filter, "exec", bin}, args...)...), true
+	case "pnpm":
+		return exec.Command("pnpm", append([]string{"--filter", filter, "exec", bin}, args...)...), true
 	default:
-		return exec.Command("pnpm", append([]string{"--filter", filter, "exec", bin}, args...)...)
+		// bun / npm with nothing installed locally — no non-network runner.
+		return nil, false
 	}
 }
 
@@ -199,8 +202,12 @@ func runFilteredTypecheckBuffered(appName, appPath, filter, packageManager strin
 		excludePaths = DefaultExcludePaths
 	}
 
-	// Build tsc command using configured package manager
-	cmd := buildTypecheckCmd(packageManager, filter, appPath, tf)
+	// Build tsc command, preferring the project's installed compiler. A missing
+	// compiler fails the commit rather than passing an unchecked project.
+	cmd, ok := buildTypecheckCmd(packageManager, filter, appPath, tf)
+	if !ok {
+		return output.String(), fmt.Errorf("typecheck compiler (tsc/tsgo) is not installed for %s — run your install and retry", appName)
+	}
 
 	// Set NODE_OPTIONS for memory limit if configured
 	if nodeMemoryMB > 0 {

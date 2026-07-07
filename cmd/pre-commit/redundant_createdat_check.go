@@ -43,7 +43,15 @@ func collectRedundantCreatedAtReport(
 
 	switch mode {
 	case createdAtModeStaged:
-		for _, f := range stagedFiles {
+		files := stagedFiles
+		if cfg.StatusFilter == "added" {
+			narrowed, err := narrowToAddedFiles(stagedFiles, projectRoot)
+			if err != nil {
+				return nil, fmt.Errorf("getting newly added files: %w", err)
+			}
+			files = narrowed
+		}
+		for _, f := range files {
 			if !schemachecks.IsSchemaFile(f) {
 				continue
 			}

@@ -184,7 +184,7 @@ func runLintTo(w io.Writer, apps map[string]AppConfig, appFiles map[string][]str
 
 	wg.Wait()
 
-	if convexResult.Output != "" {
+	if convexResult.Output != "" || convexResult.Err != nil {
 		results = append(results, convexResult)
 	}
 
