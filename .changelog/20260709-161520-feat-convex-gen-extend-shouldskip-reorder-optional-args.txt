@@ -1,0 +1,1 @@
+feat(convex-gen): extend requireAuthGatedShouldSkip to auth-gated queries with optional args by reordering shouldSkip/options before them

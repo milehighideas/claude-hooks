@@ -89,12 +89,13 @@ func TestAuthGatedShouldSkip_RequiresGuardOnAuthGatedQuery(t *testing.T) {
 	}
 }
 
-// TestAuthGatedShouldSkip_OptionalArgsStayOptional guards the TS1016 pitfall:
-// TypeScript forbids a required param after an optional one, so an
-// auth-gated query with an OPTIONAL arg ahead of shouldSkip must keep
-// shouldSkip optional too (reordering the signature to make it required
-// would be a separate, call-site-breaking change, out of scope here).
-func TestAuthGatedShouldSkip_OptionalArgsStayOptional(t *testing.T) {
+// TestAuthGatedShouldSkip_RequiredReordersBeforeOptionalArgs verifies the
+// TS1016 fix: TypeScript forbids a required param after an optional one, so
+// an auth-gated query that also has OPTIONAL args gets its required
+// `shouldSkip` inserted BEFORE those optional args (reordering the emitted
+// signature) instead of being left optional. This is a deliberate,
+// call-site-breaking change for any such query once the flag is on.
+func TestAuthGatedShouldSkip_RequiredReordersBeforeOptionalArgs(t *testing.T) {
 	tmpDir := t.TempDir()
 	f := fixture{
 		name:          "thingco",
@@ -123,12 +124,94 @@ export const getMyFilteredThing = query({
 	hooksGen := NewHooksGenerator(cfg)
 	content := hooksGen.generateGroupedHookFileContent("things", filterByType(fns, FunctionTypeQuery), "query")
 
-	want := "export function useThingsGetMyFilteredThing(label?: string | null, shouldSkip?: boolean)"
+	want := "export function useThingsGetMyFilteredThing(shouldSkip: boolean, label?: string | null)"
 	if !strings.Contains(content, want) {
-		t.Errorf("auth-gated query with a leading optional arg must keep shouldSkip optional (required-after-optional is invalid TS):\n%s", content)
+		t.Errorf("auth-gated query with an optional arg must get a required shouldSkip reordered before it:\n%s", content)
 	}
-	if strings.Contains(content, "shouldSkip: boolean") {
-		t.Errorf("must not emit a required shouldSkip when an optional arg precedes it:\n%s", content)
+	if strings.Contains(content, "shouldSkip?: boolean") {
+		t.Errorf("must not emit an optional shouldSkip once the query is auth-gated:\n%s", content)
+	}
+}
+
+// TestAuthGatedShouldSkip_RequiredArgThenShouldSkipThenOptionalArg verifies
+// ordering when a query has BOTH a required arg and an optional arg: the
+// required arg comes first (as always), then the now-required shouldSkip,
+// then the optional arg — still valid TS (required, required, optional).
+func TestAuthGatedShouldSkip_RequiredArgThenShouldSkipThenOptionalArg(t *testing.T) {
+	tmpDir := t.TempDir()
+	f := fixture{
+		name:          "thingco",
+		convexPath:    "packages/convex/convex",
+		dataLayerPath: "packages/data-layer/src",
+		fileStructure: "grouped",
+		functionFiles: map[string]string{
+			"things.ts": `import { query } from './_generated/server';
+import { v } from 'convex/values';
+import { getAuthenticatedUser } from './usersAuth';
+
+export const getFilteredThingsByOwner = query({
+  args: { ownerName: v.string(), label: v.optional(v.string()) },
+  handler: async (ctx, { ownerName, label }) => {
+    const { user } = await getAuthenticatedUser(ctx);
+    return user;
+  },
+});
+`,
+		},
+	}
+	cfg := f.build(t, tmpDir)
+	cfg.DataLayer.RequireAuthGatedShouldSkip = true
+
+	_, fns := runPipeline(t, cfg)
+	hooksGen := NewHooksGenerator(cfg)
+	content := hooksGen.generateGroupedHookFileContent("things", filterByType(fns, FunctionTypeQuery), "query")
+
+	want := "export function useThingsGetFilteredThingsByOwner(ownerName: string, shouldSkip: boolean, label?: string | null)"
+	if !strings.Contains(content, want) {
+		t.Errorf("required arg must stay first, then required shouldSkip, then the optional arg:\n%s", content)
+	}
+}
+
+// TestAuthGatedShouldSkip_PaginatedOptionsReordersBeforeOptionalArgs verifies
+// the same reordering applies to paginated queries: the required `options`
+// object (carrying `shouldSkip: boolean`) is inserted before any optional
+// per-arg params, for the identical TS-ordering reason.
+func TestAuthGatedShouldSkip_PaginatedOptionsReordersBeforeOptionalArgs(t *testing.T) {
+	tmpDir := t.TempDir()
+	f := fixture{
+		name:          "thingco",
+		convexPath:    "packages/convex/convex",
+		dataLayerPath: "packages/data-layer/src",
+		fileStructure: "grouped",
+		functionFiles: map[string]string{
+			"things.ts": `import { query } from './_generated/server';
+import { v } from 'convex/values';
+import { paginationOptsValidator } from 'convex/server';
+import { getAuthenticatedUser } from './usersAuth';
+
+export const listMyFilteredThings = query({
+  args: { label: v.optional(v.string()), paginationOpts: paginationOptsValidator },
+  handler: async (ctx, { label, paginationOpts }) => {
+    const { user } = await getAuthenticatedUser(ctx);
+    return ctx.db.query('things').paginate(paginationOpts);
+  },
+});
+`,
+		},
+	}
+	cfg := f.build(t, tmpDir)
+	cfg.DataLayer.RequireAuthGatedShouldSkip = true
+
+	_, fns := runPipeline(t, cfg)
+	hooksGen := NewHooksGenerator(cfg)
+	content := hooksGen.generateGroupedHookFileContent("things", filterByType(fns, FunctionTypeQuery), "query")
+
+	want := "export function useThingsListMyFilteredThings(options: { initialNumItems?: number; shouldSkip: boolean }, label?: string | null)"
+	if !strings.Contains(content, want) {
+		t.Errorf("paginated auth-gated query with an optional arg must get a required options reordered before it:\n%s", content)
+	}
+	if strings.Contains(content, "options?: { initialNumItems?: number; shouldSkip?: boolean }") {
+		t.Errorf("must not emit an optional options once the paginated query is auth-gated:\n%s", content)
 	}
 }
 

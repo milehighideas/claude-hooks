@@ -201,6 +201,61 @@ export function useEventsGetEventById(
 }
 ```
 
+#### Requiring `shouldSkip` on auth-gated queries (`dataLayer.requireAuthGatedShouldSkip`)
+
+By default, `shouldSkip` is always optional — a caller can simply not pass it,
+and the query still runs. That's fine for public queries, but for a query
+whose backend handler requires authentication (throws if unauthenticated),
+an omitted `shouldSkip` means the hook fires during the window before the
+client has finished authenticating, producing a runtime error instead of a
+silent skip.
+
+Set `dataLayer.requireAuthGatedShouldSkip: true` and `dataLayer.authHelperNames`
+(defaults to `["getAuthenticatedUser", "getAuthenticatedUserForActions"]`) to
+make `shouldSkip` a **required, compiler-enforced** param on any query hook
+whose backend handler calls one of those helpers — every caller must now
+explicitly reckon with the unauthenticated case (e.g. `shouldSkip={!isSignedIn}`)
+or the build fails.
+
+```json
+{
+  "dataLayer": {
+    "requireAuthGatedShouldSkip": true,
+    "authHelperNames": ["getAuthenticatedUser", "getAuthenticatedUserForActions"]
+  }
+}
+```
+
+```typescript
+// Before (flag off, or query isn't auth-gated):
+export function useEventsGetMyRegistrations(shouldSkip?: boolean) { ... }
+
+// After (flag on, handler calls getAuthenticatedUser):
+export function useEventsGetMyRegistrations(shouldSkip: boolean) { ... }
+```
+
+**Queries with other args**: TypeScript forbids a required parameter after an
+optional one, so if the query also takes optional args, `shouldSkip` (or, for
+a paginated query, the `options` object that carries it) is inserted right
+after any required args and **before** the optional ones — reordering the
+signature relative to the historical trailing position:
+
+```typescript
+// getUserSessions(userId?, startDate?, endDate?) with the flag on:
+export function useLocationGetUserSessions(
+  shouldSkip: boolean,
+  userId?: Id<"users"> | null,
+  startDate?: string | null,
+  endDate?: string | null,
+) { ... }
+```
+
+This is a deliberate, call-site-breaking change for any already-generated hook
+that gains a required (and repositioned) `shouldSkip` when the flag is turned
+on — every existing caller needs the new argument added at its new position.
+Defaults to `false` for backwards compatibility; other projects using this
+same `convex-gen` binary are unaffected unless they opt in.
+
 ### API Wrappers (`generators.api: true`)
 
 Type-safe objects mapping function names to API references.

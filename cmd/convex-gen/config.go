@@ -74,9 +74,14 @@ type DataLayerConfig struct {
 	// calls one of AuthHelperNames gets a REQUIRED `shouldSkip: boolean` param
 	// instead of the default `shouldSkip?: boolean`. Forces every caller to
 	// reckon with the unauthenticated case at compile time instead of a runtime
-	// ConvexError. Defaults to false for backwards compatibility — other
-	// projects using this same convex-gen binary are unaffected unless they
-	// opt in.
+	// ConvexError. Applies regardless of the query's other args: if it also
+	// takes optional args, `shouldSkip` (or, for paginated queries, `options`)
+	// is inserted right after any required args and before the optional ones,
+	// since TypeScript forbids a required param after an optional one — so
+	// enabling this on a query with optional args is a call-site-breaking
+	// signature change for existing callers. Defaults to false for backwards
+	// compatibility — other projects using this same convex-gen binary are
+	// unaffected unless they opt in.
 	RequireAuthGatedShouldSkip bool `json:"requireAuthGatedShouldSkip"`
 	// AuthHelperNames lists the backend helper function calls (e.g.
 	// `getAuthenticatedUser(ctx)`) that mark a query as auth-gated for the
