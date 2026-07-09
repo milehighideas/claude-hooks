@@ -15,7 +15,8 @@
   "sharedPaths": [],
   "features": {
     "changelog": true,
-    "goLint": true
+    "goLint": true,
+    "goMissingTestsCheck": true
   },
   // Global mode: every commit that touches non-excluded files needs at
   // least one fragment under .changelog/*.txt at the repo root.
@@ -40,5 +41,14 @@
   "goLint": {
     "paths": ["cmd", "internal"],
     "tool": "golangci-lint"
+  },
+  // Dogfood the per-package Go missing-tests gate on this repo itself.
+  // mode "all" enforces that every package under cmd/ and internal/ has at
+  // least one *_test.go — the repo is fully covered, so this locks it in:
+  // any new untested package blocks the commit. (`go test ./...` still runs
+  // in the .githooks wrapper, covering the goTests runner's job.)
+  "goMissingTestsCheckConfig": {
+    "mode": "all",
+    "appPaths": ["cmd", "internal"]
   }
 }
