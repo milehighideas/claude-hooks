@@ -26,6 +26,8 @@ type Config struct {
 	LintFilter                    LintFilter                    `json:"lintFilter"`
 	LintStagedConfig              LintStagedConfig              `json:"lintStagedConfig"`
 	GoLint                        GoLintConfig                  `json:"goLint"`
+	GoMissingTestsCheck           GoMissingTestsCheckConfig     `json:"goMissingTestsCheckConfig"`
+	GoTests                       GoTestsConfig                 `json:"goTests"`
 	NativeBuild                   NativeBuildConfig             `json:"nativeBuild"`
 	Convex                        ConvexConfig                  `json:"convex"`
 	Build                         BuildConfig                   `json:"build"`
@@ -217,17 +219,19 @@ type Features struct {
 	// ran both together; it was split so each can be toggled, gated, and
 	// reported on separately. Keep these two flags in sync in .pre-commit.json
 	// if you want the old combined behavior.
-	Lint             bool `json:"lint"`
-	Typecheck        bool `json:"typecheck"`
-	LintStaged       bool `json:"lintStaged"`
-	FullLintOnCommit bool `json:"fullLintOnCommit"`
-	Tests            bool `json:"tests"`
-	Changelog        bool `json:"changelog"`
-	ConsoleCheck     bool `json:"consoleCheck"`
-	BranchProtection bool `json:"branchProtection"`
-	GoLint           bool `json:"goLint"`
-	ConvexValidation bool `json:"convexValidation"`
-	BuildCheck       bool `json:"buildCheck"`
+	Lint                bool `json:"lint"`
+	Typecheck           bool `json:"typecheck"`
+	LintStaged          bool `json:"lintStaged"`
+	FullLintOnCommit    bool `json:"fullLintOnCommit"`
+	Tests               bool `json:"tests"`
+	Changelog           bool `json:"changelog"`
+	ConsoleCheck        bool `json:"consoleCheck"`
+	BranchProtection    bool `json:"branchProtection"`
+	GoLint              bool `json:"goLint"`
+	GoMissingTestsCheck bool `json:"goMissingTestsCheck"`
+	GoTests             bool `json:"goTests"`
+	ConvexValidation    bool `json:"convexValidation"`
+	BuildCheck          bool `json:"buildCheck"`
 	// BundleCheck runs Metro/Webpack bundle-only validation per app
 	// (typically `expo export` for RN apps). Catches missing-dependency and
 	// bad-import errors that pass typecheck and lint but break the bundler.
@@ -242,7 +246,7 @@ type Features struct {
 	// surfacing legacy debt as warnings. Equivalent to setting
 	// srpConfig.errorScopes: ["changed"] but expressed as a single feature
 	// flag for the common "ratchet new work, audit existing code" workflow.
-	SrpStrictOnStaged       bool `json:"srpStrictOnStaged"`
+	SrpStrictOnStaged bool `json:"srpStrictOnStaged"`
 	// SrpNative runs structural SRP checks (file/type/function length, one type
 	// per file) on staged Swift and Kotlin files. Configured via srpNativeConfig.
 	// Hard-error policy: every violation blocks; scoping is staged-files only.
@@ -319,6 +323,31 @@ type LintStagedConfig struct {
 type GoLintConfig struct {
 	Paths []string `json:"paths"`
 	Tool  string   `json:"tool"`
+}
+
+// GoMissingTestsCheckConfig configures the per-package Go missing-tests gate.
+// A package directory with non-test .go source passes iff it contains at
+// least one *_test.go file.
+type GoMissingTestsCheckConfig struct {
+	// Mode is "staged" (default) — only check directories with a staged .go
+	// source file — or "all" — walk AppPaths and report every untested package.
+	Mode string `json:"mode"`
+	// AppPaths restricts scanning to files whose project-relative path contains
+	// at least one of these substrings. Empty = whole project.
+	AppPaths []string `json:"appPaths"`
+	// ExcludePaths skips files whose project-relative path contains any of these
+	// substrings. Exclusions always win over AppPaths.
+	ExcludePaths []string `json:"excludePaths"`
+}
+
+// GoTestsConfig configures the `go test` runner.
+type GoTestsConfig struct {
+	// Modules lists project-relative directories to run `go test ./...` in.
+	// Empty defaults to ".".
+	Modules []string `json:"modules"`
+	// AffectedOnly runs `go test .` only in the directories of staged Go files
+	// instead of `go test ./...` across the whole module.
+	AffectedOnly bool `json:"affectedOnly"`
 }
 
 // ConvexConfig configures Convex validation
