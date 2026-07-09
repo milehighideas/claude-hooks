@@ -49,6 +49,19 @@ func compactMode() bool {
 	return reportDir != ""
 }
 
+// absStaged converts staged file paths to absolute using projectRoot.
+func absStaged(files []string, projectRoot string) []string {
+	out := make([]string, 0, len(files))
+	for _, f := range files {
+		if filepath.IsAbs(f) {
+			out = append(out, f)
+		} else {
+			out = append(out, filepath.Join(projectRoot, f))
+		}
+	}
+	return out
+}
+
 // checkKeyToDisplay maps the config key used in features / warningChecks
 // to the display name each check passes to printStatus. Keeping the mapping
 // central lets printStatus detect "this failing check is configured as a
@@ -739,6 +752,18 @@ func run() error {
 		})
 	}
 
+	if config.Features.GoMissingTestsCheck {
+		asyncCheck("Go missing tests", "goMissingTestsCheck", func() error {
+			return runGoMissingTestsCheck(config.GoMissingTestsCheck, projectRoot, stagedAbs)
+		})
+	}
+
+	if config.Features.GoTests {
+		asyncCheck("Go tests", "goTests", func() error {
+			return runGoTests(config.GoTests, projectRoot, stagedAbs)
+		})
+	}
+
 	if config.Features.TestSubstanceCheck {
 		asyncCheck("Test substance", "testSubstanceCheck", func() error {
 			return runTestSubstanceCheck(config.TestSubstanceCheckConfig, projectRoot, stagedAbs)
@@ -1177,6 +1202,12 @@ func runSpecificCheck(name string, config *Config, files []string) error {
 			}
 		}
 		return runMissingTestsCheck(config.MissingTestsCheckConfig, projectRoot, stagedAbs)
+	case "goMissingTestsCheck":
+		projectRoot, _ := os.Getwd()
+		return runGoMissingTestsCheck(config.GoMissingTestsCheck, projectRoot, absStaged(files, projectRoot))
+	case "goTests":
+		projectRoot, _ := os.Getwd()
+		return runGoTests(config.GoTests, projectRoot, absStaged(files, projectRoot))
 	case "testSubstanceCheck":
 		projectRoot, _ := os.Getwd()
 		stagedAbs := make([]string, 0, len(files))
