@@ -1,0 +1,1 @@
+feat(convex-gen): opt-in required shouldSkip for auth-gated query hooks via dataLayer.requireAuthGatedShouldSkip

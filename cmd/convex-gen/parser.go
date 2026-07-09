@@ -24,6 +24,12 @@ type ConvexFunction struct {
 	Args            []ArgInfo // Parsed arguments
 	IsPaginated     bool      // Uses paginationOptsValidator
 	UseFunctionArgs bool      // Args too complex, use FunctionArgs type
+	// RequiresAuth is true when this function's handler body calls one of the
+	// configured DataLayer.AuthHelperNames (e.g. `getAuthenticatedUser(ctx)`).
+	// Only meaningful for queries — used by hooks_gen.go to decide whether
+	// `shouldSkip` must be required when DataLayer.RequireAuthGatedShouldSkip
+	// is enabled.
+	RequiresAuth bool
 }
 
 // ArgInfo represents a function argument
@@ -297,6 +303,7 @@ func (p *Parser) ParseConvexFile(file ConvexFile) ([]ConvexFunction, error) {
 			Args:            args,
 			IsPaginated:     isPaginated,
 			UseFunctionArgs: useFunctionArgs,
+			RequiresAuth:    funcType == FunctionTypeQuery && functionRequiresAuth(funcBody, p.config.DataLayer.AuthHelperNames),
 		})
 	}
 
@@ -373,6 +380,7 @@ func (p *Parser) parseFluentConvexFile(file ConvexFile) ([]ConvexFunction, error
 			Args:            args,
 			IsPaginated:     isPaginated,
 			UseFunctionArgs: useFunctionArgs,
+			RequiresAuth:    FunctionType(funcType) == FunctionTypeQuery && functionRequiresAuth(chainText, p.config.DataLayer.AuthHelperNames),
 		})
 	}
 
@@ -581,6 +589,7 @@ func (p *Parser) parseReExports(file ConvexFile, text string) []ConvexFunction {
 				Args:            args,
 				IsPaginated:     isPaginated,
 				UseFunctionArgs: useFunctionArgs,
+				RequiresAuth:    funcType == FunctionTypeQuery && functionRequiresAuth(funcBody, p.config.DataLayer.AuthHelperNames),
 			})
 		}
 	}
@@ -645,6 +654,31 @@ func extractFunctionBody(text string) string {
 		}
 	}
 	return text
+}
+
+// authHelperCallRe caches one compiled regexp per helper name (e.g.
+// `getAuthenticatedUser(`) across the lifetime of the process — the same
+// small set of names is checked against every parsed function.
+var authHelperCallRe = map[string]*regexp.Regexp{}
+
+// functionRequiresAuth reports whether funcBody (the full query/mutation/
+// action body, including its handler) calls one of authHelperNames. Used to
+// mark a query as auth-gated for DataLayer.RequireAuthGatedShouldSkip.
+func functionRequiresAuth(funcBody string, authHelperNames []string) bool {
+	for _, name := range authHelperNames {
+		if name == "" {
+			continue
+		}
+		re, ok := authHelperCallRe[name]
+		if !ok {
+			re = regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*\(`)
+			authHelperCallRe[name] = re
+		}
+		if re.MatchString(funcBody) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseArgs extracts argument information from function body

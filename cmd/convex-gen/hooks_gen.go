@@ -477,19 +477,27 @@ func (g *HooksGenerator) generateHook(topNamespace string, fn ConvexFunction, co
 	// Add shouldSkip param in JSDoc for no-required-ID non-paginated queries.
 	// (Paginated queries expose shouldSkip via options.shouldSkip — documented below.)
 	hasRequiredSkippable := hasRequiredSkippableArg(fn.Args)
+	requireShouldSkip := g.config.DataLayer.RequireAuthGatedShouldSkip && fn.RequiresAuth
 	if fn.Type == FunctionTypeQuery && !fn.UseFunctionArgs && !hasRequiredSkippable && !fn.IsPaginated {
+		shouldSkipDoc := " * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n"
+		if requireShouldSkip {
+			shouldSkipDoc = " * @param shouldSkip - Required. This query requires authentication; pass true to skip it for unauthenticated callers.\n"
+		}
 		if len(fn.Args) > 0 {
-			sb.WriteString(" * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n")
+			sb.WriteString(shouldSkipDoc)
 		} else {
 			sb.WriteString(" *\n")
-			sb.WriteString(" * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n")
+			sb.WriteString(shouldSkipDoc)
 		}
 	}
 
 	if fn.IsPaginated {
-		if !hasRequiredSkippable && !fn.UseFunctionArgs {
+		switch {
+		case requireShouldSkip && !hasRequiredSkippable && !fn.UseFunctionArgs:
+			sb.WriteString(" * @param options - Required. This query requires authentication; pass { shouldSkip: true } to skip it for unauthenticated callers.\n")
+		case !hasRequiredSkippable && !fn.UseFunctionArgs:
 			sb.WriteString(" * @param options - Pagination options (optional). Pass { shouldSkip: true } to skip the query.\n")
-		} else {
+		default:
 			sb.WriteString(" * @param options - Pagination options (optional)\n")
 		}
 	}
@@ -554,19 +562,27 @@ func (g *HooksGenerator) generateSplitHook(topNamespace string, fn ConvexFunctio
 	// Add shouldSkip param in JSDoc for no-required-ID non-paginated queries.
 	// (Paginated queries expose shouldSkip via options.shouldSkip — documented below.)
 	hasRequiredSkippable := hasRequiredSkippableArg(fn.Args)
+	requireShouldSkip := g.config.DataLayer.RequireAuthGatedShouldSkip && fn.RequiresAuth
 	if fn.Type == FunctionTypeQuery && !fn.UseFunctionArgs && !hasRequiredSkippable && !fn.IsPaginated {
+		shouldSkipDoc := " * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n"
+		if requireShouldSkip {
+			shouldSkipDoc = " * @param shouldSkip - Required. This query requires authentication; pass true to skip it for unauthenticated callers.\n"
+		}
 		if len(fn.Args) > 0 {
-			sb.WriteString(" * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n")
+			sb.WriteString(shouldSkipDoc)
 		} else {
 			sb.WriteString(" *\n")
-			sb.WriteString(" * @param shouldSkip - Skip the query if true (e.g., when user not authenticated)\n")
+			sb.WriteString(shouldSkipDoc)
 		}
 	}
 
 	if fn.IsPaginated {
-		if !hasRequiredSkippable && !fn.UseFunctionArgs {
+		switch {
+		case requireShouldSkip && !hasRequiredSkippable && !fn.UseFunctionArgs:
+			sb.WriteString(" * @param options - Required. This query requires authentication; pass { shouldSkip: true } to skip it for unauthenticated callers.\n")
+		case !hasRequiredSkippable && !fn.UseFunctionArgs:
 			sb.WriteString(" * @param options - Pagination options (optional). Pass { shouldSkip: true } to skip the query.\n")
-		} else {
+		default:
 			sb.WriteString(" * @param options - Pagination options (optional)\n")
 		}
 	}
@@ -639,15 +655,35 @@ func (g *HooksGenerator) generateParamsV2(fn ConvexFunction) string {
 		}
 	}
 
-	// Add shouldSkip param for queries without required skippable args
+	// Add shouldSkip param for queries without required skippable args. When
+	// RequireAuthGatedShouldSkip is enabled and this query's handler calls a
+	// configured auth helper, the param is REQUIRED instead of optional —
+	// forces every caller to reckon with the unauthenticated case at compile
+	// time. Defaults to the historical optional behavior otherwise.
+	//
+	// Scoped to zero-arg queries only: TypeScript forbids a required param
+	// after an optional one, so a query with any OPTIONAL args (e.g.
+	// `roleId?: string`) ahead of shouldSkip/options can't have it made
+	// required without reordering the signature (a separate, call-site-
+	// breaking change). Those queries keep the historical optional shouldSkip
+	// even when auth-gated.
 	hasRequiredSkippable := hasRequiredSkippableArg(fn.Args)
+	requireShouldSkip := g.config.DataLayer.RequireAuthGatedShouldSkip && fn.RequiresAuth && len(fn.Args) == 0
 	if !hasRequiredSkippable && !fn.IsPaginated {
-		params = append(params, "shouldSkip?: boolean")
+		if requireShouldSkip {
+			params = append(params, "shouldSkip: boolean")
+		} else {
+			params = append(params, "shouldSkip?: boolean")
+		}
 	}
 
 	if fn.IsPaginated {
 		if !hasRequiredSkippable {
-			params = append(params, "options?: { initialNumItems?: number; shouldSkip?: boolean }")
+			if requireShouldSkip {
+				params = append(params, "options: { initialNumItems?: number; shouldSkip: boolean }")
+			} else {
+				params = append(params, "options?: { initialNumItems?: number; shouldSkip?: boolean }")
+			}
 		} else {
 			params = append(params, "options?: { initialNumItems?: number }")
 		}

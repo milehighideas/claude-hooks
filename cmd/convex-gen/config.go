@@ -69,6 +69,20 @@ type DataLayerConfig struct {
 	ExportAPI     bool   `json:"exportApi"`     // Re-export { api } from the generated-api index
 	TypedReturns  bool   `json:"typedReturns"`  // When true, emit typed `FunctionReturnType<typeof api.x.y> | undefined` on shouldSkip query hooks instead of `as any`
 	TypedArgs     bool   `json:"typedArgs"`     // When true, emit typed `ReactMutation<typeof api.x.y>` / `ReactAction<...>` annotations on mutation/action hooks so caller args are type-checked. Defaults to false (untyped) for backwards compatibility.
+
+	// RequireAuthGatedShouldSkip: when true, a query hook whose backend handler
+	// calls one of AuthHelperNames gets a REQUIRED `shouldSkip: boolean` param
+	// instead of the default `shouldSkip?: boolean`. Forces every caller to
+	// reckon with the unauthenticated case at compile time instead of a runtime
+	// ConvexError. Defaults to false for backwards compatibility — other
+	// projects using this same convex-gen binary are unaffected unless they
+	// opt in.
+	RequireAuthGatedShouldSkip bool `json:"requireAuthGatedShouldSkip"`
+	// AuthHelperNames lists the backend helper function calls (e.g.
+	// `getAuthenticatedUser(ctx)`) that mark a query as auth-gated for the
+	// RequireAuthGatedShouldSkip check. Defaults to
+	// ["getAuthenticatedUser", "getAuthenticatedUserForActions"] when empty.
+	AuthHelperNames []string `json:"authHelperNames"`
 }
 
 // ImportsConfig configures how generated code imports dependencies
@@ -176,6 +190,9 @@ func applyConfigDefaults(config *Config) {
 	}
 	if config.DataLayer.HookNaming == "" {
 		config.DataLayer.HookNaming = "flat" // default to flat for backward compatibility
+	}
+	if len(config.DataLayer.AuthHelperNames) == 0 {
+		config.DataLayer.AuthHelperNames = []string{"getAuthenticatedUser", "getAuthenticatedUserForActions"}
 	}
 
 	// AI tool catalog defaults
