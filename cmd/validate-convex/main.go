@@ -27,7 +27,11 @@ import (
 type hookInput struct {
 	ToolName  string `json:"tool_name"`
 	ToolInput struct {
-		FilePath string `json:"file_path"`
+		FilePath   string `json:"file_path"`
+		OldString  string `json:"old_string"`
+		NewString  string `json:"new_string"`
+		ReplaceAll bool   `json:"replace_all"`
+		Content    string `json:"content"`
 	} `json:"tool_input"`
 }
 
@@ -158,6 +162,72 @@ func eslintViolations(projectRoot, path string, want map[string]bool) []string {
 	return msgs
 }
 
+// projectedContent returns the file's content as it WILL be after this tool
+// call, so the ratchet evaluates the PROPOSED result instead of the on-disk
+// file. Without this, a file that already has a violation can never be fixed
+// through Edit — every edit is blocked because the pre-edit file still has it.
+// Returns ("", false) when projection isn't possible (caller lints on-disk).
+func projectedContent(in hookInput) (string, bool) {
+	switch in.ToolName {
+	case "Write":
+		if in.ToolInput.Content == "" {
+			return "", false
+		}
+		return in.ToolInput.Content, true
+	case "Edit":
+		raw, err := os.ReadFile(in.ToolInput.FilePath)
+		if err != nil {
+			return "", false
+		}
+		src := string(raw)
+		old := in.ToolInput.OldString
+		if old == "" || !strings.Contains(src, old) {
+			return "", false // let the Edit tool surface a no-match error itself
+		}
+		if in.ToolInput.ReplaceAll {
+			return strings.ReplaceAll(src, old, in.ToolInput.NewString), true
+		}
+		return strings.Replace(src, old, in.ToolInput.NewString, 1), true
+	}
+	return "", false
+}
+
+// lintProjected writes content to a temp file that preserves the original
+// basename (so *.types.ts type-home detection and path-based excludes still
+// resolve) inside a dot-prefixed subdir of the original file's directory (so
+// oxlint config discovery walks up to the same .oxlintrc.json / tsconfig, and
+// Convex's dev watcher — which ignores dotdirs — skips it), then runs the same
+// oxlint + eslint passes against it. Cleans up explicitly (defers don't run on
+// os.Exit). Returns (msgs, true) on success; (nil, false) if the temp couldn't
+// be set up, so the caller falls back to the on-disk lint.
+func lintProjected(projectRoot, origPath, content string, oxSet, esSet map[string]bool) ([]string, bool) {
+	dir := filepath.Dir(origPath)
+	tmpDir, err := os.MkdirTemp(dir, ".convexlint-tmp-")
+	if err != nil {
+		return nil, false
+	}
+	tmpPath := filepath.Join(tmpDir, filepath.Base(origPath))
+	if err := os.WriteFile(tmpPath, []byte(content), 0o600); err != nil {
+		_ = os.RemoveAll(tmpDir)
+		return nil, false
+	}
+	msgs := onDiskViolations(projectRoot, tmpPath, oxSet, esSet)
+	_ = os.RemoveAll(tmpDir)
+	return msgs, true
+}
+
+// onDiskViolations runs the oxlint + eslint passes against a real file path.
+func onDiskViolations(projectRoot, path string, oxSet, esSet map[string]bool) []string {
+	var msgs []string
+	if len(oxSet) > 0 {
+		msgs = append(msgs, oxlintViolations(projectRoot, path, oxSet)...)
+	}
+	if len(esSet) > 0 {
+		msgs = append(msgs, eslintViolations(projectRoot, path, esSet)...)
+	}
+	return msgs
+}
+
 func main() {
 	data, _ := io.ReadAll(os.Stdin)
 	var in hookInput
@@ -190,12 +260,18 @@ func main() {
 	}
 
 	cwd, _ := os.Getwd()
+	// Evaluate the PROJECTED edit result so a file with an existing violation
+	// can actually be fixed through Edit; fall back to the on-disk file when the
+	// edit can't be projected (e.g. old_string not found, unreadable file).
 	var msgs []string
-	if len(oxSet) > 0 {
-		msgs = append(msgs, oxlintViolations(cwd, path, oxSet)...)
-	}
-	if len(esSet) > 0 {
-		msgs = append(msgs, eslintViolations(cwd, path, esSet)...)
+	if content, ok := projectedContent(in); ok {
+		if m, done := lintProjected(cwd, path, content, oxSet, esSet); done {
+			msgs = m
+		} else {
+			msgs = onDiskViolations(cwd, path, oxSet, esSet)
+		}
+	} else {
+		msgs = onDiskViolations(cwd, path, oxSet, esSet)
 	}
 
 	if len(msgs) > 0 {

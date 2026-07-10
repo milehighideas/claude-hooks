@@ -1,0 +1,10 @@
+fix(validate-convex): evaluate the proposed edit, not the on-disk file
+
+The PreToolUse hook linted the on-disk file, so a file that already had an
+opted-in violation (e.g. type-exports-location) could never be fixed through
+Edit — every edit was blocked because the pre-edit file still had it. The hook
+now projects the Edit/Write into a temp file that preserves the original
+basename inside a dot-prefixed subdir (so *.types.ts detection, oxlint config
+discovery, and Convex's dotdir-ignoring watcher all behave), lints the RESULT,
+and blocks only when a violation survives. Falls back to the on-disk file when
+the edit can't be projected.
