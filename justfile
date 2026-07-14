@@ -139,13 +139,26 @@ clean-strays:
         fi
     done
 
-# Install binaries to /usr/local/bin
+# Symlink built binaries into ~/.local/bin (self-updating, no sudo, never stale).
+#
+# Symlinks track future `just build`s, so a rebuilt binary is picked up with no
+# re-install — the same self-updating property the convex-gen symlink already
+# relies on. Copying into /usr/local/bin (the old behavior) froze binaries at
+# install time: a stale root-owned copy there silently shadowed fresh builds on
+# PATH and regenerated data-layer hooks with the pre-`-typed-returns` output.
+#
+# Ensure ~/.local/bin precedes /usr/local/bin on PATH.
 install: build
     #!/usr/bin/env bash
-    echo "Installing binaries to /usr/local/bin..."
+    set -euo pipefail
+    dest="$HOME/.local/bin"
+    mkdir -p "$dest"
+    echo "Symlinking binaries into $dest..."
     for bin in {{bindir}}/*; do
-        [ -f "$bin" ] && cp "$bin" /usr/local/bin/
+        [ -f "$bin" ] || continue
+        ln -sf "$PWD/$bin" "$dest/$(basename "$bin")"
     done
+    echo "✓ Installed. Ensure $dest precedes /usr/local/bin on your PATH."
 
 # Cross-compile the released platforms using zig as the C cross-compiler.
 #
