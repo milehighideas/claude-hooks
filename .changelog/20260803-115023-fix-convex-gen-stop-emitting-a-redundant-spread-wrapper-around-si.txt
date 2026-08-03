@@ -1,0 +1,1 @@
+fix(convex-gen): stop emitting a redundant spread wrapper around single-optional-arg hook args (tripped unicorn/no-useless-spread in consumer repos)

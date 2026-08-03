@@ -923,14 +923,29 @@ func (g *HooksGenerator) generateArgsWithSpread(args []ArgInfo, useShouldSkip bo
 	}
 
 	if primarySkipArg != nil {
-		return fmt.Sprintf("    %s ? { %s } as any : \"skip\",\n", primarySkipArg.Name, strings.Join(argParts, ", "))
+		return fmt.Sprintf("    %s ? %s as any : \"skip\",\n", primarySkipArg.Name, buildArgsObject(argParts))
 	}
 
 	if useShouldSkip {
-		return fmt.Sprintf("    shouldSkip ? \"skip\" : { %s } as any,\n", strings.Join(argParts, ", "))
+		return fmt.Sprintf("    shouldSkip ? \"skip\" : %s as any,\n", buildArgsObject(argParts))
 	}
 
-	return fmt.Sprintf("    { %s },\n", strings.Join(argParts, ", "))
+	return fmt.Sprintf("    %s,\n", buildArgsObject(argParts))
+}
+
+// buildArgsObject renders the args object literal from its member expressions.
+//
+// A lone spread member makes the wrapping braces redundant: the inner
+// expression already evaluates to a fresh object literal, so
+// `{ ...(x !== undefined ? { x } : {}) }` is just `(x !== undefined ? { x } : {})`.
+// Emitting the wrapper anyway trips unicorn/no-useless-spread in consumer
+// repos. With any other member present the spread is doing real merge work and
+// the braces stay.
+func buildArgsObject(parts []string) string {
+	if len(parts) == 1 && strings.HasPrefix(parts[0], "...") {
+		return strings.TrimPrefix(parts[0], "...")
+	}
+	return fmt.Sprintf("{ %s }", strings.Join(parts, ", "))
 }
 
 // generateArgsWithSpreadInline creates args object with spread operator for optional params (inline)
@@ -973,19 +988,19 @@ func (g *HooksGenerator) generateArgsWithSpreadInline(fn ConvexFunction) (string
 	allParts = append(allParts, requiredArgs...)
 	allParts = append(allParts, optionalSpreads...)
 
-	argsStr := strings.Join(allParts, ", ")
+	argsObj := buildArgsObject(allParts)
 
 	if len(primarySkipArgs) > 0 {
 		// Multiple skip conditions
 		if len(primarySkipArgs) == 1 {
-			return fmt.Sprintf("%s ? { %s } as any : \"skip\"", primarySkipArgs[0], argsStr), false
+			return fmt.Sprintf("%s ? %s as any : \"skip\"", primarySkipArgs[0], argsObj), false
 		}
 		condition := strings.Join(primarySkipArgs, " && ")
-		return fmt.Sprintf("%s ? { %s } as any : \"skip\"", condition, argsStr), false
+		return fmt.Sprintf("%s ? %s as any : \"skip\"", condition, argsObj), false
 	}
 
 	// No required ID args - use shouldSkip pattern
-	return fmt.Sprintf("shouldSkip ? \"skip\" : { %s } as any", argsStr), true
+	return fmt.Sprintf("shouldSkip ? \"skip\" : %s as any", argsObj), true
 }
 
 // toCamelCase converts a path like "voting/config" to "VotingConfig"
