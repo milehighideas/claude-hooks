@@ -137,6 +137,19 @@ func TestDestructivePatterns(t *testing.T) {
 		{"git submodule deinit force short", "git submodule deinit -f submod", true},
 		{"git submodule update allowed", "git submodule update --init", false},
 
+		// Package URLs ending in .git are not git invocations. Regression: the old
+		// \\b anchor matched the URL suffix and read the following package name as a
+		// subcommand, blocking every uvx/pip install from a git source.
+		{"uvx --from URL not a git command", "uvx --from git+https://github.com/googleads/google-ads-mcp.git google-ads-mcp", false},
+		{"pip install from URL", "pip install git+https://github.com/foo/bar.git extra", false},
+		{"path ending in dot-git followed by word", "ls /repos/project.git objects", false},
+
+		// Real invocations must still be caught at start and after separators.
+		{"git rebase still blocked at start", "git rebase main", true},
+		{"git rebase still blocked after and-and", "cd /tmp && git rebase main", true},
+		{"git rebase still blocked after semicolon", "cd /tmp; git rebase main", true},
+		{"git rebase still blocked in pipeline", "echo x | git rebase main", true},
+
 		// === rm .git ===
 		{"rm rf .git", "rm -rf .git", true},
 		{"rm fr .git", "rm -fr .git", true},

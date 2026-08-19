@@ -336,7 +336,14 @@ var hookBypassPatterns = []pattern{
 // gitCommandRegex detects any git command invocation and extracts the subcommand.
 // Handles global flags: simple flags (--no-pager), flags with = args (--git-dir=/path),
 // and flags with separate args (-C /path, -c key=val).
-var gitCommandRegex = regexp.MustCompile(`(?i)\bgit\s+(?:(?:-[Cc]\s+\S+|--?\S+)\s+)*(\S+)`)
+//
+// The leading (?:^|[^\w./+-]) requires the token to sit at a command position
+// rather than any word boundary. A bare \b also matched the "." + G + "" suffix inside
+// package URLs, so "uvx --from git+https://host/org/repo.git pkgname" was read as
+// subcommand "pkgname" and blocked. Excluding a preceding . / + - keeps URL and
+// path suffixes out while still matching real invocations at start of line or
+// after a separator (&&, ;, |) or whitespace.
+var gitCommandRegex = regexp.MustCompile(`(?i)(?:^|[^\w./+-])git\s+(?:(?:-[Cc]\s+\S+|--?\S+)\s+)*(\S+)`)
 
 // allowedGitSubcommands is the whitelist of git subcommands Claude is permitted to run.
 // Everything NOT on this list is blocked. This is the primary security mechanism for git.
