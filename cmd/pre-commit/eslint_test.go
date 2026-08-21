@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -190,6 +191,232 @@ func TestParseEslintErrors(t *testing.T) {
 			result := parseEslintErrors(tt.output)
 			if !reflect.DeepEqual(result, tt.expected) {
 				t.Errorf("parseEslintErrors() = %+v, want %+v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestParseOxlintErrors(t *testing.T) {
+	tests := []struct {
+		name     string
+		output   string
+		expected []lintError
+	}{
+		{
+			name:     "empty output",
+			output:   "",
+			expected: nil,
+		},
+		{
+			name:     "clean run prints nothing at all",
+			output:   "\n",
+			expected: nil,
+		},
+		{
+			name:   "compact warning strips trailing help text",
+			output: "src/steps.test.ts:31:43: warning jest(no-restricted-matchers): Use of toBeTruthy is disallowed help: Weak assertion\n",
+			expected: []lintError{
+				{
+					filePath: "src/steps.test.ts",
+					line:     "31",
+					column:   "43",
+					severity: "warning",
+					message:  "Use of toBeTruthy is disallowed",
+					rule:     "jest/no-restricted-matchers",
+					fullText: "src/steps.test.ts:31:43: warning jest(no-restricted-matchers): Use of toBeTruthy is disallowed help: Weak assertion",
+				},
+			},
+		},
+		{
+			name:   "compact error without help text",
+			output: "components/hooks/useForm.ts:72:21: error react(incompatible-library): Use of incompatible library\n",
+			expected: []lintError{
+				{
+					filePath: "components/hooks/useForm.ts",
+					line:     "72",
+					column:   "21",
+					severity: "error",
+					message:  "Use of incompatible library",
+					rule:     "react/incompatible-library",
+					fullText: "components/hooks/useForm.ts:72:21: error react(incompatible-library): Use of incompatible library",
+				},
+			},
+		},
+		{
+			name:   "compact keeps a windows absolute path intact",
+			output: "C:\\src\\app\\main.ts:4:9: error eslint(no-debugger): Unexpected debugger statement\n",
+			expected: []lintError{
+				{
+					filePath: "C:\\src\\app\\main.ts",
+					line:     "4",
+					column:   "9",
+					severity: "error",
+					message:  "Unexpected debugger statement",
+					rule:     "eslint/no-debugger",
+					fullText: "C:\\src\\app\\main.ts:4:9: error eslint(no-debugger): Unexpected debugger statement",
+				},
+			},
+		},
+		{
+			name: "graphical error still parsed",
+			output: "  x eslint(no-unused-vars): 'foo' is never used\n" +
+				"   ,-[src/app.ts:10:5]\n",
+			expected: []lintError{
+				{
+					filePath: "src/app.ts",
+					line:     "10",
+					column:   "5",
+					severity: "error",
+					message:  "'foo' is never used",
+					rule:     "eslint/no-unused-vars",
+					fullText: "   ,-[src/app.ts:10:5]",
+				},
+			},
+		},
+		{
+			name: "graphical warning still parsed",
+			output: "  ! react(purity): Cannot call impure function during render\n" +
+				"   ,-[src/Clock.tsx:7:22]\n",
+			expected: []lintError{
+				{
+					filePath: "src/Clock.tsx",
+					line:     "7",
+					column:   "22",
+					severity: "warning",
+					message:  "Cannot call impure function during render",
+					rule:     "react/purity",
+					fullText: "   ,-[src/Clock.tsx:7:22]",
+				},
+			},
+		},
+		{
+			name: "both formats in one run",
+			output: "src/a.ts:1:2: error react(purity): Impure call\n" +
+				"  ! react(refs): Cannot access refs during render\n" +
+				"   ,-[src/b.tsx:3:4]\n",
+			expected: []lintError{
+				{
+					filePath: "src/a.ts",
+					line:     "1",
+					column:   "2",
+					severity: "error",
+					message:  "Impure call",
+					rule:     "react/purity",
+					fullText: "src/a.ts:1:2: error react(purity): Impure call",
+				},
+				{
+					filePath: "src/b.tsx",
+					line:     "3",
+					column:   "4",
+					severity: "warning",
+					message:  "Cannot access refs during render",
+					rule:     "react/refs",
+					fullText: "   ,-[src/b.tsx:3:4]",
+				},
+			},
+		},
+		{
+			name:     "output without findings yields nothing",
+			output:   "oxlint: using configuration from .oxlintrc.json\n",
+			expected: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := parseOxlintErrors(tt.output)
+			if !reflect.DeepEqual(result, tt.expected) {
+				t.Errorf("parseOxlintErrors() = %+v, want %+v", result, tt.expected)
+			}
+		})
+	}
+}
+
+// A linter run whose output the parser cannot read must fail the gate rather
+// than pass as a clean lint — that silent-zero is what let real errors through.
+func TestUnparsedLintOutput(t *testing.T) {
+	const finding = "a.ts:1:1: error eslint(no-debugger): Unexpected debugger statement"
+
+	tests := []struct {
+		name   string
+		errors []lintError
+		output string
+		want   bool
+	}{
+		{
+			name:   "clean run produces no output",
+			errors: nil,
+			output: "",
+			want:   false,
+		},
+		{
+			name:   "findings parsed normally",
+			errors: []lintError{{filePath: "a.ts", line: "1", column: "1"}},
+			output: finding,
+			want:   false,
+		},
+		{
+			name:   "findings present but none parsed",
+			errors: nil,
+			output: finding,
+			want:   true,
+		},
+		{
+			name:   "eslint positions present but none parsed",
+			errors: nil,
+			output: "/path/to/file.tsx\n  10:5  error  something  some-rule\n",
+			want:   true,
+		},
+		{
+			name:   "notice without positions is not a parse failure",
+			errors: nil,
+			output: "oxlint: using configuration from .oxlintrc.json\n",
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := unparsedLintOutput(tt.errors, tt.output); got != tt.want {
+				t.Errorf("unparsedLintOutput() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestErrUnparsedLintOutputQuotesFirstLine(t *testing.T) {
+	err := errUnparsedLintOutput("oxlint", "\n\n  a.ts:1:1: error react(purity): Impure call  \n b.ts:2:2: error x(y): z\n")
+	if err == nil {
+		t.Fatal("errUnparsedLintOutput() returned nil, want an error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "a.ts:1:1: error react(purity): Impure call") {
+		t.Errorf("error should quote the first non-empty line, got: %s", msg)
+	}
+	if strings.Contains(msg, "b.ts") {
+		t.Errorf("error should quote only the first line, got: %s", msg)
+	}
+	if !strings.Contains(msg, "oxlint") {
+		t.Errorf("error should name the linter, got: %s", msg)
+	}
+}
+
+func TestFirstNonEmptyLine(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "empty string", input: "", want: ""},
+		{name: "only blank lines", input: "\n  \n\t\n", want: ""},
+		{name: "first line wins", input: "alpha\nbeta\n", want: "alpha"},
+		{name: "skips leading blanks and trims", input: "\n\n   padded   \nnext\n", want: "padded"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := firstNonEmptyLine(tt.input); got != tt.want {
+				t.Errorf("firstNonEmptyLine(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

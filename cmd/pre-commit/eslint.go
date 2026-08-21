@@ -179,16 +179,29 @@ func parseEslintErrors(output string) []lintError {
 	return errors
 }
 
-// parseOxlintErrors parses Oxlint output into individual errors
-// Oxlint output format:
+// parseOxlintErrors parses Oxlint output into individual errors.
+//
+// Oxlint emits two different shapes, and this hook has to handle both.
+//
+// Graphical (miette) format, produced when rendering to a TTY:
 //
 //	x plugin(rule): message
 //	 ,-[filepath:line:col]
 //
-// or for warnings:
+// or, for warnings:
 //
 //	! plugin(rule): message
 //	 ,-[filepath:line:col]
+//
+// Compact format, produced when stdout is not a TTY — which is how this hook
+// always invokes oxlint, since it captures the output into a buffer:
+//
+//	filepath:line:col: severity plugin(rule): message help: hint
+//
+// Only the graphical shape was handled originally, so every finding from a
+// buffered run parsed as zero and the lint gate passed unconditionally.
+// Callers must treat "output with findings in it, nothing parsed" as a
+// failure rather than a clean lint; see runFilteredLintBuffered.
 func parseOxlintErrors(output string) []lintError {
 	var errors []lintError
 	lines := strings.Split(output, "\n")
@@ -199,8 +212,34 @@ func parseOxlintErrors(output string) []lintError {
 	// Regex to match file location: ",-[filepath:line:col]"
 	fileLocRe := regexp.MustCompile(`,-\[([^:]+):(\d+):(\d+)\]`)
 
+	// Regex to match a whole compact finding on one line:
+	// "filepath:line:col: severity plugin(rule): message".
+	// The optional drive-letter prefix keeps Windows absolute paths intact,
+	// since the path segment itself may not contain a colon.
+	compactRe := regexp.MustCompile(`^((?:[A-Za-z]:)?[^:]+):(\d+):(\d+): (error|warning) ([^\s(]+)\(([^)]+)\): (.+)$`)
+
+	// Oxlint appends " help: ..." to the compact message, whereas the graphical
+	// format carries the hint on its own line. Strip it so a finding produces
+	// the same message text regardless of which format it was parsed from.
+	helpRe := regexp.MustCompile(`\s+help:\s.*$`)
+
 	var currentRule, currentMessage, currentSeverity string
 	for _, line := range lines {
+		// Compact format carries the whole finding on a single line, so it is
+		// complete on its own and needs no location lookahead.
+		if match := compactRe.FindStringSubmatch(line); match != nil {
+			errors = append(errors, lintError{
+				filePath: match[1],
+				line:     match[2],
+				column:   match[3],
+				severity: match[4],
+				message:  helpRe.ReplaceAllString(match[7], ""),
+				rule:     match[5] + "/" + match[6], // e.g., "react/purity"
+				fullText: line,
+			})
+			continue
+		}
+
 		// Check if this is an error/warning line
 		if match := errorLineRe.FindStringSubmatch(line); match != nil {
 			severity := "error"
@@ -231,6 +270,41 @@ func parseOxlintErrors(output string) []lintError {
 	}
 
 	return errors
+}
+
+// lintFindingHintRe matches the line:column position that every finding carries
+// in each output format parsed here. It is deliberately loose: its only job is
+// to answer "did this output contain findings at all", which is what separates
+// a genuinely clean run from one whose format the parser no longer understands.
+var lintFindingHintRe = regexp.MustCompile(`\d+:\d+`)
+
+// firstNonEmptyLine returns the first non-blank line of s, trimmed, for use in
+// diagnostics. It returns "" when s holds no content.
+func firstNonEmptyLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+// unparsedLintOutput reports whether a linter emitted findings that the parser
+// could not read. Treating such a run as a clean lint is exactly how a linter
+// format change silently disables this gate, so callers must fail on it — the
+// same principle as runOxlint refusing to pass when the linter is missing.
+func unparsedLintOutput(errors []lintError, output string) bool {
+	return len(errors) == 0 && lintFindingHintRe.MatchString(output)
+}
+
+// errUnparsedLintOutput builds the failure returned for such a run, quoting the
+// first line of output so the format change can be diagnosed from the log.
+func errUnparsedLintOutput(linter, output string) error {
+	return fmt.Errorf(
+		"%s produced findings that could not be parsed — its output format has probably changed.\n"+
+			"   Update the %s parser in cmd/pre-commit/eslint.go to match. First line of output:\n"+
+			"   %s",
+		linter, linter, firstNonEmptyLine(output))
 }
 
 // shouldFilterLintError checks if a lint error should be filtered out
@@ -319,6 +393,11 @@ func runConvexEslintBuffered(lf LintFilter) (string, error) {
 	}
 
 	errors := parseEslintErrors(lintOutput)
+	if unparsedLintOutput(errors, lintOutput) {
+		err := errUnparsedLintOutput("eslint", lintOutput)
+		fmt.Fprintf(&output, "   ❌ %v\n", err)
+		return output.String(), err
+	}
 
 	excludePaths := lf.ExcludePaths
 	if excludePaths == nil {
@@ -401,6 +480,10 @@ func runFilteredLintBuffered(appName, appPath string, lf LintFilter) (string, er
 		errors = parseOxlintErrors(lintOutput)
 	} else {
 		errors = parseEslintErrors(lintOutput)
+	}
+
+	if unparsedLintOutput(errors, lintOutput) {
+		return "", errUnparsedLintOutput(linter, lintOutput)
 	}
 
 	var realErrors []lintError

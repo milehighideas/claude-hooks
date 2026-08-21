@@ -1,0 +1,1 @@
+fix(pre-commit): parse oxlint compact output and fail loudly on unparsed lint findings
